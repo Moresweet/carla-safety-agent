@@ -114,13 +114,25 @@ class CarlaAdapter:
             return evaluate(spec.scenario_id, spec.oracle, collision["hit"], min_ttc,
                             min_distance, elapsed, str(trace_path))
         finally:
-            for actor in reversed(actors):
+            # Sensor callbacks run on streaming threads. Stop every sensor first,
+            # then advance one synchronous frame so callbacks drain before any
+            # attached actor is destroyed.
+            for actor in actors:
                 try:
-                    if hasattr(actor, "stop"):
+                    if getattr(actor, "type_id", "").startswith("sensor."):
                         actor.stop()
-                    actor.destroy()
+                    elif getattr(actor, "type_id", "").startswith("vehicle."):
+                        actor.set_autopilot(False)
                 except RuntimeError:
                     pass
+            try:
+                if world.get_settings().synchronous_mode:
+                    world.tick()
+            except RuntimeError:
+                pass
+            actor_ids = [actor.id for actor in actors if getattr(actor, "is_alive", False)]
+            if actor_ids:
+                client.apply_batch([carla.command.DestroyActor(actor_id) for actor_id in actor_ids])
             world.apply_settings(original)
 
     @staticmethod

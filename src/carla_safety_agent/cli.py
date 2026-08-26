@@ -32,12 +32,14 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("specs", type=Path)
     run.add_argument("--host", default="127.0.0.1")
     run.add_argument("--port", type=int, default=2000)
+    run.add_argument("--timeout", type=float, default=120.0)
     run.add_argument("--output-dir", type=Path, required=True)
     run.add_argument("--limit", type=int)
     render = commands.add_parser("render", help="build, run and capture RGB frames")
     render.add_argument("specs", type=Path)
     render.add_argument("--host", default="127.0.0.1")
     render.add_argument("--port", type=int, default=2000)
+    render.add_argument("--timeout", type=float, default=120.0)
     render.add_argument("--output-dir", type=Path, required=True)
     render.add_argument("--limit", type=int, default=1)
     return root
@@ -78,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     specs = load_specs(args.specs)
     if args.limit is not None:
         specs = specs[:args.limit]
-    adapter = CarlaAdapter(args.host, args.port)
+    adapter = CarlaAdapter(args.host, args.port, args.timeout)
     should_render = args.command == "render"
     results = [adapter.run(spec, args.output_dir, render=should_render).to_dict() for spec in specs]
     results.sort(key=lambda item: item["risk_score"], reverse=True)

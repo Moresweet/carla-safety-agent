@@ -65,7 +65,8 @@ With CARLA already running, build the actors, execute the interaction, and save
 ```bash
 PYTHONPATH=src /home/moresweet/carla/.venv/bin/python \
   -m carla_safety_agent.cli render runs/demo/scenario.json \
-  --host 127.0.0.1 --port 2000 --output-dir runs/demo/evidence
+  --host 127.0.0.1 --port 2000 --timeout 120 \
+  --output-dir runs/demo/evidence
 ```
 
 Supported description cues include `追尾/急刹`, `前车变道`, `行人横穿/VRU`,

@@ -33,7 +33,7 @@ class CarlaAdapter:
             ) from exc
         return carla
 
-    def run(self, spec: ScenarioSpec, output_dir: Path) -> ScenarioResult:
+    def run(self, spec: ScenarioSpec, output_dir: Path, render: bool = False) -> ScenarioResult:
         carla = self._module()
         client = carla.Client(self.host, self.port)
         client.set_timeout(self.timeout_s)
@@ -67,6 +67,24 @@ class CarlaAdapter:
             sensor = world.spawn_actor(sensor_bp, carla.Transform(), attach_to=ego)
             sensor.listen(lambda _: collision.__setitem__("hit", True))
             actors.append(sensor)
+            if render:
+                camera_bp = world.get_blueprint_library().find("sensor.camera.rgb")
+                camera_bp.set_attribute("image_size_x", "1280")
+                camera_bp.set_attribute("image_size_y", "720")
+                camera_bp.set_attribute("fov", "90")
+                camera_transform = carla.Transform(
+                    carla.Location(x=-7.5, z=3.0), carla.Rotation(pitch=-12.0)
+                )
+                camera = world.spawn_actor(camera_bp, camera_transform, attach_to=ego)
+                frames_dir = output_dir / spec.scenario_id / "frames"
+                frames_dir.mkdir(parents=True, exist_ok=True)
+
+                def save_frame(image: Any) -> None:
+                    if image.frame % 5 == 0:
+                        image.save_to_disk(str(frames_dir / f"{image.frame:08d}.png"))
+
+                camera.listen(save_frame)
+                actors.append(camera)
             ego.set_autopilot(True)
             for adv, adv_spec in zip(adversaries, spec.adversaries):
                 if adv_spec.behavior == "autopilot":

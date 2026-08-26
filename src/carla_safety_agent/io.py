@@ -9,7 +9,10 @@ from .models import ActorSpec, EnvironmentSpec, OracleSpec, ScenarioSpec
 
 def save_specs(specs: list[ScenarioSpec], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps([s.to_dict() for s in specs], indent=2), encoding="utf-8")
+    path.write_text(
+        json.dumps([s.to_dict() for s in specs], indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 def load_specs(path: Path) -> list[ScenarioSpec]:

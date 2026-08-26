@@ -8,6 +8,11 @@ oracles and CARLA runtime boundary.
 ## What the MVP does
 
 - Generates deterministic `cut_in`, `hard_brake`, and `occluded_crossing` families.
+- Compiles Chinese or English descriptions into a reviewable scenario JSON file.
+- Covers an initial NHTSA-aligned subset: rear-end, lead-vehicle lane change,
+  vulnerable road user, crossing path, and merge.
+- Emits an explicit CARLA build plan before touching the simulator.
+- Builds and renders an ego chase-camera sequence on demand.
 - Biases samples toward parameter boundaries instead of producing ordinary traffic.
 - Runs CARLA in synchronous fixed-step mode.
 - Records distance/TTC traces and collision events.
@@ -32,6 +37,45 @@ PYTHONPATH=src /home/moresweet/carla/.venv/bin/python -m carla_safety_agent.cli 
   --family hard_brake --map Town04 --count 25 --seed 42 \
   --output runs/hard_brake/specs.json
 ```
+
+## Natural language to build and render
+
+Compile a description. Units are normalized to SI, and every unspecified
+safety-relevant value is recorded as a warning and in provenance:
+
+```bash
+PYTHONPATH=src /home/moresweet/carla/.venv/bin/python \
+  -m carla_safety_agent.cli from-text \
+  '在 Town04 大雨夜间，自车以 72 km/h 跟随前车，前车以 36 km/h 行驶并突然急刹' \
+  --seed 42 --output runs/demo/scenario.json
+```
+
+Validate the scenario and inspect the exact construction contract without
+starting CARLA:
+
+```bash
+PYTHONPATH=src /home/moresweet/carla/.venv/bin/python \
+  -m carla_safety_agent.cli build runs/demo/scenario.json \
+  --output runs/demo/build-plan.json
+```
+
+With CARLA already running, build the actors, execute the interaction, and save
+1280×720 PNG frames every five simulator frames:
+
+```bash
+PYTHONPATH=src /home/moresweet/carla/.venv/bin/python \
+  -m carla_safety_agent.cli render runs/demo/scenario.json \
+  --host 127.0.0.1 --port 2000 --output-dir runs/demo/evidence
+```
+
+Supported description cues include `追尾/急刹`, `前车变道`, `行人横穿/VRU`,
+`交叉路径/路口横穿`, and `汇入/合流`, plus their English equivalents. A
+description that contains no supported type or mixes multiple types fails
+explicitly instead of silently guessing.
+
+The stable schema is in `schema/scenario.schema.json`. The interaction enum
+names are project identifiers aligned to the five representative groups in
+NHTSA DOT HS 813 073; they are not presented as official NHTSA software codes.
 
 ## Execute against CARLA
 

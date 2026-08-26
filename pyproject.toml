@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "carla-safety-agent"
+version = "0.1.0"
+description = "Risk-directed safety-critical scenario generation for CARLA"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.scripts]
+carla-safety-agent = "carla_safety_agent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -15,6 +15,8 @@ oracles and CARLA runtime boundary.
 - Builds and renders an ego chase-camera sequence on demand.
 - Generates collision-enabled fallen-cargo assets from structured dimensions,
   mass, placement and multiplicity instead of requiring a pre-authored CARLA prop.
+- Compiles line and arc sequences into a new OpenDRIVE road world at runtime.
+- Captures synchronized RGB, logarithmic depth, semantic segmentation and LiDAR evidence.
 - Biases samples toward parameter boundaries instead of producing ordinary traffic.
 - Runs CARLA in synchronous fixed-step mode.
 - Records distance/TTC traces and collision events.
@@ -100,6 +102,57 @@ the editor target:
 git apply /path/to/carla-safety-agent/integration/carla/static-mesh-factory-nonuniform-scale.patch
 make launch
 ```
+
+## Generate a new road environment
+
+This description creates a new 200 m S-curve road instead of loading a Town map,
+then places generated cargo on it:
+
+```bash
+PYTHONPATH=src /home/moresweet/carla/.venv/bin/python \
+  -m carla_safety_agent.cli from-text \
+  '生成一张双向四车道新地图，包含 S弯，前方 55 米有 8 根金属管掉落货物，自车速度 54 km/h' \
+  --seed 88 --output runs/generated-s-curve/scenario.json
+
+PYTHONPATH=src /home/moresweet/carla/.venv/bin/python \
+  -m carla_safety_agent.cli render runs/generated-s-curve/scenario.json \
+  --output-dir runs/generated-s-curve/evidence
+```
+
+The structured `generated_map.segments` list accepts `line` and constant-curvature
+`arc` elements. Each element has its own length and curvature, allowing straight,
+C-shaped and S-shaped roads to be composed without importing a map asset. The
+run directory retains the generated `.xodr` file and sensor folders named
+`frames`, `depth`, `semantic`, and `lidar`.
+
+## ROS2 and RViz visualization
+
+A standalone ROS2 package is provided in `ros2/carla_safety_visualization`. It
+attaches visualization sensors to the current hero vehicle and publishes:
+
+- `/carla/ego/rgb/image`
+- `/carla/ego/depth/image`
+- `/carla/ego/semantic/image`
+- `/carla/ego/lidar/points`
+- `/carla/ego/odometry`
+- `map -> ego_vehicle` TF
+
+On a machine with ROS2 and RViz installed:
+
+```bash
+mkdir -p ros_ws/src
+ln -s "$PWD/ros2/carla_safety_visualization" ros_ws/src/
+cd ros_ws
+colcon build --symlink-install
+source install/setup.bash
+ros2 run carla_safety_visualization bridge
+rviz2 -d src/carla_safety_visualization/rviz/carla_safety.rviz
+```
+
+The matching CARLA Python module must be available in the ROS2 environment.
+ROS2 and RViz are not installed in the current workstation or its local Isaac
+Lab image, so the ROS package is syntax-checked here but its live runtime remains
+an environment-dependent validation step.
 
 The stable schema is in `schema/scenario.schema.json`. The interaction enum
 names are project identifiers aligned to the five representative groups in

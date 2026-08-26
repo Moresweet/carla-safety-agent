@@ -4,7 +4,10 @@ import hashlib
 import re
 from dataclasses import dataclass
 
-from .models import ActorSpec, EnvironmentSpec, OracleSpec, ProceduralAssetSpec, ScenarioSpec
+from .models import (
+    ActorSpec, EnvironmentSpec, GeneratedMapSpec, OracleSpec,
+    ProceduralAssetSpec, RoadSegmentSpec, ScenarioSpec,
+)
 from .nhtsa import INTERACTION_TYPES
 
 
@@ -64,6 +67,13 @@ class NaturalLanguageCompiler:
             k in normalized for k in ("雨", "rain")) else 0.0
         fog = 45.0 if any(k in normalized for k in ("雾", "fog")) else 0.0
         night = any(k in normalized for k in ("夜", "night", "dark"))
+        wants_generated_map = any(k in normalized for k in (
+            "新地图", "生成地图", "新道路", "s弯", "s curve", "generated map", "custom road",
+        ))
+        generated_map = self._generated_map(normalized) if wants_generated_map else None
+        if generated_map:
+            map_name = "GeneratedOpenDrive"
+            warnings = [warning for warning in warnings if not warning.startswith("map_not_specified:")]
         generated_assets: tuple[ProceduralAssetSpec, ...] = ()
         adversaries: tuple[ActorSpec, ...]
         if interaction == "road_hazard":
@@ -122,6 +132,7 @@ class NaturalLanguageCompiler:
             ),
             oracle=OracleSpec(),
             generated_assets=generated_assets,
+            generated_map=generated_map,
             provenance={
                 "source": "natural_language",
                 "description": text,
@@ -151,6 +162,26 @@ class NaturalLanguageCompiler:
     def _count(text: str) -> float | None:
         match = re.search(r"(\d+)\s*(?:根|pipes?)", text)
         return float(match.group(1)) if match else None
+
+    @staticmethod
+    def _generated_map(text: str) -> GeneratedMapSpec:
+        lanes_match = re.search(r"(?:双向)?\s*(\d+)\s*车道", text)
+        total_lanes = int(lanes_match.group(1)) if lanes_match else 4
+        lanes_each_direction = max(1, total_lanes // 2)
+        if any(cue in text for cue in ("s弯", "s curve")):
+            segments = (
+                RoadSegmentSpec("line", 40.0),
+                RoadSegmentSpec("arc", 50.0, 0.015),
+                RoadSegmentSpec("arc", 50.0, -0.015),
+                RoadSegmentSpec("line", 60.0),
+            )
+        else:
+            segments = (RoadSegmentSpec("line", 200.0),)
+        return GeneratedMapSpec(
+            name="SafetyAgentCustomRoad",
+            segments=segments,
+            lanes_each_direction=lanes_each_direction,
+        )
 
     @staticmethod
     def _map(text: str) -> str | None:

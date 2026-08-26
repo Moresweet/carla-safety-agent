@@ -9,6 +9,7 @@ from typing import Any
 
 from .metrics import KinematicState, distance, evaluate, ttc
 from .models import ActorSpec, ProceduralAssetSpec, ScenarioResult, ScenarioSpec
+from .opendrive import build_opendrive
 
 
 class CarlaUnavailable(RuntimeError):
@@ -38,9 +39,25 @@ class CarlaAdapter:
         carla = self._module()
         client = carla.Client(self.host, self.port)
         client.set_timeout(self.timeout_s)
-        world = client.get_world()
-        if spec.map_name.lower() not in world.get_map().name.lower():
-            world = client.load_world(spec.map_name)
+        if spec.generated_map:
+            xodr = build_opendrive(spec.generated_map)
+            map_dir = output_dir / spec.scenario_id
+            map_dir.mkdir(parents=True, exist_ok=True)
+            (map_dir / "generated-map.xodr").write_text(xodr, encoding="utf-8")
+            parameters = carla.OpendriveGenerationParameters(
+                vertex_distance=2.0,
+                max_road_length=500.0,
+                wall_height=1.0,
+                additional_width=0.6,
+                smooth_junctions=True,
+                enable_mesh_visibility=True,
+                enable_pedestrian_navigation=False,
+            )
+            world = client.generate_opendrive_world(xodr, parameters)
+        else:
+            world = client.get_world()
+            if spec.map_name.lower() not in world.get_map().name.lower():
+                world = client.load_world(spec.map_name)
         original = world.get_settings()
         actors: list[Any] = []
         collision = {"hit": False}
@@ -78,23 +95,38 @@ class CarlaAdapter:
             sensor.listen(lambda _: collision.__setitem__("hit", True))
             actors.append(sensor)
             if render:
-                camera_bp = world.get_blueprint_library().find("sensor.camera.rgb")
-                camera_bp.set_attribute("image_size_x", "1280")
-                camera_bp.set_attribute("image_size_y", "720")
-                camera_bp.set_attribute("fov", "90")
                 camera_transform = carla.Transform(
                     carla.Location(x=-7.5, z=3.0), carla.Rotation(pitch=-12.0)
                 )
-                camera = world.spawn_actor(camera_bp, camera_transform, attach_to=ego)
-                frames_dir = output_dir / spec.scenario_id / "frames"
-                frames_dir.mkdir(parents=True, exist_ok=True)
-
-                def save_frame(image: Any) -> None:
-                    if image.frame % 5 == 0:
-                        image.save_to_disk(str(frames_dir / f"{image.frame:08d}.png"))
-
-                camera.listen(save_frame)
-                actors.append(camera)
+                sensor_root = output_dir / spec.scenario_id
+                for sensor_id, folder, converter in (
+                    ("sensor.camera.rgb", "frames", None),
+                    ("sensor.camera.depth", "depth", carla.ColorConverter.LogarithmicDepth),
+                    ("sensor.camera.semantic_segmentation", "semantic", carla.ColorConverter.CityScapesPalette),
+                ):
+                    camera_bp = world.get_blueprint_library().find(sensor_id)
+                    camera_bp.set_attribute("image_size_x", "1280")
+                    camera_bp.set_attribute("image_size_y", "720")
+                    camera_bp.set_attribute("fov", "90")
+                    camera = world.spawn_actor(camera_bp, camera_transform, attach_to=ego)
+                    frames_dir = sensor_root / folder
+                    frames_dir.mkdir(parents=True, exist_ok=True)
+                    camera.listen(self._image_writer(frames_dir, converter))
+                    actors.append(camera)
+                lidar_bp = world.get_blueprint_library().find("sensor.lidar.ray_cast")
+                lidar_bp.set_attribute("range", "80")
+                lidar_bp.set_attribute("channels", "32")
+                lidar_bp.set_attribute("points_per_second", "240000")
+                lidar_bp.set_attribute("rotation_frequency", "20")
+                lidar_dir = sensor_root / "lidar"
+                lidar_dir.mkdir(parents=True, exist_ok=True)
+                lidar = world.spawn_actor(
+                    lidar_bp, carla.Transform(carla.Location(z=2.4)), attach_to=ego
+                )
+                lidar.listen(lambda cloud: cloud.save_to_disk(
+                    str(lidar_dir / f"{cloud.frame:08d}.ply")
+                ) if cloud.frame % 5 == 0 else None)
+                actors.append(lidar)
             ego.set_autopilot(spec.family != "road_hazard")
             for adv, adv_spec in zip(adversaries, spec.adversaries):
                 if adv_spec.behavior == "autopilot":
@@ -247,6 +279,16 @@ class CarlaAdapter:
             location,
             carla.Rotation(pitch=-17.0, yaw=transform.rotation.yaw),
         ))
+
+    @staticmethod
+    def _image_writer(directory: Path, converter: Any) -> Any:
+        def save(image: Any) -> None:
+            if image.frame % 5 != 0:
+                return
+            if converter is not None:
+                image.convert(converter)
+            image.save_to_disk(str(directory / f"{image.frame:08d}.png"))
+        return save
 
     @staticmethod
     def _trigger(carla: Any, actor: Any, spec: ActorSpec) -> None:

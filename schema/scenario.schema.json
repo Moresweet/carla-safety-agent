@@ -9,16 +9,39 @@
     "family": {
       "enum": ["rear_end", "lead_vehicle_lane_change", "vulnerable_road_user", "crossing_path", "merge", "road_hazard"]
     },
-    "map_name": {"type": "string", "pattern": "^Town[0-9]{2}$"},
+    "map_name": {"type": "string", "pattern": "^(Town[0-9]{2}|GeneratedOpenDrive)$"},
     "seed": {"type": "integer", "minimum": 0},
     "ego": {"$ref": "#/$defs/actor"},
     "adversaries": {"type": "array", "items": {"$ref": "#/$defs/actor"}},
     "generated_assets": {"type": "array", "items": {"$ref": "#/$defs/generated_asset"}},
+    "generated_map": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/generated_map"}]},
     "environment": {"type": "object"},
     "oracle": {"type": "object"},
     "provenance": {"type": "object"}
   },
   "$defs": {
+    "generated_map": {
+      "type": "object",
+      "required": ["name", "segments", "lane_width_m", "lanes_each_direction", "speed_limit_mps"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "segments": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["kind", "length_m", "curvature"],
+            "properties": {
+              "kind": {"enum": ["line", "arc"]},
+              "length_m": {"type": "number", "exclusiveMinimum": 0},
+              "curvature": {"type": "number"}
+            }
+          }
+        },
+        "lane_width_m": {"type": "number", "exclusiveMinimum": 0},
+        "lanes_each_direction": {"type": "integer", "minimum": 1},
+        "speed_limit_mps": {"type": "number", "exclusiveMinimum": 0}
+      }
+    },
     "generated_asset": {
       "type": "object",
       "required": ["asset_id", "kind", "shape", "dimensions_m", "mass_kg", "distance_ahead_m", "count"],

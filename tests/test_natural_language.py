@@ -40,6 +40,14 @@ class NaturalLanguageTests(unittest.TestCase):
         with self.assertRaises(DescriptionError):
             NaturalLanguageCompiler().compile("前车急刹，同时一辆车从匝道汇入")
 
+    def test_generated_s_curve_map(self):
+        result = NaturalLanguageCompiler().compile(
+            "生成一张双向四车道新地图，包含 S弯，前方 55 米有 8 根金属管掉落货物"
+        )
+        self.assertEqual(result.scenario.map_name, "GeneratedOpenDrive")
+        self.assertEqual(len(result.scenario.generated_map.segments), 4)
+        self.assertEqual(result.scenario.generated_map.lanes_each_direction, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,7 @@ class BuildPlan:
     map_name: str
     actors: tuple[dict[str, object], ...]
     generated_assets: tuple[dict[str, object], ...]
+    generated_map: dict[str, object] | None
     trigger: dict[str, object]
     render: dict[str, object]
     diagnostics: tuple[str, ...]
@@ -38,6 +39,7 @@ def build_plan(spec: ScenarioSpec) -> BuildPlan:
         map_name=spec.map_name,
         actors=(spec.ego.__dict__,) + ((adversary.__dict__,) if adversary else ()),
         generated_assets=tuple(asset.__dict__ for asset in spec.generated_assets),
+        generated_map=asdict(spec.generated_map) if spec.generated_map else None,
         trigger={
             "type": "distance",
             "threshold_m": adversary.trigger_distance_m if adversary else None,

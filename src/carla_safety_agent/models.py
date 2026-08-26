@@ -66,6 +66,36 @@ class ProceduralAssetSpec:
 
 
 @dataclass(frozen=True)
+class RoadSegmentSpec:
+    kind: str
+    length_m: float
+    curvature: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.kind not in {"line", "arc"}:
+            raise ValueError(f"unsupported road segment: {self.kind}")
+        if self.length_m <= 0:
+            raise ValueError("road segment length must be positive")
+        if self.kind == "arc" and self.curvature == 0:
+            raise ValueError("arc curvature cannot be zero")
+
+
+@dataclass(frozen=True)
+class GeneratedMapSpec:
+    name: str
+    segments: tuple[RoadSegmentSpec, ...]
+    lane_width_m: float = 3.5
+    lanes_each_direction: int = 2
+    speed_limit_mps: float = 20.0
+
+    def __post_init__(self) -> None:
+        if not self.segments:
+            raise ValueError("generated map requires at least one road segment")
+        if self.lane_width_m <= 0 or self.lanes_each_direction < 1:
+            raise ValueError("generated map lane geometry is invalid")
+
+
+@dataclass(frozen=True)
 class ScenarioSpec:
     scenario_id: str
     family: str
@@ -76,6 +106,7 @@ class ScenarioSpec:
     environment: EnvironmentSpec
     oracle: OracleSpec
     generated_assets: tuple[ProceduralAssetSpec, ...] = ()
+    generated_map: GeneratedMapSpec | None = None
     provenance: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

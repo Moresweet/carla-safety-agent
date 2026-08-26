@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .models import ActorSpec, EnvironmentSpec, OracleSpec, ScenarioSpec
+from .models import ActorSpec, EnvironmentSpec, OracleSpec, ProceduralAssetSpec, ScenarioSpec
 
 
 def save_specs(specs: list[ScenarioSpec], path: Path) -> None:
@@ -23,5 +23,8 @@ def load_specs(path: Path) -> list[ScenarioSpec]:
         item["adversaries"] = tuple(ActorSpec(**a) for a in item["adversaries"])
         item["environment"] = EnvironmentSpec(**item["environment"])
         item["oracle"] = OracleSpec(**item["oracle"])
+        item["generated_assets"] = tuple(
+            ProceduralAssetSpec(**asset) for asset in item.get("generated_assets", [])
+        )
         result.append(ScenarioSpec(**item))
     return result

@@ -1,0 +1,55 @@
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Actor/StaticMeshFactory.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Actor/StaticMeshFactory.cpp
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Actor/StaticMeshFactory.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Actor/StaticMeshFactory.cpp
+@@ -26,5 +26,17 @@ TArray<FActorDefinition> AStaticMeshFactory::GetDefinitions()
+       EActorAttributeType::Float,
+       {"1.0f"}, false});
++  StaticMeshDefinition.Variations.Emplace(FActorVariation{
++      TEXT("scale_x"),
++      EActorAttributeType::Float,
++      {"1.0f"}, false});
++  StaticMeshDefinition.Variations.Emplace(FActorVariation{
++      TEXT("scale_y"),
++      EActorAttributeType::Float,
++      {"1.0f"}, false});
++  StaticMeshDefinition.Variations.Emplace(FActorVariation{
++      TEXT("scale_z"),
++      EActorAttributeType::Float,
++      {"1.0f"}, false});
+   return { StaticMeshDefinition };
+ }
+ 
+@@ -47,7 +59,14 @@ FActorSpawnResult AStaticMeshFactory::SpawnActor(
+   }
+ 
+   float Scale = ABFL::RetrieveActorAttributeToFloat("scale", ActorDescription.Variations, 1.0f);
++  float ScaleX = ABFL::RetrieveActorAttributeToFloat("scale_x", ActorDescription.Variations, Scale);
++  float ScaleY = ABFL::RetrieveActorAttributeToFloat("scale_y", ActorDescription.Variations, Scale);
++  float ScaleZ = ABFL::RetrieveActorAttributeToFloat("scale_z", ActorDescription.Variations, Scale);
++  if (ScaleX <= 0.0f || ScaleY <= 0.0f || ScaleZ <= 0.0f)
++  {
++    UE_LOG(LogCarla, Error, TEXT("Static mesh scale components must be positive."));
++    return {};
++  }
+-  FTransform ScaledTransform(SpawnAtTransform);
+-  ScaledTransform.SetScale3D(FVector(Scale));
++  const FVector MeshScale(ScaleX, ScaleY, ScaleZ);
+ 
+   FActorSpawnParameters SpawnParameters;
+@@ -53,7 +72,7 @@ FActorSpawnResult AStaticMeshFactory::SpawnActor(
+   SpawnParameters.SpawnCollisionHandlingOverride =
+       ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+   auto *StaticMeshActor = World->SpawnActor<AStaticMeshActor>(
+-      ActorDescription.Class, ScaledTransform, SpawnParameters);
++      ActorDescription.Class, SpawnAtTransform, SpawnParameters);
+ 
+   auto *StaticMeshComponent = Cast<UStaticMeshComponent>(
+       StaticMeshActor->GetRootComponent());
+@@ -69,6 +88,7 @@ FActorSpawnResult AStaticMeshFactory::SpawnActor(
+       StaticMeshComponent->SetMobility(EComponentMobility::Movable);
+       if (!StaticMeshComponent->SetStaticMesh(Mesh))
+         UE_LOG(LogCarla, Warning, TEXT("Failed to set the mesh"));
++      StaticMeshComponent->SetWorldScale3D(MeshScale);
+       StaticMeshComponent->SetMobility(EComponentMobility::Static);
+ 
+       if (ActorDescription.Variations.Contains("mass"))

@@ -13,6 +13,8 @@ oracles and CARLA runtime boundary.
   vulnerable road user, crossing path, and merge.
 - Emits an explicit CARLA build plan before touching the simulator.
 - Builds and renders an ego chase-camera sequence on demand.
+- Generates collision-enabled fallen-cargo assets from structured dimensions,
+  mass, placement and multiplicity instead of requiring a pre-authored CARLA prop.
 - Biases samples toward parameter boundaries instead of producing ordinary traffic.
 - Runs CARLA in synchronous fixed-step mode.
 - Records distance/TTC traces and collision events.
@@ -73,6 +75,31 @@ Supported description cues include `追尾/急刹`, `前车变道`, `行人横�
 `交叉路径/路口横穿`, and `汇入/合流`, plus their English equivalents. A
 description that contains no supported type or mixes multiple types fails
 explicitly instead of silently guessing.
+
+## Runtime-generated hazard assets
+
+The first generated asset is a bundle of independently simulated metal pipes.
+The compiler accepts descriptions such as:
+
+```bash
+PYTHONPATH=src /home/moresweet/carla/.venv/bin/python \
+  -m carla_safety_agent.cli from-text \
+  'Town04 高速公路前方 40 米有掉落货物，6 根金属管，自车速度 72 km/h' \
+  --output runs/fallen-cargo/scenario.json
+```
+
+Each pipe is instantiated from engine primitive geometry with generated
+non-uniform dimensions, pose, collision and mass. The resulting bundle is not a
+pre-authored map prop and can be varied without importing another `.uasset`.
+
+The CARLA source extension exposes non-uniform scale through the existing
+`static.prop.mesh` RPC factory. Apply it at the CARLA repository root and rebuild
+the editor target:
+
+```bash
+git apply /path/to/carla-safety-agent/integration/carla/static-mesh-factory-nonuniform-scale.patch
+make launch
+```
 
 The stable schema is in `schema/scenario.schema.json`. The interaction enum
 names are project identifiers aligned to the five representative groups in

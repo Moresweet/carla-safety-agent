@@ -23,6 +23,19 @@ class NaturalLanguageTests(unittest.TestCase):
         with self.assertRaises(DescriptionError):
             NaturalLanguageCompiler().compile("阳光明媚的普通巡航")
 
+    def test_fallen_cargo_compiles_generated_asset(self):
+        result = NaturalLanguageCompiler().compile(
+            "Town04 高速公路前方 40 米有掉落货物，6 根金属管，自车速度 72 km/h"
+        )
+        self.assertEqual(result.scenario.family, "road_hazard")
+        self.assertEqual(result.scenario.adversaries, ())
+        asset = result.scenario.generated_assets[0]
+        self.assertEqual(asset.shape, "metal_pipes")
+        self.assertEqual(asset.count, 6)
+        self.assertEqual(asset.distance_ahead_m, 40.0)
+        self.assertAlmostEqual(result.scenario.ego.speed_mps, 20.0)
+        self.assertEqual(result.extracted["generated_asset"]["count"], 6)
+
     def test_ambiguous_description_fails(self):
         with self.assertRaises(DescriptionError):
             NaturalLanguageCompiler().compile("前车急刹，同时一辆车从匝道汇入")

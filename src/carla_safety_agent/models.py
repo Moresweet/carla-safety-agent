@@ -43,6 +43,29 @@ class OracleSpec:
 
 
 @dataclass(frozen=True)
+class ProceduralAssetSpec:
+    asset_id: str
+    kind: str
+    shape: str
+    dimensions_m: tuple[float, float, float]
+    mass_kg: float
+    distance_ahead_m: float
+    lateral_offset_m: float = 0.0
+    count: int = 1
+    color: str = "rust"
+
+    def __post_init__(self) -> None:
+        if any(value <= 0 for value in self.dimensions_m):
+            raise ValueError("asset dimensions must be positive")
+        if self.mass_kg <= 0:
+            raise ValueError("asset mass must be positive")
+        if self.distance_ahead_m <= 0:
+            raise ValueError("asset distance must be positive")
+        if self.count < 1:
+            raise ValueError("asset count must be positive")
+
+
+@dataclass(frozen=True)
 class ScenarioSpec:
     scenario_id: str
     family: str
@@ -52,6 +75,7 @@ class ScenarioSpec:
     adversaries: tuple[ActorSpec, ...]
     environment: EnvironmentSpec
     oracle: OracleSpec
+    generated_assets: tuple[ProceduralAssetSpec, ...] = ()
     provenance: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

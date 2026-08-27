@@ -192,12 +192,25 @@ cd tools/livery-designer
 pnpm run dev
 ```
 
+Start the local bridge in a second terminal with CARLA's Python module available:
+
+```bash
+PYTHONPATH=/path/to/carla/python/site-packages python3 tools/livery_bridge.py
+```
+
+`Update bodywork parameter` sends the canvas directly to the running Tesla Model
+3. The compiled CARLA source must
+include `integration/carla/vehicle-skeletal-texture.patch`, which extends the
+existing texture RPC from static meshes to vehicle skeletal meshes.
+
+This updates the Tesla material's existing grayscale bodywork parameter safely.
+Replacing slot 5 with a new full-color material currently conflicts with
+CARLA's tagged skeletal scene proxy (`MeshObject` assertion), so full-color live
+wrapping is intentionally not presented as complete.
+
 The 2048 x 2048 base shown by the editor is exported from CARLA's actual Tesla
 Model 3 bodywork texture asset, `M_Tesla_Bodywork_d_a`, rather than a hand-drawn
-region approximation. Applying the composed PNG to a live vehicle still
-requires a compatible UE livery material; the editor deliberately does not
-replace a live skeletal material because that conflicts with CARLA's semantic
-tagging proxy.
+region approximation.
 
 ## Downhill occlusion scenario
 

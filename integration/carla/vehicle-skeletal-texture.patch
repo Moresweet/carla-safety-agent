@@ -1,0 +1,50 @@
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
+index bca9d1064..4690c7b76 100644
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
+@@ -11,6 +11,8 @@
+ #include "Carla/Game/CarlaStaticDelegates.h"
+ #include "Carla/Traffic/RoadSpline.h"
+ #include "Carla/Lights/CarlaLight.h"
++#include "Components/MeshComponent.h"
++#include "Components/SkeletalMeshComponent.h"
+ #include "Engine/DecalActor.h"
+ #include "Engine/LevelStreaming.h"
+ #include "Engine/LocalPlayer.h"
+@@ -337,13 +339,19 @@ void ACarlaGameModeBase::ApplyTextureToActor(
+     const carla::rpc::MaterialParameter& TextureParam)
+ {
+   namespace cr = carla::rpc;
+-  TArray<UStaticMeshComponent*> StaticMeshes;
+-  Actor->GetComponents(StaticMeshes);
+-  for (UStaticMeshComponent* Mesh : StaticMeshes)
++  TArray<UMeshComponent*> Meshes;
++  Actor->GetComponents(Meshes);
++  for (UMeshComponent* Mesh : Meshes)
+   {
+     for (int i = 0; i < Mesh->GetNumMaterials(); ++i)
+     {
+       UMaterialInterface* OriginalMaterial = Mesh->GetMaterial(i);
++      if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
++          Mesh->IsA<USkeletalMeshComponent>() &&
++          i != 5)
++      {
++        continue;
++      }
+       UMaterialInstanceDynamic* DynamicMaterial = Cast<UMaterialInstanceDynamic>(OriginalMaterial);
+       if(!DynamicMaterial)
+       {
+@@ -355,10 +363,13 @@ void ACarlaGameModeBase::ApplyTextureToActor(
+       {
+         case cr::MaterialParameter::Tex_Diffuse:
+           DynamicMaterial->SetTextureParameterValue("BaseColor", Texture);
++          DynamicMaterial->SetTextureParameterValue("Diffuse", Texture);
+           DynamicMaterial->SetTextureParameterValue("Difuse", Texture);
+           DynamicMaterial->SetTextureParameterValue("Difuse 2", Texture);
+           DynamicMaterial->SetTextureParameterValue("Difuse 3", Texture);
+           DynamicMaterial->SetTextureParameterValue("Difuse 4", Texture);
++          DynamicMaterial->SetVectorParameterValue("Base Color", FLinearColor::White);
++          DynamicMaterial->SetVectorParameterValue("Gain Color", FLinearColor::White);
+           break;
+         case cr::MaterialParameter::Tex_Normal:
+           DynamicMaterial->SetTextureParameterValue("Normal", Texture);

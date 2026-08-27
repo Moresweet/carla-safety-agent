@@ -194,6 +194,13 @@ displayed separately from the exported texture, and the same mesh drives an
 orbitable WebGL preview that updates with the atlas. The wireframe overlay is a
 guide only and is never baked into the livery sent to CARLA.
 
+The default editing surface follows the direct-placement idea demonstrated by
+RAUCA-E2E while retaining Tesla's original UVs: top, left and right body views
+are projected from the real mesh, and a decal placed on those recognizable
+views is rasterized triangle-by-triangle back into UV0. This avoids asking the
+user to locate panels in a fragmented production atlas and does not require
+re-authoring CARLA's skeletal mesh.
+
 ```bash
 cd tools/livery-designer
 pnpm run dev

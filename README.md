@@ -153,7 +153,14 @@ attaches visualization sensors to the current hero vehicle and publishes:
 - `/carla/ego/semantic/image`
 - `/carla/ego/lidar/points`
 - `/carla/ego/odometry`
+- `/carla/map/road_markers`
 - `map -> ego_vehicle` TF
+
+The bridge also mounts a configurable six-camera surround rig: front,
+front-left, front-right, rear, rear-left and rear-right. Each stream publishes
+an image, calibrated `CameraInfo`, physical-link TF and ROS optical-frame TF.
+The supplied RViz profile uses six ROS image panels, follows `ego_vehicle`, and
+renders the CARLA road topology, LiDAR, odometry and TF in the central view.
 
 On a machine with ROS2 and RViz installed:
 
@@ -172,6 +179,25 @@ The package has been built and run on this workstation with ROS 2 Lyrical. RGB,
 depth, semantic, LiDAR, odometry, dynamic TF and static sensor TF were verified
 with ROS CLI tools, and the supplied RViz configuration was opened successfully.
 Load `/opt/ros/lyrical/setup.bash` before building or running on this machine.
+
+## Interactive vehicle livery editor
+
+`tools/livery-designer` is a local browser editor for converting an uploaded
+PNG, JPEG or WebP image into a repeatable vehicle appearance atlas. It supports
+positioned decals, tiled graphics and full-atlas coverage, then exports both a
+PNG and `vehicle-appearance.json` placement contract.
+
+```bash
+cd tools/livery-designer
+pnpm run dev
+```
+
+The 2048 x 2048 base shown by the editor is exported from CARLA's actual Tesla
+Model 3 bodywork texture asset, `M_Tesla_Bodywork_d_a`, rather than a hand-drawn
+region approximation. Applying the composed PNG to a live vehicle still
+requires a compatible UE livery material; the editor deliberately does not
+replace a live skeletal material because that conflicts with CARLA's semantic
+tagging proxy.
 
 ## Downhill occlusion scenario
 

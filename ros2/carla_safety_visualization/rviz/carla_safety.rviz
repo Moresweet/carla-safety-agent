@@ -4,29 +4,83 @@ Panels:
 Visualization Manager:
   Class: ""
   Global Options:
-    Fixed Frame: map
+    Fixed Frame: ego_vehicle
+    Background Color: 20; 24; 31
   Displays:
-    - Class: rviz_default_plugins/TF
-      Name: TF
+    - Class: rviz_default_plugins/Grid
+      Name: Ground Grid
       Enabled: true
+      Cell Size: 5
+      Plane Cell Count: 40
+      Color: 70; 78; 90
+    - Class: rviz_default_plugins/TF
+      Name: Sensor TF
+      Enabled: true
+      Frame Timeout: 15
+      Show Names: true
+    - Class: rviz_default_plugins/MarkerArray
+      Name: CARLA Road Map
+      Enabled: true
+      Topic:
+        Value: /carla/map/road_markers
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
     - Class: rviz_default_plugins/PointCloud2
       Name: LiDAR
       Enabled: true
       Topic:
         Value: /carla/ego/lidar/points
+        Reliability Policy: Best Effort
       Size (Pixels): 2
-    - Class: rviz_default_plugins/Image
-      Name: RGB
-      Enabled: true
-      Topic:
-        Value: /carla/ego/rgb/image
-    - Class: rviz_default_plugins/Image
-      Name: Semantic
-      Enabled: true
-      Topic:
-        Value: /carla/ego/semantic/image
     - Class: rviz_default_plugins/Odometry
       Name: Ego Odometry
       Enabled: true
       Topic:
         Value: /carla/ego/odometry
+    - Class: rviz_default_plugins/Image
+      Name: Front
+      Enabled: true
+      Topic:
+        Value: /carla/ego/camera/front/image
+        Reliability Policy: Reliable
+    - Class: rviz_default_plugins/Image
+      Name: Front Left
+      Enabled: true
+      Topic:
+        Value: /carla/ego/camera/front_left/image
+        Reliability Policy: Reliable
+    - Class: rviz_default_plugins/Image
+      Name: Front Right
+      Enabled: true
+      Topic:
+        Value: /carla/ego/camera/front_right/image
+        Reliability Policy: Reliable
+    - Class: rviz_default_plugins/Image
+      Name: Rear
+      Enabled: true
+      Topic:
+        Value: /carla/ego/camera/rear/image
+        Reliability Policy: Reliable
+    - Class: rviz_default_plugins/Image
+      Name: Rear Left
+      Enabled: true
+      Topic:
+        Value: /carla/ego/camera/rear_left/image
+        Reliability Policy: Reliable
+    - Class: rviz_default_plugins/Image
+      Name: Rear Right
+      Enabled: true
+      Topic:
+        Value: /carla/ego/camera/rear_right/image
+        Reliability Policy: Reliable
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Target Frame: ego_vehicle
+      Distance: 45
+      Pitch: 0.75
+      Yaw: 0.8
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0

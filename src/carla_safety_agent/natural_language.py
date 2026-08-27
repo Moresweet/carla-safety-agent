@@ -89,6 +89,18 @@ class NaturalLanguageCompiler:
                 count=pipe_count,
             ),)
             adversaries = ()
+            if any(cue in normalized for cue in ("遮挡", "混凝土护栏", "concrete barrier", "occluder")):
+                generated_assets += (ProceduralAssetSpec(
+                    asset_id="roadside-occluder-01",
+                    kind="roadside_occluder",
+                    shape="concrete_barriers",
+                    dimensions_m=(4.0, 0.5, 1.8),
+                    mass_kg=0.0,
+                    distance_ahead_m=max(12.0, asset_distance - 18.0),
+                    lateral_offset_m=3.2,
+                    count=3,
+                    color="concrete",
+                ),)
         else:
             kind = INTERACTION_TYPES[interaction].actor_kind
             adversaries = (ActorSpec(
@@ -168,15 +180,17 @@ class NaturalLanguageCompiler:
         lanes_match = re.search(r"(?:双向)?\s*(\d+)\s*车道", text)
         total_lanes = int(lanes_match.group(1)) if lanes_match else 4
         lanes_each_direction = max(1, total_lanes // 2)
+        downhill = any(cue in text for cue in ("下坡", "downhill", "descending"))
+        grade = -0.05 if downhill else 0.0
         if any(cue in text for cue in ("s弯", "s curve")):
             segments = (
-                RoadSegmentSpec("line", 40.0),
-                RoadSegmentSpec("arc", 50.0, 0.015),
-                RoadSegmentSpec("arc", 50.0, -0.015),
-                RoadSegmentSpec("line", 60.0),
+                RoadSegmentSpec("line", 40.0, grade=grade),
+                RoadSegmentSpec("arc", 50.0, 0.015, grade),
+                RoadSegmentSpec("arc", 50.0, -0.015, grade),
+                RoadSegmentSpec("line", 60.0, grade=grade),
             )
         else:
-            segments = (RoadSegmentSpec("line", 200.0),)
+            segments = (RoadSegmentSpec("line", 200.0, grade=grade),)
         return GeneratedMapSpec(
             name="SafetyAgentCustomRoad",
             segments=segments,

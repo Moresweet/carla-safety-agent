@@ -12,3 +12,7 @@ that environment.
 The supplied RViz configuration displays the point cloud, RGB image, semantic
 image, odometry and TF tree. Depth remains available as a topic for inspection
 or downstream perception nodes.
+
+This package was runtime-tested with ROS 2 Lyrical. The bridge publishes static
+camera and LiDAR extrinsics beneath `ego_vehicle`; image publishers use reliable
+QoS for RViz compatibility, while LiDAR uses the sensor-data QoS profile.

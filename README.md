@@ -150,9 +150,23 @@ rviz2 -d src/carla_safety_visualization/rviz/carla_safety.rviz
 ```
 
 The matching CARLA Python module must be available in the ROS2 environment.
-ROS2 and RViz are not installed in the current workstation or its local Isaac
-Lab image, so the ROS package is syntax-checked here but its live runtime remains
-an environment-dependent validation step.
+The package has been built and run on this workstation with ROS 2 Lyrical. RGB,
+depth, semantic, LiDAR, odometry, dynamic TF and static sensor TF were verified
+with ROS CLI tools, and the supplied RViz configuration was opened successfully.
+Load `/opt/ros/lyrical/setup.bash` before building or running on this machine.
+
+## Downhill occlusion scenario
+
+The generated road model also supports a per-segment grade. This description
+creates a continuous 5% downhill S-curve, three static concrete occluders and
+dynamic fallen pipes:
+
+```bash
+PYTHONPATH=src /home/moresweet/carla/.venv/bin/python \
+  -m carla_safety_agent.cli from-text \
+  '生成双向四车道 S弯下坡新地图，混凝土护栏形成遮挡，前方 60 米有 6 根金属管掉落货物，自车速度 54 km/h' \
+  --seed 99 --output runs/downhill-occlusion/scenario.json
+```
 
 The stable schema is in `schema/scenario.schema.json`. The interaction enum
 names are project identifiers aligned to the five representative groups in

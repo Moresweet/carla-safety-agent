@@ -203,7 +203,7 @@ class CarlaAdapter:
     def _spawn_generated_asset(
         carla: Any, world: Any, ego: Any, spec: ProceduralAssetSpec
     ) -> list[Any]:
-        if spec.shape != "metal_pipes":
+        if spec.shape not in {"metal_pipes", "concrete_barriers"}:
             raise RuntimeError(f"unsupported generated asset shape: {spec.shape}")
         library = world.get_blueprint_library()
         blueprint = library.find("static.prop.mesh")
@@ -220,7 +220,36 @@ class CarlaAdapter:
         if not candidates:
             raise RuntimeError("no road waypoint available for generated asset placement")
         base = candidates[0].transform
-        length, diameter, _ = spec.dimensions_m
+        length, width, height = spec.dimensions_m
+        if spec.shape == "concrete_barriers":
+            blueprint.set_attribute("mesh_path", "/Engine/BasicShapes/Cube.Cube")
+            blueprint.set_attribute("mass", str(spec.mass_kg))
+            blueprint.set_attribute("scale_x", str(length))
+            blueprint.set_attribute("scale_y", str(width))
+            blueprint.set_attribute("scale_z", str(height))
+            spawned: list[Any] = []
+            for index in range(spec.count):
+                barrier_waypoints = waypoint.next(spec.distance_ahead_m + index * length)
+                if not barrier_waypoints:
+                    break
+                barrier = barrier_waypoints[0].transform
+                location = (
+                    barrier.location
+                    + barrier.get_right_vector() * spec.lateral_offset_m
+                    + carla.Location(z=height * 0.5)
+                )
+                actor = world.try_spawn_actor(blueprint, carla.Transform(location, barrier.rotation))
+                if actor is None:
+                    for previous in spawned:
+                        previous.destroy()
+                    raise RuntimeError(f"failed to spawn generated barrier {index}")
+                spawned.append(actor)
+            if len(spawned) != spec.count:
+                for previous in spawned:
+                    previous.destroy()
+                raise RuntimeError("road ended before all generated barriers could be placed")
+            return spawned
+        diameter = width
         # UE BasicShapes/Cylinder is 1 m high and 1 m in diameter. Rotate its
         # local Z axis onto the road plane and scale each axis independently.
         blueprint.set_attribute("mesh_path", "/Engine/BasicShapes/Cylinder.Cylinder")
@@ -228,7 +257,7 @@ class CarlaAdapter:
         blueprint.set_attribute("scale_x", str(diameter))
         blueprint.set_attribute("scale_y", str(diameter))
         blueprint.set_attribute("scale_z", str(length))
-        spawned: list[Any] = []
+        spawned = []
         columns = spec.count
         for index in range(spec.count):
             row, column = divmod(index, columns)
@@ -254,6 +283,8 @@ class CarlaAdapter:
         matches = [bp for bp in library if fnmatch.fnmatch(bp.id, spec.blueprint)]
         if not matches:
             raise RuntimeError(f"no blueprint matches {spec.blueprint}")
+        if matches[0].has_attribute("role_name"):
+            matches[0].set_attribute("role_name", "hero" if spec.role == "ego" else spec.role)
         transform = spawn_points[spec.spawn_index % len(spawn_points)]
         actor = world.try_spawn_actor(matches[0], transform)
         if actor is None:

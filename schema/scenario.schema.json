@@ -33,7 +33,8 @@
             "properties": {
               "kind": {"enum": ["line", "arc"]},
               "length_m": {"type": "number", "exclusiveMinimum": 0},
-              "curvature": {"type": "number"}
+              "curvature": {"type": "number"},
+              "grade": {"type": "number", "minimum": -0.15, "maximum": 0.15}
             }
           }
         },
@@ -47,13 +48,13 @@
       "required": ["asset_id", "kind", "shape", "dimensions_m", "mass_kg", "distance_ahead_m", "count"],
       "properties": {
         "asset_id": {"type": "string", "minLength": 1},
-        "kind": {"const": "fallen_cargo"},
-        "shape": {"const": "metal_pipes"},
+        "kind": {"enum": ["fallen_cargo", "roadside_occluder"]},
+        "shape": {"enum": ["metal_pipes", "concrete_barriers"]},
         "dimensions_m": {
           "type": "array", "minItems": 3, "maxItems": 3,
           "items": {"type": "number", "exclusiveMinimum": 0}
         },
-        "mass_kg": {"type": "number", "exclusiveMinimum": 0},
+        "mass_kg": {"type": "number", "minimum": 0},
         "distance_ahead_m": {"type": "number", "exclusiveMinimum": 0},
         "lateral_offset_m": {"type": "number"},
         "count": {"type": "integer", "minimum": 1},

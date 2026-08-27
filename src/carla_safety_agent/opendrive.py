@@ -41,7 +41,14 @@ def build_opendrive(spec: GeneratedMapSpec) -> str:
             heading = end_heading
         s += segment.length_m
     elevation = ET.SubElement(road, "elevationProfile")
-    ET.SubElement(elevation, "elevation", {"s": "0", "a": "0", "b": "0", "c": "0", "d": "0"})
+    elevation_s = elevation_z = 0.0
+    for segment in spec.segments:
+        ET.SubElement(elevation, "elevation", {
+            "s": _number(elevation_s), "a": _number(elevation_z),
+            "b": _number(segment.grade), "c": "0", "d": "0",
+        })
+        elevation_s += segment.length_m
+        elevation_z += segment.grade * segment.length_m
     ET.SubElement(road, "lateralProfile")
     lanes = ET.SubElement(road, "lanes")
     ET.SubElement(lanes, "laneOffset", {"s": "0", "a": "0", "b": "0", "c": "0", "d": "0"})

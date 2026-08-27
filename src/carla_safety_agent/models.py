@@ -57,8 +57,8 @@ class ProceduralAssetSpec:
     def __post_init__(self) -> None:
         if any(value <= 0 for value in self.dimensions_m):
             raise ValueError("asset dimensions must be positive")
-        if self.mass_kg <= 0:
-            raise ValueError("asset mass must be positive")
+        if self.mass_kg < 0:
+            raise ValueError("asset mass cannot be negative")
         if self.distance_ahead_m <= 0:
             raise ValueError("asset distance must be positive")
         if self.count < 1:
@@ -70,6 +70,7 @@ class RoadSegmentSpec:
     kind: str
     length_m: float
     curvature: float = 0.0
+    grade: float = 0.0
 
     def __post_init__(self) -> None:
         if self.kind not in {"line", "arc"}:
@@ -78,6 +79,8 @@ class RoadSegmentSpec:
             raise ValueError("road segment length must be positive")
         if self.kind == "arc" and self.curvature == 0:
             raise ValueError("arc curvature cannot be zero")
+        if abs(self.grade) > 0.15:
+            raise ValueError("road grade exceeds the supported 15 percent limit")
 
 
 @dataclass(frozen=True)

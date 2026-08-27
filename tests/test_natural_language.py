@@ -48,6 +48,14 @@ class NaturalLanguageTests(unittest.TestCase):
         self.assertEqual(len(result.scenario.generated_map.segments), 4)
         self.assertEqual(result.scenario.generated_map.lanes_each_direction, 2)
 
+    def test_downhill_map_with_roadside_occluders(self):
+        result = NaturalLanguageCompiler().compile(
+            "生成双向四车道 S弯下坡新地图，混凝土护栏形成遮挡，前方 60 米有掉落货物"
+        )
+        self.assertTrue(all(segment.grade < 0 for segment in result.scenario.generated_map.segments))
+        self.assertEqual(len(result.scenario.generated_assets), 2)
+        self.assertEqual(result.scenario.generated_assets[1].shape, "concrete_barriers")
+
 
 if __name__ == "__main__":
     unittest.main()

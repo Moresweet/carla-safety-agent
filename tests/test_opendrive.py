@@ -19,6 +19,7 @@ class OpenDriveTests(unittest.TestCase):
         self.assertEqual(len(root.findall("./road/planView/geometry")), 4)
         self.assertEqual(len(root.findall("./road/lanes/laneSection/left/lane")), 2)
         self.assertEqual(len(root.findall("./road/lanes/laneSection/right/lane")), 2)
+        self.assertEqual(len(root.findall("./road/elevationProfile/elevation")), 4)
 
 
 if __name__ == "__main__":

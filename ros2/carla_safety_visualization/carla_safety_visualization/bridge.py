@@ -10,7 +10,7 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, PointCloud2, PointField
-from tf2_ros import TransformBroadcaster
+from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
 
 class CarlaSafetyBridge(Node):
@@ -32,16 +32,18 @@ class CarlaSafetyBridge(Node):
             raise RuntimeError("no CARLA ego vehicle is available")
         self.odom = self.create_publisher(Odometry, "/carla/ego/odometry", 10)
         self.tf = TransformBroadcaster(self)
+        self.static_tf = StaticTransformBroadcaster(self)
         self.image_publishers = {
-            "rgb": self.create_publisher(Image, "/carla/ego/rgb/image", qos_profile_sensor_data),
-            "depth": self.create_publisher(Image, "/carla/ego/depth/image", qos_profile_sensor_data),
-            "semantic": self.create_publisher(Image, "/carla/ego/semantic/image", qos_profile_sensor_data),
+            "rgb": self.create_publisher(Image, "/carla/ego/rgb/image", 10),
+            "depth": self.create_publisher(Image, "/carla/ego/depth/image", 10),
+            "semantic": self.create_publisher(Image, "/carla/ego/semantic/image", 10),
         }
         self.cloud = self.create_publisher(
             PointCloud2, "/carla/ego/lidar/points", qos_profile_sensor_data
         )
         self.sensors = []
         self._spawn_sensors()
+        self._publish_sensor_transforms()
         self.create_timer(0.05, self._publish_pose)
         self.get_logger().info("Publishing RGB, depth, semantic, LiDAR, odometry and TF")
 
@@ -68,6 +70,20 @@ class CarlaSafetyBridge(Node):
         )
         lidar.listen(self._publish_cloud)
         self.sensors.append(lidar)
+
+    def _publish_sensor_transforms(self) -> None:
+        stamp = self.get_clock().now().to_msg()
+        transforms = []
+        for child, x, z in (("ego_camera", 1.5, 2.0), ("ego_lidar", 0.0, 2.4)):
+            transform = TransformStamped()
+            transform.header.stamp = stamp
+            transform.header.frame_id = "ego_vehicle"
+            transform.child_frame_id = child
+            transform.transform.translation.x = x
+            transform.transform.translation.z = z
+            transform.transform.rotation.w = 1.0
+            transforms.append(transform)
+        self.static_tf.sendTransform(transforms)
 
     def _publish_image(self, label: str, image: carla.Image) -> None:
         message = Image()
@@ -137,6 +153,8 @@ def main() -> None:
     node = CarlaSafetyBridge()
     try:
         rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
     finally:
         node.destroy_node()
         rclpy.shutdown()

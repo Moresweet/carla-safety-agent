@@ -185,7 +185,8 @@ Load `/opt/ros/lyrical/setup.bash` before building or running on this machine.
 `tools/livery-designer` is a local browser editor for converting an uploaded
 PNG, JPEG or WebP image into a repeatable vehicle appearance atlas. It supports
 positioned decals, tiled graphics and full-atlas coverage, then exports both a
-PNG and `vehicle-appearance.json` placement contract.
+PNG and `vehicle-appearance.json` placement contract. In decal mode the image
+can be dragged directly on the atlas and resized with the mouse wheel.
 
 ```bash
 cd tools/livery-designer
@@ -198,15 +199,24 @@ Start the local bridge in a second terminal with CARLA's Python module available
 PYTHONPATH=/path/to/carla/python/site-packages python3 tools/livery_bridge.py
 ```
 
-`Update bodywork parameter` sends the canvas directly to the running Tesla Model
-3. The compiled CARLA source must
-include `integration/carla/vehicle-skeletal-texture.patch`, which extends the
-existing texture RPC from static meshes to vehicle skeletal meshes.
+Install the dedicated full-color Tesla material once, before starting CARLA:
 
-This updates the Tesla material's existing grayscale bodywork parameter safely.
-Replacing slot 5 with a new full-color material currently conflicts with
-CARLA's tagged skeletal scene proxy (`MeshObject` assertion), so full-color live
-wrapping is intentionally not presented as complete.
+```bash
+/path/to/UE4Editor-Cmd /path/to/CarlaUE4.uproject \
+  -run=pythonscript \
+  -script=/path/to/carla-safety-agent/integration/carla/install_tesla_livery_material.py \
+  -unattended -nop4 -nosplash
+```
+
+`Apply live livery` sends the canvas directly to the running Tesla Model 3. The
+compiled CARLA source must include
+`integration/carla/vehicle-skeletal-texture.patch`, which extends the existing
+texture RPC from static meshes to vehicle skeletal meshes and updates the
+dedicated `LiveryTexture` parameter.
+
+The material is bound before the vehicle is spawned. Runtime updates therefore
+change only its texture parameter and do not replace a live skeletal material
+slot, avoiding CARLA's tagged skeletal scene proxy `MeshObject` assertion.
 
 The 2048 x 2048 base shown by the editor is exported from CARLA's actual Tesla
 Model 3 bodywork texture asset, `M_Tesla_Bodywork_d_a`, rather than a hand-drawn

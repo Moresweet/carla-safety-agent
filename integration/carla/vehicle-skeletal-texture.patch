@@ -34,11 +34,12 @@ index bca9d1064..4690c7b76 100644
        UMaterialInstanceDynamic* DynamicMaterial = Cast<UMaterialInstanceDynamic>(OriginalMaterial);
        if(!DynamicMaterial)
        {
-@@ -355,10 +363,13 @@ void ACarlaGameModeBase::ApplyTextureToActor(
+@@ -355,10 +363,14 @@ void ACarlaGameModeBase::ApplyTextureToActor(
        {
          case cr::MaterialParameter::Tex_Diffuse:
            DynamicMaterial->SetTextureParameterValue("BaseColor", Texture);
 +          DynamicMaterial->SetTextureParameterValue("Diffuse", Texture);
++          DynamicMaterial->SetTextureParameterValue("LiveryTexture", Texture);
            DynamicMaterial->SetTextureParameterValue("Difuse", Texture);
            DynamicMaterial->SetTextureParameterValue("Difuse 2", Texture);
            DynamicMaterial->SetTextureParameterValue("Difuse 3", Texture);

@@ -1,0 +1,39 @@
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/OpenDrive/OpenDriveGenerator.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/OpenDrive/OpenDriveGenerator.cpp
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/OpenDrive/OpenDriveGenerator.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/OpenDrive/OpenDriveGenerator.cpp
+@@ -13,6 +13,7 @@
+ 
+ #include "Engine/Classes/Interfaces/Interface_CollisionDataProvider.h"
+ #include "PhysicsCore/Public/BodySetupEnums.h"
++#include "Materials/MaterialInterface.h"
+ 
+ AProceduralMeshActor::AProceduralMeshActor()
+ {
+@@ -70,6 +71,10 @@ void AOpenDriveGenerator::GenerateRoadMesh()
+   }
+ 
+   auto& CarlaMap = UCarlaStatics::GetGameMode(GetWorld())->GetMap();
++  UMaterialInterface* RoadMaterial = LoadObject<UMaterialInterface>(
++      nullptr,
++      TEXT("/Game/Carla/Static/GenericMaterials/RoadPainterMaterials/MI_Road_Asphalt.MI_Road_Asphalt"));
++
+   const auto Meshes = CarlaMap->GenerateChunkedMesh(Parameters);
+   for (const auto &Mesh : Meshes) {
+     if (!Mesh->GetVertices().size())
+@@ -92,10 +97,14 @@ void AOpenDriveGenerator::GenerateRoadMesh()
+         MeshData.Vertices,
+         MeshData.Triangles,
+         MeshData.Normals,
+-        TArray<FVector2D>(), // UV0
+-        TArray<FLinearColor>(), // VertexColor
++        MeshData.UV0,
++        MeshData.VertexColor,
+         TArray<FProcMeshTangent>(), // Tangents
+         true); // Create collision
++    if (RoadMaterial != nullptr)
++    {
++      TempPMC->SetMaterial(0, RoadMaterial);
++    }
+ 
+     ActorMeshList.Add(TempActor);
+   }

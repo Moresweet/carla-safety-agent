@@ -69,6 +69,7 @@ class NaturalLanguageCompiler:
         night = any(k in normalized for k in ("夜", "night", "dark"))
         wants_generated_map = any(k in normalized for k in (
             "新地图", "生成地图", "新道路", "s弯", "s curve", "generated map", "custom road",
+            "真实场景", "真实环境", "建筑", "树木", "realistic scene", "buildings", "trees",
         ))
         generated_map = self._generated_map(normalized) if wants_generated_map else None
         if generated_map:
@@ -195,7 +196,25 @@ class NaturalLanguageCompiler:
             name="SafetyAgentCustomRoad",
             segments=segments,
             lanes_each_direction=lanes_each_direction,
+            tree_count=NaturalLanguageCompiler._environment_count(text, ("棵树", "trees"), 20),
+            building_count=NaturalLanguageCompiler._environment_count(
+                text, ("栋建筑", "buildings"), 8
+            ),
+            pedestrian_count=NaturalLanguageCompiler._environment_count(
+                text, ("名行人", "pedestrians"), 6
+            ),
+            traffic_vehicle_count=NaturalLanguageCompiler._environment_count(
+                text, ("辆背景车", "traffic vehicles"), 6
+            ),
         )
+
+    @staticmethod
+    def _environment_count(text: str, labels: tuple[str, ...], default: int) -> int:
+        for label in labels:
+            match = re.search(rf"(\d+)\s*{re.escape(label)}", text)
+            if match:
+                return int(match.group(1))
+        return default
 
     @staticmethod
     def _map(text: str) -> str | None:

@@ -16,6 +16,8 @@ oracles and CARLA runtime boundary.
 - Generates collision-enabled fallen-cargo assets from structured dimensions,
   mass, placement and multiplicity instead of requiring a pre-authored CARLA prop.
 - Compiles line and arc sequences into a new OpenDRIVE road world at runtime.
+- Textures generated roads with CARLA's asphalt material and populates them with
+  deterministic buildings, trees, pedestrians and background vehicles.
 - Captures synchronized RGB, logarithmic depth, semantic segmentation and LiDAR evidence.
 - Biases samples toward parameter boundaries instead of producing ordinary traffic.
 - Runs CARLA in synchronous fixed-step mode.
@@ -125,6 +127,22 @@ C-shaped and S-shaped roads to be composed without importing a map asset. The
 run directory retains the generated `.xodr` file and sensor folders named
 `frames`, `depth`, `semantic`, and `lidar`.
 
+Generated environments are realistic by default. Asset counts are part of the
+structured contract (`tree_count`, `building_count`, `pedestrian_count`, and
+`traffic_vehicle_count`) and can be extracted from descriptions such as:
+
+```bash
+PYTHONPATH=src /home/moresweet/carla/.venv/bin/python \
+  -m carla_safety_agent.cli from-text \
+  '生成真实环境双向4车道S弯，有20棵树、8栋建筑、6名行人、6辆背景车，前车急刹' \
+  --seed 27 --output runs/realistic/scenario.json
+```
+
+Apply `integration/carla/opendrive-road-material.patch` to the CARLA source and
+rebuild `CarlaUE4Editor` to preserve generated UV coordinates and bind the
+packaged asphalt material. Without this extension, dynamic OpenDRIVE roads use
+the default white procedural-mesh material.
+
 ## ROS2 and RViz visualization
 
 A standalone ROS2 package is provided in `ros2/carla_safety_visualization`. It
@@ -193,8 +211,8 @@ does not invent simulator measurements or overwrite oracle evidence.
 
 ## Research extension path
 
-The next layer should add map-relative spawn constraints instead of raw spawn
-indices, route-conflict geometry, sensor recording, OpenSCENARIO export, adaptive
+The next layer should add full junction route-conflict geometry, generated
+terrain and lane markings, OpenSCENARIO export, adaptive
 search (cross-entropy/Bayesian/CMA-ES), minimisation of discovered failures, and
 an ADS-under-test interface. Generated visual assets must remain separate from
 ground-truth collision, semantic and dynamics assets.

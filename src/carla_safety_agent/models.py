@@ -90,12 +90,20 @@ class GeneratedMapSpec:
     lane_width_m: float = 3.5
     lanes_each_direction: int = 2
     speed_limit_mps: float = 20.0
+    realistic_environment: bool = True
+    tree_count: int = 20
+    building_count: int = 8
+    pedestrian_count: int = 6
+    traffic_vehicle_count: int = 6
 
     def __post_init__(self) -> None:
         if not self.segments:
             raise ValueError("generated map requires at least one road segment")
         if self.lane_width_m <= 0 or self.lanes_each_direction < 1:
             raise ValueError("generated map lane geometry is invalid")
+        if min(self.tree_count, self.building_count, self.pedestrian_count,
+               self.traffic_vehicle_count) < 0:
+            raise ValueError("environment actor counts cannot be negative")
 
 
 @dataclass(frozen=True)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import math
+import random
 import time
 from pathlib import Path
 from typing import Any
@@ -79,12 +80,18 @@ class CarlaAdapter:
             spawn_points = world.get_map().get_spawn_points()
             ego = self._spawn(world, spec.ego, spawn_points)
             actors.append(ego)
-            adversaries = [self._spawn(world, a, spawn_points) for a in spec.adversaries]
-            actors.extend(adversaries)
             # Newly spawned physics actors report the origin through RPC until
             # their first world tick. Asset placement must use the initialized
             # vehicle pose, not that transient placeholder transform.
             world.tick()
+            adversaries = [
+                self._spawn_interaction_actor(carla, world, ego, a, spec.family, index)
+                for index, a in enumerate(spec.adversaries)
+            ]
+            actors.extend(adversaries)
+            if spec.generated_map and spec.generated_map.realistic_environment:
+                scenery = self._spawn_environment(carla, world, ego, spec)
+                actors.extend(scenery)
             generated_assets: list[Any] = []
             for asset_spec in spec.generated_assets:
                 spawned = self._spawn_generated_asset(carla, world, ego, asset_spec)
@@ -198,6 +205,143 @@ class CarlaAdapter:
             if actor_ids:
                 client.apply_batch([carla.command.DestroyActor(actor_id) for actor_id in actor_ids])
             world.apply_settings(original)
+
+    @staticmethod
+    def _spawn_interaction_actor(
+        carla: Any, world: Any, ego: Any, spec: ActorSpec, family: str, index: int
+    ) -> Any:
+        """Place NHTSA actors relative to ego and the lane geometry."""
+        library = world.get_blueprint_library()
+        matches = sorted(
+            (bp for bp in library if fnmatch.fnmatch(bp.id, spec.blueprint)),
+            key=lambda bp: bp.id,
+        )
+        if not matches:
+            raise RuntimeError(f"no blueprint matches {spec.blueprint}")
+        blueprint = matches[index % len(matches)]
+        waypoint = world.get_map().get_waypoint(ego.get_location(), project_to_road=True)
+        ahead = 24.0 if family != "vulnerable_road_user" else 30.0
+        candidates = waypoint.next(ahead)
+        if not candidates:
+            raise RuntimeError("road ended before NHTSA interaction placement")
+        transform = candidates[0].transform
+        if family in {"lead_vehicle_lane_change", "merge"}:
+            transform.location += transform.get_right_vector() * 3.5
+        elif family in {"vulnerable_road_user", "crossing_path"}:
+            transform.location += transform.get_right_vector() * 6.0
+            transform.rotation.yaw -= 90.0
+            transform.location.z += 0.3
+        actor = world.try_spawn_actor(blueprint, transform)
+        if actor is None:
+            raise RuntimeError(f"failed to spawn NHTSA actor for {family}")
+        if family in {"vulnerable_road_user", "crossing_path"} and actor.type_id.startswith("walker."):
+            actor.apply_control(carla.WalkerControl(
+                direction=transform.get_right_vector() * -1.0,
+                speed=spec.speed_mps,
+            ))
+        else:
+            actor.set_target_velocity(transform.get_forward_vector() * spec.speed_mps)
+        return actor
+
+    @classmethod
+    def _spawn_environment(
+        cls, carla: Any, world: Any, ego: Any, scenario: ScenarioSpec
+    ) -> list[Any]:
+        """Build a deterministic roadside scene from CARLA's packaged assets."""
+        config = scenario.generated_map
+        if config is None:
+            return []
+        rng = random.Random(scenario.seed)
+        origin = world.get_map().get_waypoint(ego.get_location(), project_to_road=True)
+        actors: list[Any] = []
+        tree_meshes = (
+            "/Game/Carla/Static/Vegetation/Trees/SM_TreePine_1.SM_TreePine_1",
+            "/Game/Carla/Static/Vegetation/Trees/SM_TreePine_2.SM_TreePine_2",
+            "/Game/Carla/Static/Vegetation/Trees/SM_TreePine_3.SM_TreePine_3",
+        )
+        building_meshes = (
+            "/Game/Carla/Static/Building/SM_TerracedHouse_1.SM_TerracedHouse_1",
+            "/Game/Carla/Static/Building/SM_Block05.SM_Block05",
+            "/Game/Carla/Static/Building/SM_Mansion02.SM_Mansion02",
+            "/Game/Carla/Static/Building/SM_farm_House_add.SM_farm_House_add",
+        )
+        for index in range(config.tree_count):
+            distance_ahead = 12.0 + index * 8.0
+            candidates = origin.next(distance_ahead)
+            if not candidates:
+                break
+            road = candidates[0].transform
+            side = -1.0 if index % 2 else 1.0
+            lateral = side * rng.uniform(11.0, 17.0)
+            transform = carla.Transform(
+                road.location + road.get_right_vector() * lateral,
+                carla.Rotation(yaw=road.rotation.yaw + rng.uniform(-25.0, 25.0)),
+            )
+            actor = cls._spawn_mesh_prop(world, tree_meshes[index % len(tree_meshes)], transform,
+                                         rng.uniform(0.75, 1.25))
+            if actor:
+                actors.append(actor)
+        for index in range(config.building_count):
+            candidates = origin.next(22.0 + index * 22.0)
+            if not candidates:
+                break
+            road = candidates[0].transform
+            side = -1.0 if index % 2 else 1.0
+            transform = carla.Transform(
+                road.location + road.get_right_vector() * side * rng.uniform(24.0, 32.0),
+                carla.Rotation(yaw=road.rotation.yaw + (180.0 if side < 0 else 0.0)),
+            )
+            actor = cls._spawn_mesh_prop(
+                world, building_meshes[index % len(building_meshes)], transform, 1.0
+            )
+            if actor:
+                actors.append(actor)
+        actors.extend(cls._spawn_background_road_users(carla, world, origin, config, rng))
+        return actors
+
+    @staticmethod
+    def _spawn_mesh_prop(world: Any, mesh_path: str, transform: Any, scale: float) -> Any | None:
+        blueprint = world.get_blueprint_library().find("static.prop.mesh")
+        blueprint.set_attribute("mesh_path", mesh_path)
+        blueprint.set_attribute("mass", "0")
+        blueprint.set_attribute("scale_x", str(scale))
+        blueprint.set_attribute("scale_y", str(scale))
+        blueprint.set_attribute("scale_z", str(scale))
+        return world.try_spawn_actor(blueprint, transform)
+
+    @staticmethod
+    def _spawn_background_road_users(
+        carla: Any, world: Any, origin: Any, config: Any, rng: random.Random
+    ) -> list[Any]:
+        library = world.get_blueprint_library()
+        vehicles = sorted(library.filter("vehicle.*"), key=lambda bp: bp.id)
+        walkers = sorted(library.filter("walker.pedestrian.*"), key=lambda bp: bp.id)
+        result: list[Any] = []
+        for index in range(config.traffic_vehicle_count):
+            candidates = origin.next(45.0 + index * 18.0)
+            if not candidates:
+                break
+            transform = candidates[0].transform
+            transform.location += transform.get_right_vector() * (3.5 if index % 2 else -3.5)
+            actor = world.try_spawn_actor(vehicles[(index + 3) % len(vehicles)], transform)
+            if actor:
+                actor.apply_control(carla.VehicleControl(hand_brake=True))
+                result.append(actor)
+        for index in range(config.pedestrian_count):
+            candidates = origin.next(20.0 + index * 17.0)
+            if not candidates:
+                break
+            road = candidates[0].transform
+            side = -1.0 if index % 2 else 1.0
+            transform = carla.Transform(
+                road.location + road.get_right_vector() * side * rng.uniform(7.0, 9.0)
+                + carla.Location(z=0.25),
+                carla.Rotation(yaw=road.rotation.yaw + (180.0 if side > 0 else 0.0)),
+            )
+            actor = world.try_spawn_actor(walkers[index % len(walkers)], transform)
+            if actor:
+                result.append(actor)
+        return result
 
     @staticmethod
     def _spawn_generated_asset(

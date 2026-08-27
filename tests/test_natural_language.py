@@ -4,6 +4,17 @@ from carla_safety_agent.natural_language import DescriptionError, NaturalLanguag
 
 
 class NaturalLanguageTests(unittest.TestCase):
+    def test_realistic_generated_environment_counts(self):
+        result = NaturalLanguageCompiler().compile(
+            "生成地图真实环境，有12棵树、4栋建筑、3名行人、5辆背景车，前车急刹"
+        )
+        generated = result.scenario.generated_map
+        self.assertIsNotNone(generated)
+        self.assertEqual(generated.tree_count, 12)
+        self.assertEqual(generated.building_count, 4)
+        self.assertEqual(generated.pedestrian_count, 3)
+        self.assertEqual(generated.traffic_vehicle_count, 5)
+
     def test_chinese_rear_end_with_units(self):
         result = NaturalLanguageCompiler().compile(
             "在 Town04 大雨夜间，自车以 72 km/h 跟随前车，前车以 36 km/h 行驶并突然急刹"

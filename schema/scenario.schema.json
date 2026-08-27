@@ -41,6 +41,11 @@
         "lane_width_m": {"type": "number", "exclusiveMinimum": 0},
         "lanes_each_direction": {"type": "integer", "minimum": 1},
         "speed_limit_mps": {"type": "number", "exclusiveMinimum": 0}
+        ,"realistic_environment": {"type": "boolean"}
+        ,"tree_count": {"type": "integer", "minimum": 0}
+        ,"building_count": {"type": "integer", "minimum": 0}
+        ,"pedestrian_count": {"type": "integer", "minimum": 0}
+        ,"traffic_vehicle_count": {"type": "integer", "minimum": 0}
       }
     },
     "generated_asset": {

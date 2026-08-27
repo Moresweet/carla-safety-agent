@@ -188,6 +188,12 @@ positioned decals, tiled graphics and full-atlas coverage, then exports both a
 PNG and `vehicle-appearance.json` placement contract. In decal mode the image
 can be dragged directly on the atlas and resized with the mouse wheel.
 
+The editor loads 9,266 body triangles exported from
+`SM_TeslaM3_v2`, material slot 5, UV channel 0. A color-coded UV wireframe is
+displayed separately from the exported texture, and the same mesh drives an
+orbitable WebGL preview that updates with the atlas. The wireframe overlay is a
+guide only and is never baked into the livery sent to CARLA.
+
 ```bash
 cd tools/livery-designer
 pnpm run dev
@@ -198,6 +204,10 @@ Start the local bridge in a second terminal with CARLA's Python module available
 ```bash
 PYTHONPATH=/path/to/carla/python/site-packages python3 tools/livery_bridge.py
 ```
+
+To regenerate the web mesh after replacing the CARLA vehicle asset, first run
+`integration/carla/export_tesla_uv_mesh.py` with UE4Editor-Cmd, then compile and
+run `tools/fbx_mesh_to_json.cpp` against Unreal's bundled FBX SDK.
 
 Install the dedicated full-color Tesla material once, before starting CARLA:
 

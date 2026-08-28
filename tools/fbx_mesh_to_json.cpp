@@ -31,15 +31,22 @@ int main(int argc, char **argv) {
   importer->Destroy();
 
   std::vector<Vertex> vertices;
-  FbxStringList uv_sets;
   std::vector<FbxNode *> stack{scene->GetRootNode()};
   while (!stack.empty()) {
     FbxNode *node = stack.back(); stack.pop_back();
     for (int i = 0; i < node->GetChildCount(); ++i) stack.push_back(node->GetChild(i));
     FbxMesh *mesh = node->GetMesh();
     if (!mesh) continue;
+    const std::string node_name = node->GetName();
+    if (node_name.find("_LOD0") == std::string::npos) continue;
+    FbxStringList uv_sets;
     mesh->GetUVSetNames(uv_sets);
     if (uv_sets.GetCount() == 0) continue;
+    std::cerr << "mesh=" << node->GetName() << " polygons="
+              << mesh->GetPolygonCount() << " uv_sets=";
+    for (int set = 0; set < uv_sets.GetCount(); ++set)
+      std::cerr << (set ? "," : "") << uv_sets[set];
+    std::cerr << '\n';
     const char *uv_set = uv_sets[0];
     FbxLayerElementMaterial *materials = mesh->GetElementMaterial();
     for (int polygon = 0; polygon < mesh->GetPolygonCount(); ++polygon) {

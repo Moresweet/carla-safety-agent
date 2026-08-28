@@ -43,9 +43,10 @@ def packed_uv(horizontal, vertical, offset, y):
     append = make(unreal.MaterialExpressionAppendVector, -120, y); wire(shifted, '', append, 'A'); wire(vertical, '', append, 'B')
     return append
 
-top_uv = packed_uv(ny, one_x, 0, -350)
+one_y = make(unreal.MaterialExpressionOneMinus, -700, -140); wire(ny, '', one_y, '')
+top_uv = packed_uv(nx, one_y, 0, -350)
 left_uv = packed_uv(nx, one_z, 1, -100)
-right_uv = packed_uv(one_x, one_z, 2, 150)
+right_uv = packed_uv(nx, one_z, 2, 150)
 side_choice = make(unreal.MaterialExpressionIf, 100, 50); side_choice.set_editor_property('const_b', 0.5)
 wire(ny, '', side_choice, 'A'); wire(right_uv, '', side_choice, 'A > B'); wire(left_uv, '', side_choice, 'A < B')
 

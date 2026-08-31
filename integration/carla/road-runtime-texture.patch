@@ -1,0 +1,17 @@
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
+@@ -347,6 +347,13 @@ void ACarlaGameModeBase::ApplyTextureToActor(
+     for (int i = 0; i < Mesh->GetNumMaterials(); ++i)
+     {
+       UMaterialInterface* OriginalMaterial = Mesh->GetMaterial(i);
++      if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
++          Actor->GetName().StartsWith(TEXT("Road_Road_")))
++      {
++        OriginalMaterial = LoadObject<UMaterialInterface>(nullptr,
++            TEXT("/Game/Carla/Static/GenericMaterials/RoadPainterMaterials/"
++                 "M_CarlaRoadRuntime.M_CarlaRoadRuntime"));
++      }
+       if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
+           Mesh->IsA<USkeletalMeshComponent>() &&
+           i != 5)

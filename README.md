@@ -211,6 +211,13 @@ Start the local bridge in a second terminal with CARLA's Python module available
 PYTHONPATH=/path/to/carla/python/site-packages python3 tools/livery_bridge.py
 ```
 
+The Surface Studio also includes a **Road** workspace. It tiles an uploaded
+image into a 1024x1024 diffuse texture and applies it to every `Road_Road_*`
+mesh in the loaded town while preserving separate lane-marking, curb,
+crosswalk, sidewalk, and grass objects. This requires the runtime road material
+and CARLA source extension documented in
+`integration/ENVIRONMENT_CHANGES.md`.
+
 To regenerate the web mesh after replacing the CARLA vehicle asset, first run
 `integration/carla/export_tesla_uv_mesh.py` with UE4Editor-Cmd, then compile and
 run `tools/fbx_mesh_to_json.cpp` against Unreal's bundled FBX SDK.

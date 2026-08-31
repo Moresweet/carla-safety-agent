@@ -6,7 +6,7 @@ from pathlib import Path
 
 CHECKS = {
     "Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp": (
-        'M_CarlaRoadRuntime.M_CarlaRoadRuntime'),
+        'M_CarlaBuildingRuntime.M_CarlaBuildingRuntime'),
     "Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Actor/StaticMeshFactory.cpp": (
         'TEXT("scale_x")'),
     "Unreal/CarlaUE4/Plugins/Carla/Source/Carla/OpenDrive/OpenDriveGenerator.cpp": (
@@ -18,6 +18,7 @@ ASSETS = (
     "Unreal/CarlaUE4/Content/Carla/Static/Car/4Wheeled/Tesla/Materials/MI_CarExterior_TeslaM3.uasset",
     "Unreal/CarlaUE4/Content/Carla/Static/Car/4Wheeled/Tesla/SM_TeslaM3_v2.uasset",
     "Unreal/CarlaUE4/Content/Carla/Static/GenericMaterials/RoadPainterMaterials/M_CarlaRoadRuntime.uasset",
+    "Unreal/CarlaUE4/Content/Carla/Static/Building/Materials/M_CarlaBuildingRuntime.uasset",
 )
 
 

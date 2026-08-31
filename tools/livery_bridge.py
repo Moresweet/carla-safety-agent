@@ -71,6 +71,20 @@ def apply_road_texture(payload: bytes, scope: str) -> dict:
             "resolution": [image.width, image.height]}
 
 
+def apply_building_texture(payload: bytes, target: str) -> dict:
+    image, texture = decode_texture(payload, (1024, 1024))
+    world = connect_world()
+    building_names = set(world.get_names_of_all_objects())
+    if target not in building_names:
+        raise RuntimeError(f"Building target is not present: {target}")
+    if not target.startswith("BP_House16"):
+        raise RuntimeError("Only the verified BP_House16 wall target is supported")
+    world.apply_color_texture_to_object(
+        target, carla.MaterialParameter.Diffuse, texture)
+    return {"ok": True, "kind": "building", "object_name": target,
+            "material_slot": 0, "resolution": [image.width, image.height]}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _headers(self, status=200):
         self.send_response(status)
@@ -98,7 +112,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         request = urlparse(self.path)
-        if request.path not in ("/apply", "/apply/road"):
+        if request.path not in ("/apply", "/apply/road", "/apply/building"):
             self._headers(404)
             self.wfile.write(b'{"ok":false,"error":"not found"}')
             return
@@ -108,6 +122,9 @@ class Handler(BaseHTTPRequestHandler):
             if request.path == "/apply/road":
                 scope = parse_qs(request.query).get("scope", ["all"])[0]
                 result = apply_road_texture(payload, scope)
+            elif request.path == "/apply/building":
+                target = parse_qs(request.query).get("target", ["BP_House16"])[0]
+                result = apply_building_texture(payload, target)
             else:
                 result = apply_livery(payload)
             self._headers()

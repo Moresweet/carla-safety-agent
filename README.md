@@ -218,6 +218,12 @@ crosswalk, sidewalk, and grass objects. This requires the runtime road material
 and CARLA source extension documented in
 `integration/ENVIRONMENT_CHANGES.md`.
 
+The **Building** workspace provides the same live workflow for the verified
+Town04 `BP_House16` asset. It tiles, scales, offsets, and rotates an uploaded
+image on wall material slot 0 while preserving the independent window, roof,
+and balcony slots. The target is deliberately allow-listed until each additional
+building blueprint has been inspected and assigned a verified wall slot.
+
 To regenerate the web mesh after replacing the CARLA vehicle asset, first run
 `integration/carla/export_tesla_uv_mesh.py` with UE4Editor-Cmd, then compile and
 run `tools/fbx_mesh_to_json.cpp` against Unreal's bundled FBX SDK.

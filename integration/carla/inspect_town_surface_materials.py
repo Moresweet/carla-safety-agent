@@ -20,5 +20,5 @@ for actor in unreal.EditorLevelLibrary.get_all_level_actors():
             continue
         seen.add(signature)
         counts[kind] += 1
-        unreal.log_warning("SURFACE_MATERIAL {} {} {}".format(
-            kind, label, " | ".join(materials)))
+        unreal.log_warning("SURFACE_MATERIAL {} {} {} {}".format(
+            kind, label, actor.get_actor_location(), " | ".join(materials)))

@@ -28,6 +28,9 @@ HIGHLIGHT_COLORS = {
 _hero_lock = threading.Event()
 _map_cache = {}
 _environment_cache = {}
+_actor_object_names = {}
+_thumbnail_cache = {}
+_thumbnail_lock = threading.Lock()
 ENVIRONMENT_CATEGORIES = {
     "buildings": (carla.CityObjectLabel.Buildings, "architecture", "building"),
     "bridges": (carla.CityObjectLabel.Bridge, "architecture", "building"),
@@ -218,13 +221,22 @@ def spawn_object(blueprint_id: str, transform_data: dict) -> dict:
             lane_type=carla.LaneType.Driving | carla.LaneType.Sidewalk)
         if waypoint:
             spawn_location.z = waypoint.transform.location.z + (
+                3.0 if blueprint_id.startswith("vehicle.") else
                 1.0 if blueprint_id.startswith("walker.") else 0.5)
     transform = carla.Transform(
         spawn_location,
         carla.Rotation(pitch=float(rotation.get("pitch", 0)),
                        yaw=float(rotation.get("yaw", 0)),
                        roll=float(rotation.get("roll", 0))))
+    if (blueprint_id.startswith("vehicle.") and blueprint.has_attribute("role_name")
+            and not hero_actor(world)):
+        blueprint.set_attribute("role_name", "hero")
+    before = set(world.get_names_of_all_objects())
     actor = world.spawn_actor(blueprint, transform)
+    after = set(world.get_names_of_all_objects())
+    created_names = sorted(after-before)
+    if created_names:
+        _actor_object_names[actor.id] = created_names[-1]
     return {"ok": True, "object": actor_record(actor)}
 
 
@@ -265,6 +277,7 @@ def delete_actor(actor_id: int) -> dict:
         raise RuntimeError(f"Actor {actor_id} is not running")
     type_id = actor.type_id
     actor.destroy()
+    _actor_object_names.pop(actor_id, None)
     return {"ok": True, "actor_id": actor_id, "type_id": type_id}
 
 
@@ -276,6 +289,83 @@ def spawnable_blueprints(query: str, limit: int) -> dict:
     if query:
         ids = [item for item in ids if query.casefold() in item.casefold()]
     return {"ok": True, "total": len(ids), "blueprints": ids[:limit]}
+
+
+def blueprint_thumbnail(blueprint_id: str) -> bytes:
+    if blueprint_id in _thumbnail_cache:
+        return _thumbnail_cache[blueprint_id]
+    if not blueprint_id.startswith(("vehicle.", "walker.", "static.prop.")):
+        raise RuntimeError("Unsupported thumbnail blueprint")
+    with _thumbnail_lock:
+        if blueprint_id in _thumbnail_cache:
+            return _thumbnail_cache[blueprint_id]
+        world = connect_world()
+        library = world.get_blueprint_library()
+        actor = sensor = None
+        try:
+            actor = world.try_spawn_actor(
+                library.find(blueprint_id),
+                carla.Transform(carla.Location(x=0, y=0, z=800), carla.Rotation(yaw=25)))
+            if not actor:
+                raise RuntimeError(f"Could not stage {blueprint_id} for preview")
+            try:
+                actor.set_simulate_physics(False)
+            except RuntimeError:
+                pass
+            extent = actor.bounding_box.extent
+            radius = max(1.2, extent.x, extent.y, extent.z)
+            center = carla.Location(actor.bounding_box.location.x,
+                                    actor.bounding_box.location.y,
+                                    actor.bounding_box.location.z)
+            actor.get_transform().transform(center)
+            camera_bp = library.find("sensor.camera.rgb")
+            camera_bp.set_attribute("image_size_x", "480")
+            camera_bp.set_attribute("image_size_y", "270")
+            camera_bp.set_attribute("fov", "48")
+            camera = center + carla.Location(x=-radius*3.0, y=-radius*3.0,
+                                              z=max(radius*1.4, extent.z*0.9))
+            sensor = world.spawn_actor(
+                camera_bp, carla.Transform(camera, look_at(camera, center)))
+            captured = threading.Event()
+            frames = []
+            def receive(frame):
+                if frames:
+                    return
+                rgba = Image.frombuffer("RGBA", (frame.width, frame.height),
+                                        bytes(frame.raw_data), "raw", "BGRA")
+                stream = io.BytesIO()
+                rgba.convert("RGB").save(stream, "PNG", optimize=True)
+                frames.append(stream.getvalue())
+                captured.set()
+            sensor.listen(receive)
+            if not captured.wait(8.0):
+                raise RuntimeError(f"Timed out rendering {blueprint_id}")
+            _thumbnail_cache[blueprint_id] = frames[0]
+            return frames[0]
+        finally:
+            if sensor:
+                sensor.stop()
+                sensor.destroy()
+            if actor:
+                actor.destroy()
+
+
+def runtime_name_for_actor(world, actor):
+    mapped = _actor_object_names.get(actor.id)
+    names = set(world.get_names_of_all_objects())
+    if mapped in names:
+        return mapped
+    if actor.type_id == "vehicle.tesla.model3":
+        matches = sorted(name for name in names if name.startswith("BP_TeslaM3_C_"))
+        if matches:
+            return matches[-1]
+    if actor.type_id == "walker.pedestrian.0001":
+        matches = sorted(name for name in names if name.startswith("BP_Walker_Female1_v1_C_"))
+        if matches:
+            return matches[-1]
+    raise RuntimeError(
+        f"Runtime mesh identity is unavailable for actor {actor.id} ({actor.type_id}); "
+        "respawn it from Create Objects to register the mapping")
 
 
 def scene_state() -> dict:
@@ -400,25 +490,20 @@ def hero_follow_loop():
         time.sleep(0.1)
 
 
-def apply_livery(payload: bytes) -> dict:
+def apply_livery(payload: bytes, actor_id: int | None = None) -> dict:
     image, texture = decode_texture(payload, (2048, 2048))
 
     world = connect_world()
-    heroes = [actor for actor in world.get_actors().filter("vehicle.*")
-              if actor.attributes.get("role_name") == "hero"]
-    if not heroes:
-        raise RuntimeError("No vehicle with role_name=hero is running")
-
-    hero = heroes[0]
-    actor_names = world.get_names_of_all_objects()
-    tesla_names = [name for name in actor_names if name.startswith("BP_TeslaM3_C_")]
-    if hero.type_id != "vehicle.tesla.model3" or not tesla_names:
-        raise RuntimeError("The active hero is not a Tesla Model 3")
-
-    target = tesla_names[-1]
+    actor = world.get_actor(actor_id) if actor_id else hero_actor(world)
+    if not actor:
+        raise RuntimeError("Select a running vehicle before applying a texture")
+    if not actor.type_id.startswith("vehicle."):
+        raise RuntimeError(f"Actor {actor.id} is not a vehicle")
+    target = runtime_name_for_actor(world, actor)
     world.apply_color_texture_to_object(
         target, carla.MaterialParameter.Diffuse, texture)
-    return {"ok": True, "actor_id": hero.id, "object_name": target,
+    return {"ok": True, "actor_id": actor.id, "type_id": actor.type_id,
+            "object_name": target,
             "resolution": [image.width, image.height]}
 
 
@@ -474,18 +559,22 @@ def apply_environment_texture(payload: bytes, object_id: int) -> dict:
             "object_name": target, "resolution": [image.width, image.height]}
 
 
-def apply_pedestrian_texture(payload: bytes) -> dict:
+def apply_pedestrian_texture(payload: bytes, actor_id: int | None = None) -> dict:
     image, texture = decode_texture(payload, (1024, 1024))
     world = connect_world()
-    walkers = list(world.get_actors().filter("walker.pedestrian.0001"))
-    names = sorted(name for name in world.get_names_of_all_objects()
-                   if name.startswith("BP_Walker_Female1_v1_C_"))
-    if not walkers or not names:
-        raise RuntimeError("No walker.pedestrian.0001 is running")
-    target = names[-1]
+    actor = world.get_actor(actor_id) if actor_id else None
+    if not actor:
+        walkers = list(world.get_actors().filter("walker.pedestrian.0001"))
+        actor = walkers[-1] if walkers else None
+    if not actor:
+        raise RuntimeError("Select a running pedestrian before applying clothing")
+    if actor.type_id != "walker.pedestrian.0001":
+        raise RuntimeError(
+            f"{actor.type_id} has no verified clothing slot; use walker.pedestrian.0001")
+    target = runtime_name_for_actor(world, actor)
     world.apply_color_texture_to_object(
         target, carla.MaterialParameter.Diffuse, texture)
-    return {"ok": True, "kind": "pedestrian", "actor_id": walkers[-1].id,
+    return {"ok": True, "kind": "pedestrian", "actor_id": actor.id,
             "object_name": target, "material_slots": [14],
             "resolution": [image.width, image.height]}
 
@@ -504,8 +593,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         request = urlparse(self.path)
-        self._headers()
         params = parse_qs(request.query)
+        if request.path == "/catalog/thumbnail":
+            try:
+                payload = blueprint_thumbnail(params.get("blueprint", [""])[0])
+                self.send_response(200)
+                self.send_header("Access-Control-Allow-Origin", FRONTEND_ORIGIN)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            except Exception as exc:
+                self._headers(500)
+                self.wfile.write(json.dumps({"ok": False, "error": str(exc)}).encode())
+            return
+        self._headers()
         if request.path == "/catalog/categories":
             self.wfile.write(json.dumps(catalog_categories()).encode())
         elif request.path == "/catalog/objects":
@@ -587,9 +690,12 @@ class Handler(BaseHTTPRequestHandler):
                 object_id = int(parse_qs(request.query)["object_id"][0])
                 result = apply_environment_texture(payload, object_id)
             elif request.path == "/apply/pedestrian":
-                result = apply_pedestrian_texture(payload)
+                actor_id = parse_qs(request.query).get("actor_id", [None])[0]
+                result = apply_pedestrian_texture(
+                    payload, int(actor_id) if actor_id else None)
             else:
-                result = apply_livery(payload)
+                actor_id = parse_qs(request.query).get("actor_id", [None])[0]
+                result = apply_livery(payload, int(actor_id) if actor_id else None)
             self._headers()
             self.wfile.write(json.dumps(result).encode())
         except Exception as exc:

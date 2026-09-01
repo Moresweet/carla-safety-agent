@@ -281,10 +281,15 @@ and `static.prop` blueprints are presented as searchable visual cards instead
 of sharing the object inspector. Dragging a card onto the live BEV converts the
 drop position to world coordinates, snaps it to the nearest valid road or
 sidewalk height, creates the actor, and focuses the CARLA spectator on it.
+Selecting a card requests a cached 480x270 RGB render from a temporary CARLA
+camera/actor staging rig, so trucks, motorcycles, walkers, and props are shown
+as their real blueprint rather than a shared category silhouette. The staging
+sensor and actor are destroyed after each uncached render.
 
 The **Edit texture** action routes a selected static catalog object directly to
-its Vehicle, Road, or Building workspace; there is no duplicate catalog
-workspace. Every non-vehicle editor pairs the 2D decal/tile canvas with an
+its Vehicles, Pedestrians, Road & Transport, Architecture, Terrain, Nature,
+Street Furniture, Traffic Control, or Props workspace; there is no duplicate
+catalog workspace. Every non-vehicle editor pairs the 2D decal/tile/stack canvas with an
 interactive 3D proxy-geometry projection preview. The proxy makes scale,
 rotation, tiling, and placement easier to inspect while clearly avoiding a
 claim that CARLA's original mesh was exported. At apply time the bridge resolves
@@ -292,9 +297,25 @@ the selected object's real CARLA runtime material target. Assets whose
 materials do not expose a runtime diffuse parameter are reported explicitly
 and left unchanged.
 
-Road, building, and pedestrian editors share local-decal and tiled-surface
-modes. An uploaded image can be dragged, scaled with the wheel or slider, and
-rotated before the composed 1024x1024 texture is sent to the verified target.
+Vehicle texture updates are actor-targeted. The first vehicle created in an
+empty world receives `role_name=hero`, but texture application no longer
+depends on that role: the bridge records the spawned CARLA actor-to-Unreal
+runtime-object mapping and applies to the selected actor ID. The Tesla Model 3
+retains its exported interactive mesh/UV preview. Other vehicle blueprints use
+their real CARLA camera render instead of incorrectly reusing the Tesla body;
+their 2D canvas is explicitly a runtime diffuse atlas because a browser mesh/UV
+has not been exported for those assets.
+
+Pedestrian clothing is likewise actor-targeted. The compiled integration has a
+verified runtime clothing material only for `walker.pedestrian.0001`, section
+14. Other walker blueprints are rejected with a compatibility error instead of
+reporting a false success.
+
+Vehicle, pedestrian, transport, architecture, terrain, nature, street
+furniture, traffic-control, and prop editors expose local-decal, tiled-surface,
+and stacked-decal modes where their runtime material supports replacement. An
+uploaded image can be dragged, scaled with the wheel or slider, and rotated
+before the composed texture is sent to the selected verified target.
 
 To regenerate the web mesh after replacing the CARLA vehicle asset, first run
 `integration/carla/export_tesla_uv_mesh.py` with UE4Editor-Cmd, then compile and

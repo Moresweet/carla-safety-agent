@@ -1,0 +1,18 @@
+"use client";
+import {useEffect,useMemo,useState} from "react";
+import BevMap,{SceneObject,SceneState} from "./BevMap";
+
+const bridge="http://127.0.0.1:8765";
+type Kind="all"|"vehicle"|"walker"|"prop";
+const names:{id:Kind;label:string}[]=[{id:"all",label:"All"},{id:"vehicle",label:"Vehicles"},{id:"walker",label:"Pedestrians"},{id:"prop",label:"Props"}];
+function kindOf(id:string):Exclude<Kind,"all">{return id.startsWith("vehicle.")?"vehicle":id.startsWith("walker.")?"walker":"prop"}
+function shortName(id:string){return id.split(".").slice(-2).join(" ").replaceAll("_"," ")}
+
+export default function CreateObjectPage({scene,onChanged,onPick}:{scene:SceneState|null;onChanged:()=>void;onPick:(o:SceneObject)=>void}){
+ const [blueprints,setBlueprints]=useState<string[]>([]),[kind,setKind]=useState<Kind>("all"),[query,setQuery]=useState(""),[selected,setSelected]=useState(""),[status,setStatus]=useState("Choose an asset, then drag it onto the map"),[creating,setCreating]=useState(false);
+ useEffect(()=>{fetch(`${bridge}/catalog/blueprints`).then(r=>r.json()).then(v=>{setBlueprints(v.blueprints);setSelected(v.blueprints[0]??"")}).catch(e=>setStatus(e.message))},[]);
+ const visible=useMemo(()=>blueprints.filter(id=>(kind==="all"||kindOf(id)===kind)&&id.toLowerCase().includes(query.toLowerCase())),[blueprints,kind,query]);
+ async function create(id:string,x:number,y:number){setCreating(true);setSelected(id);setStatus(`Creating ${id}…`);try{const r=await fetch(`${bridge}/objects/spawn`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({blueprint_id:id,transform:{location:{x,y,z:1},rotation:{yaw:0},snap_to_ground:true}})}),v=await r.json();if(!r.ok)throw new Error(v.error);setStatus(`Created ${id} · actor #${v.object.id}`);onChanged();await fetch(`${bridge}/focus/actor`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({actor_id:v.object.id})})}catch(e){setStatus(e instanceof Error?e.message:"Creation failed")}finally{setCreating(false)}}
+ const selectedKind=selected?kindOf(selected):"prop";
+ return <section className="create-page"><div className="create-head"><div><span className="eyebrow">ASSET LIBRARY</span><h2>Create Objects</h2><p>Preview an asset, then drag its card directly onto the live map.</p></div><div className={`asset-hero ${selectedKind}`}><div className="asset-silhouette"><i/><i/><i/></div><strong>{selected?shortName(selected):"Select an asset"}</strong><small>{selected}</small></div></div><div className="create-layout"><aside className="asset-browser"><div className="asset-tabs">{names.map(v=><button key={v.id} className={kind===v.id?"active":""} onClick={()=>setKind(v.id)}>{v.label}</button>)}</div><input placeholder="Search blueprints" value={query} onChange={e=>setQuery(e.target.value)}/><div className="asset-grid">{visible.map(id=>{const type=kindOf(id);return <button draggable key={id} className={`asset-card ${selected===id?"selected":""}`} onClick={()=>setSelected(id)} onDragStart={e=>{setSelected(id);e.dataTransfer.setData("application/x-carla-blueprint",id);e.dataTransfer.effectAllowed="copy"}}><div className={`asset-thumb ${type}`}><i/><i/><i/></div><b>{shortName(id)}</b><small>{type}</small></button>})}</div></aside><div className="create-map"><BevMap state={scene} selected="" onPick={onPick} onDropBlueprint={create}/><div className="drop-status"><i className={creating?"busy":""}/><span>{status}</span></div></div></div></section>
+}

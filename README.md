@@ -273,14 +273,24 @@ parked cars, and props. Dynamic vehicles, pedestrians, and spawned props are
 listed separately. Each category is searchable and paginated in groups of 50.
 
 Selecting an object focuses its real CARLA bounding box. Static map objects can
-be hidden and restored reversibly. Runtime actors can be created from the
-vehicle, walker, and `static.prop` blueprint catalog, moved, rotated,
+be hidden and restored reversibly. Runtime actors can be moved, rotated,
 duplicated, and deleted. Catalog mutations refresh both the list and live BEV.
-The **Edit this surface texture** action sends any static catalog object to the
-local-decal/tiled-surface editor and resolves its CARLA runtime material target
-when **Apply catalog surface texture** is pressed. Assets whose materials do
-not expose a runtime diffuse parameter are reported explicitly and left
-unchanged.
+
+Object creation has a separate **Create Objects** page. Vehicle, pedestrian,
+and `static.prop` blueprints are presented as searchable visual cards instead
+of sharing the object inspector. Dragging a card onto the live BEV converts the
+drop position to world coordinates, snaps it to the nearest valid road or
+sidewalk height, creates the actor, and focuses the CARLA spectator on it.
+
+The **Edit texture** action routes a selected static catalog object directly to
+its Vehicle, Road, or Building workspace; there is no duplicate catalog
+workspace. Every non-vehicle editor pairs the 2D decal/tile canvas with an
+interactive 3D proxy-geometry projection preview. The proxy makes scale,
+rotation, tiling, and placement easier to inspect while clearly avoiding a
+claim that CARLA's original mesh was exported. At apply time the bridge resolves
+the selected object's real CARLA runtime material target. Assets whose
+materials do not expose a runtime diffuse parameter are reported explicitly
+and left unchanged.
 
 Road, building, and pedestrian editors share local-decal and tiled-surface
 modes. An uploaded image can be dragged, scaled with the wheel or slider, and

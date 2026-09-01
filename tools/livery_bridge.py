@@ -209,9 +209,18 @@ def spawn_object(blueprint_id: str, transform_data: dict) -> dict:
         raise RuntimeError("Only vehicle, walker, and static.prop blueprints are spawnable")
     location = transform_data.get("location", {})
     rotation = transform_data.get("rotation", {})
+    spawn_location = carla.Location(x=float(location.get("x", 0)),
+                                    y=float(location.get("y", 0)),
+                                    z=float(location.get("z", 1)))
+    if transform_data.get("snap_to_ground"):
+        waypoint = world.get_map().get_waypoint(
+            spawn_location, project_to_road=True,
+            lane_type=carla.LaneType.Driving | carla.LaneType.Sidewalk)
+        if waypoint:
+            spawn_location.z = waypoint.transform.location.z + (
+                1.0 if blueprint_id.startswith("walker.") else 0.5)
     transform = carla.Transform(
-        carla.Location(x=float(location.get("x", 0)), y=float(location.get("y", 0)),
-                       z=float(location.get("z", 1))),
+        spawn_location,
         carla.Rotation(pitch=float(rotation.get("pitch", 0)),
                        yaw=float(rotation.get("yaw", 0)),
                        roll=float(rotation.get("roll", 0))))

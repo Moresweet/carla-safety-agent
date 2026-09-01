@@ -1,8 +1,4 @@
 "use client";
-import {RefObject,useEffect,useRef,useState} from "react";
-
-export default function PedestrianClothingEditor({image,output,onRender}:{image:HTMLImageElement|null;output:RefObject<HTMLCanvasElement|null>;onRender:()=>void}){
- const preview=useRef<HTMLCanvasElement>(null),[repeatX,setRepeatX]=useState(2),[repeatY,setRepeatY]=useState(2),[rotation,setRotation]=useState(0);
- useEffect(()=>{const visible=preview.current,out=output.current;if(!visible||!out)return;const render=(ctx:CanvasRenderingContext2D,size:number)=>{ctx.clearRect(0,0,size,size);ctx.fillStyle="#536273";ctx.fillRect(0,0,size,size);if(!image)return;const tw=size/repeatX,th=size/repeatY;ctx.save();ctx.translate(size/2,size/2);ctx.rotate(rotation*Math.PI/180);for(let y=-size*1.5;y<size*1.5;y+=th)for(let x=-size*1.5;x<size*1.5;x+=tw)ctx.drawImage(image,x,y,tw,th);ctx.restore()};render(visible.getContext("2d")!,visible.width);render(out.getContext("2d")!,out.width);onRender()},[image,output,onRender,repeatX,repeatY,rotation]);
- return <div className="projection building-editor"><div className="viewtabs"><button className="active">clothing UV texture</button></div><canvas ref={preview} width="1024" height="1024"/><div className="projection-controls"><label>Horizontal repeat <input type="range" min="1" max="12" value={repeatX} onChange={e=>setRepeatX(+e.target.value)}/></label><label>Vertical repeat <input type="range" min="1" max="12" value={repeatY} onChange={e=>setRepeatY(+e.target.value)}/></label><label>Rotation <input type="range" min="-180" max="180" value={rotation} onChange={e=>setRotation(+e.target.value)}/></label></div><small>walker.pedestrian.0001 · verified garment sections only · skin, hair and eyes preserved.</small></div>
-}
+import {RefObject} from "react";
+import SurfaceTextureEditor from "./SurfaceTextureEditor";
+export default function PedestrianClothingEditor(props:{image:HTMLImageElement|null;output:RefObject<HTMLCanvasElement|null>;onRender:()=>void}){return <SurfaceTextureEditor {...props} label="walker.pedestrian.0001 clothing slot 14" note="Skin, hair and eyes remain independent." baseColor="#536273"/>}

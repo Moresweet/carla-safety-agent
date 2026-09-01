@@ -1,7 +1,4 @@
 "use client";
-import {RefObject,useEffect,useRef,useState} from "react";
-export default function BuildingSurfaceEditor({image,output,onRender}:{image:HTMLImageElement|null;output:RefObject<HTMLCanvasElement|null>;onRender:()=>void}){
- const preview=useRef<HTMLCanvasElement>(null),[repeatX,setRepeatX]=useState(3),[repeatY,setRepeatY]=useState(3),[rotation,setRotation]=useState(0);
- useEffect(()=>{const visible=preview.current,out=output.current;if(!visible||!out)return;const render=(ctx:CanvasRenderingContext2D,size:number)=>{ctx.clearRect(0,0,size,size);ctx.fillStyle="#c7b9a6";ctx.fillRect(0,0,size,size);if(!image)return;const tw=size/repeatX,th=size/repeatY;ctx.save();ctx.translate(size/2,size/2);ctx.rotate(rotation*Math.PI/180);for(let y=-size*1.5;y<size*1.5;y+=th)for(let x=-size*1.5;x<size*1.5;x+=tw)ctx.drawImage(image,x,y,tw,th);ctx.restore()};render(visible.getContext("2d")!,visible.width);render(out.getContext("2d")!,out.width);onRender()},[image,output,onRender,repeatX,repeatY,rotation]);
- return <div className="projection building-editor"><div className="viewtabs"><button className="active">wall material</button></div><canvas ref={preview} width="1024" height="1024"/><div className="projection-controls"><label>Horizontal repeat <input type="range" min="1" max="12" value={repeatX} onChange={e=>setRepeatX(+e.target.value)}/></label><label>Vertical repeat <input type="range" min="1" max="12" value={repeatY} onChange={e=>setRepeatY(+e.target.value)}/></label><label>Rotation <input type="range" min="-180" max="180" value={rotation} onChange={e=>setRotation(+e.target.value)}/></label></div><small>BP_House16 · wall slot 0 only · windows, roof and balcony preserved.</small></div>
-}
+import {RefObject} from "react";
+import SurfaceTextureEditor from "./SurfaceTextureEditor";
+export default function BuildingSurfaceEditor(props:{image:HTMLImageElement|null;output:RefObject<HTMLCanvasElement|null>;onRender:()=>void}){return <SurfaceTextureEditor {...props} label="BP_House16 wall slot 0" note="Windows, roof and balcony remain independent." baseColor="#c7b9a6"/>}

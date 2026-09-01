@@ -250,6 +250,25 @@ The runtime material is compiled with skeletal-mesh usage enabled. Additional
 garment sections require an atomic multi-section update to avoid repeated
 render-proxy reconstruction in CARLA 0.9.15/UE 4.26.
 
+## Scene control and BEV
+
+Surface Studio polls the running CARLA world and fills the target selector with
+real vehicles and walkers plus the verified road and building surfaces.
+Selecting a target or pressing **Focus & highlight** moves the spectator once
+and draws an eight-second category-colored bounding box: vehicles are blue,
+walkers yellow, buildings purple, and road targets red.
+
+The live BEV uses sampled CARLA waypoints rather than a static image. It shows
+dynamic actors, the verified surface targets, the hero marker, and the current
+spectator direction. Clicking the map moves the CARLA spectator to a top-down
+view at that world coordinate; clicking a marker focuses and highlights it.
+**Lock hero camera** continuously follows the single `role_name=hero` vehicle
+from a chase-camera pose until released or another focus action is requested.
+
+Road, building, and pedestrian editors share local-decal and tiled-surface
+modes. An uploaded image can be dragged, scaled with the wheel or slider, and
+rotated before the composed 1024x1024 texture is sent to the verified target.
+
 To regenerate the web mesh after replacing the CARLA vehicle asset, first run
 `integration/carla/export_tesla_uv_mesh.py` with UE4Editor-Cmd, then compile and
 run `tools/fbx_mesh_to_json.cpp` against Unreal's bundled FBX SDK.

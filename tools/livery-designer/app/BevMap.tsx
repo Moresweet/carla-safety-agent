@@ -1,0 +1,11 @@
+"use client";
+type V={x:number;y:number;z:number};
+export type SceneObject={key:string;id?:number;kind:"vehicle"|"walker"|"building"|"road";name:string;label:string;location:V;extent:V;hero?:boolean};
+export type SceneState={map:string;bounds:{min_x:number;max_x:number;min_y:number;max_y:number};road_points:V[];objects:SceneObject[];static_targets:SceneObject[];spectator:{location:V;rotation:{yaw:number;pitch:number}};hero_id:number|null;hero_lock:boolean};
+const colors={vehicle:"#00aaff",walker:"#ffc800",building:"#be50ff",road:"#ff4646"};
+export default function BevMap({state,selected,onPick}:{state:SceneState|null;selected:string;onPick:(object:SceneObject)=>void}){
+ if(!state)return <div className="bev"><span>Waiting for CARLA map…</span></div>;
+ const b=state.bounds,w=Math.max(1,b.max_x-b.min_x),h=Math.max(1,b.max_y-b.min_y),xy=(v:V)=>({x:(v.x-b.min_x)/w*1000,y:(b.max_y-v.y)/h*700});
+ const objects=[...state.static_targets,...state.objects],spectator=xy(state.spectator.location);
+ return <div className="bev"><div className="previewbar"><b>LIVE BEV · {state.map.split("/").pop()}</b><span>Click an object or empty map position</span></div><svg viewBox="0 0 1000 700" onClick={e=>{const svg=e.currentTarget,r=svg.getBoundingClientRect(),x=(e.clientX-r.left)/r.width*1000,y=(e.clientY-r.top)/r.height*700;fetch("http://127.0.0.1:8765/focus/bev",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({x:b.min_x+x/1000*w,y:b.max_y-y/700*h})})}}>{state.road_points.map((p,i)=>{const q=xy(p);return <circle key={i} cx={q.x} cy={q.y} r="2.2" className="bev-road"/>})}{objects.map(o=>{const q=xy(o.location);return <g key={o.key} className={selected===o.key?"selected":""} onClick={e=>{e.stopPropagation();onPick(o)}}><circle cx={q.x} cy={q.y} r={o.kind==="building"?12:o.kind==="road"?9:7} fill={colors[o.kind]}/>{o.hero&&<circle cx={q.x} cy={q.y} r="13" className="hero-ring"/>}</g>})}<g transform={`translate(${spectator.x} ${spectator.y}) rotate(${state.spectator.rotation.yaw})`}><path d="M 16 0 L -10 -9 L -6 0 L -10 9 Z" className="bev-camera"/></g></svg><div className="bev-legend">{Object.entries(colors).map(([k,v])=><span key={k}><i style={{background:v}}/>{k}</span>)}</div></div>
+}

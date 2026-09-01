@@ -265,6 +265,23 @@ view at that world coordinate; clicking a marker focuses and highlights it.
 **Lock hero camera** continuously follows the single `role_name=hero` vehicle
 from a chase-camera pose until released or another focus action is requested.
 
+The **Scene Object Manager** enumerates the complete loaded-town catalog rather
+than one representative per type. Static environment objects are grouped into
+architecture (buildings, bridges, walls, fences), transport surfaces (roads,
+road lines, sidewalks), terrain, nature, street furniture, traffic controls,
+parked cars, and props. Dynamic vehicles, pedestrians, and spawned props are
+listed separately. Each category is searchable and paginated in groups of 50.
+
+Selecting an object focuses its real CARLA bounding box. Static map objects can
+be hidden and restored reversibly. Runtime actors can be created from the
+vehicle, walker, and `static.prop` blueprint catalog, moved, rotated,
+duplicated, and deleted. Catalog mutations refresh both the list and live BEV.
+The **Edit this surface texture** action sends any static catalog object to the
+local-decal/tiled-surface editor and resolves its CARLA runtime material target
+when **Apply catalog surface texture** is pressed. Assets whose materials do
+not expose a runtime diffuse parameter are reported explicitly and left
+unchanged.
+
 Road, building, and pedestrian editors share local-decal and tiled-surface
 modes. An uploaded image can be dragged, scaled with the wheel or slider, and
 rotated before the composed 1024x1024 texture is sent to the verified target.

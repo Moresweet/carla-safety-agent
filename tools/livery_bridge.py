@@ -23,9 +23,31 @@ HIGHLIGHT_COLORS = {
     "walker": carla.Color(255, 200, 0),
     "building": carla.Color(190, 80, 255),
     "road": carla.Color(255, 70, 70),
+    "prop": carla.Color(60, 220, 120),
 }
 _hero_lock = threading.Event()
 _map_cache = {}
+_environment_cache = {}
+ENVIRONMENT_CATEGORIES = {
+    "buildings": (carla.CityObjectLabel.Buildings, "architecture", "building"),
+    "bridges": (carla.CityObjectLabel.Bridge, "architecture", "building"),
+    "walls": (carla.CityObjectLabel.Walls, "architecture", "building"),
+    "fences": (carla.CityObjectLabel.Fences, "architecture", "building"),
+    "roads": (carla.CityObjectLabel.Roads, "transport", "road"),
+    "road_lines": (carla.CityObjectLabel.RoadLines, "transport", "road"),
+    "sidewalks": (carla.CityObjectLabel.Sidewalks, "transport", "road"),
+    "ground": (carla.CityObjectLabel.Ground, "terrain", "road"),
+    "terrain": (carla.CityObjectLabel.Terrain, "terrain", "road"),
+    "vegetation": (carla.CityObjectLabel.Vegetation, "nature", "building"),
+    "water": (carla.CityObjectLabel.Water, "nature", "road"),
+    "poles": (carla.CityObjectLabel.Poles, "street_furniture", "building"),
+    "guard_rails": (carla.CityObjectLabel.GuardRail, "street_furniture", "building"),
+    "traffic_signs": (carla.CityObjectLabel.TrafficSigns, "traffic_control", "building"),
+    "traffic_lights": (carla.CityObjectLabel.TrafficLight, "traffic_control", "building"),
+    "parked_cars": (carla.CityObjectLabel.Car, "vehicles", "vehicle"),
+    "dynamic_props": (carla.CityObjectLabel.Dynamic, "props", "building"),
+    "static_props": (carla.CityObjectLabel.Static, "props", "building"),
+}
 
 
 def decode_texture(payload: bytes, size: tuple[int, int]) -> tuple[Image.Image, carla.TextureColor]:
@@ -73,13 +95,178 @@ def focus_location(world, location, distance=12.0, height=6.0):
 
 
 def actor_record(actor) -> dict:
-    kind = "walker" if actor.type_id.startswith("walker.") else "vehicle"
+    kind = ("walker" if actor.type_id.startswith("walker.") else
+            "prop" if actor.type_id.startswith("static.prop.") else "vehicle")
     extent = actor.bounding_box.extent
     return {"key": f"actor:{actor.id}", "id": actor.id, "kind": kind,
             "name": actor.type_id, "label": f"{actor.type_id} · #{actor.id}",
             "location": vector(actor.get_location()),
             "extent": vector(extent),
             "hero": actor.attributes.get("role_name") == "hero"}
+
+
+def environment_objects(world, category: str):
+    if category not in ENVIRONMENT_CATEGORIES:
+        raise RuntimeError(f"Unknown environment category: {category}")
+    map_name = world.get_map().name
+    key = (map_name, category)
+    if key not in _environment_cache:
+        label = ENVIRONMENT_CATEGORIES[category][0]
+        _environment_cache[key] = list(world.get_environment_objects(label))
+    return _environment_cache[key]
+
+
+def environment_record(obj, category: str) -> dict:
+    _, group, coarse = ENVIRONMENT_CATEGORIES[category]
+    box = obj.bounding_box
+    location = box.location
+    return {"key": f"environment:{obj.id}", "id": str(obj.id),
+            "source": "environment", "category": category, "group": group,
+            "kind": coarse, "name": obj.name,
+            "label": f"{obj.name} · {str(obj.id)[-6:]}",
+            "location": vector(location), "extent": vector(box.extent),
+            "rotation": {"pitch": obj.transform.rotation.pitch,
+                         "yaw": obj.transform.rotation.yaw,
+                         "roll": obj.transform.rotation.roll}}
+
+
+def catalog_categories() -> dict:
+    world = connect_world()
+    dynamic = world.get_actors()
+    categories = []
+    for name, (_, group, coarse) in ENVIRONMENT_CATEGORIES.items():
+        categories.append({"id": name, "group": group, "coarse": coarse,
+                           "count": len(environment_objects(world, name)),
+                           "editable": "visibility_texture"})
+    categories.extend([
+        {"id": "vehicles", "group": "dynamic", "coarse": "vehicle",
+         "count": len(dynamic.filter("vehicle.*")), "editable": "full"},
+        {"id": "pedestrians", "group": "dynamic", "coarse": "walker",
+         "count": len(dynamic.filter("walker.*")), "editable": "full"},
+        {"id": "spawned_props", "group": "dynamic", "coarse": "building",
+         "count": len(dynamic.filter("static.prop.*")), "editable": "full"},
+    ])
+    return {"ok": True, "map": world.get_map().name, "categories": categories}
+
+
+def catalog_objects(category: str, query: str, offset: int, limit: int) -> dict:
+    world = connect_world()
+    if category in ENVIRONMENT_CATEGORIES:
+        records = [environment_record(obj, category)
+                   for obj in environment_objects(world, category)]
+    else:
+        pattern = {"vehicles": "vehicle.*", "pedestrians": "walker.*",
+                   "spawned_props": "static.prop.*"}.get(category)
+        if not pattern:
+            raise RuntimeError(f"Unknown category: {category}")
+        records = [actor_record(actor) | {"source": "actor", "category": category,
+                                             "group": "dynamic"}
+                   for actor in world.get_actors().filter(pattern)]
+    if query:
+        needle = query.casefold()
+        records = [item for item in records
+                   if needle in item["name"].casefold() or needle in str(item["id"])]
+    total = len(records)
+    return {"ok": True, "category": category, "total": total,
+            "offset": offset, "limit": limit,
+            "objects": records[offset:offset+limit]}
+
+
+def find_environment(world, object_id: int):
+    for category in ENVIRONMENT_CATEGORIES:
+        for obj in environment_objects(world, category):
+            if int(obj.id) == object_id:
+                return category, obj
+    raise RuntimeError(f"Environment object {object_id} was not found")
+
+
+def focus_environment(object_id: int) -> dict:
+    world = connect_world()
+    category, obj = find_environment(world, object_id)
+    record = environment_record(obj, category)
+    loc, ext = record["location"], record["extent"]
+    center = carla.Location(x=loc["x"], y=loc["y"], z=loc["z"])
+    extent = carla.Vector3D(x=ext["x"], y=ext["y"], z=ext["z"])
+    color = HIGHLIGHT_COLORS[record["kind"]]
+    world.debug.draw_box(carla.BoundingBox(center, extent), obj.transform.rotation,
+                         thickness=0.15, color=color, life_time=8.0)
+    focus_location(world, center, max(10.0, extent.x*2), max(6.0, extent.z*2))
+    return {"ok": True, "object": record}
+
+
+def set_environment_visibility(object_id: int, enabled: bool) -> dict:
+    world = connect_world()
+    category, obj = find_environment(world, object_id)
+    world.enable_environment_objects({obj.id}, enabled)
+    return {"ok": True, "id": str(obj.id), "category": category,
+            "visible": enabled}
+
+
+def spawn_object(blueprint_id: str, transform_data: dict) -> dict:
+    world = connect_world()
+    blueprint = world.get_blueprint_library().find(blueprint_id)
+    if not blueprint_id.startswith(("vehicle.", "walker.", "static.prop.")):
+        raise RuntimeError("Only vehicle, walker, and static.prop blueprints are spawnable")
+    location = transform_data.get("location", {})
+    rotation = transform_data.get("rotation", {})
+    transform = carla.Transform(
+        carla.Location(x=float(location.get("x", 0)), y=float(location.get("y", 0)),
+                       z=float(location.get("z", 1))),
+        carla.Rotation(pitch=float(rotation.get("pitch", 0)),
+                       yaw=float(rotation.get("yaw", 0)),
+                       roll=float(rotation.get("roll", 0))))
+    actor = world.spawn_actor(blueprint, transform)
+    return {"ok": True, "object": actor_record(actor)}
+
+
+def update_actor(actor_id: int, transform_data: dict) -> dict:
+    world = connect_world()
+    actor = world.get_actor(actor_id)
+    if not actor:
+        raise RuntimeError(f"Actor {actor_id} is not running")
+    current = actor.get_transform()
+    loc, rot = transform_data.get("location", {}), transform_data.get("rotation", {})
+    actor.set_transform(carla.Transform(
+        carla.Location(x=float(loc.get("x", current.location.x)),
+                       y=float(loc.get("y", current.location.y)),
+                       z=float(loc.get("z", current.location.z))),
+        carla.Rotation(pitch=float(rot.get("pitch", current.rotation.pitch)),
+                       yaw=float(rot.get("yaw", current.rotation.yaw)),
+                       roll=float(rot.get("roll", current.rotation.roll)))))
+    return {"ok": True, "object": actor_record(actor)}
+
+
+def duplicate_actor(actor_id: int) -> dict:
+    world = connect_world()
+    actor = world.get_actor(actor_id)
+    if not actor:
+        raise RuntimeError(f"Actor {actor_id} is not running")
+    transform = actor.get_transform()
+    transform.location += carla.Location(x=3.0, y=3.0, z=0.5)
+    return spawn_object(actor.type_id, {"location": vector(transform.location),
+                                        "rotation": {"pitch": transform.rotation.pitch,
+                                                     "yaw": transform.rotation.yaw,
+                                                     "roll": transform.rotation.roll}})
+
+
+def delete_actor(actor_id: int) -> dict:
+    world = connect_world()
+    actor = world.get_actor(actor_id)
+    if not actor:
+        raise RuntimeError(f"Actor {actor_id} is not running")
+    type_id = actor.type_id
+    actor.destroy()
+    return {"ok": True, "actor_id": actor_id, "type_id": type_id}
+
+
+def spawnable_blueprints(query: str, limit: int) -> dict:
+    world = connect_world()
+    patterns = ("vehicle.*", "walker.pedestrian.*", "static.prop.*")
+    ids = sorted({bp.id for pattern in patterns
+                  for bp in world.get_blueprint_library().filter(pattern)})
+    if query:
+        ids = [item for item in ids if query.casefold() in item.casefold()]
+    return {"ok": True, "total": len(ids), "blueprints": ids[:limit]}
 
 
 def scene_state() -> dict:
@@ -125,7 +312,7 @@ def focus_actor(actor_id: int) -> dict:
     actor = world.get_actor(actor_id)
     if not actor:
         raise RuntimeError(f"Actor {actor_id} is not running")
-    kind = "walker" if actor.type_id.startswith("walker.") else "vehicle"
+    kind = actor_record(actor)["kind"]
     transform = actor.get_transform()
     center = carla.Location(actor.bounding_box.location.x,
                             actor.bounding_box.location.y,
@@ -135,8 +322,8 @@ def focus_actor(actor_id: int) -> dict:
     world.debug.draw_box(carla.BoundingBox(center, extent), transform.rotation,
                          thickness=0.12, color=HIGHLIGHT_COLORS[kind],
                          life_time=8.0)
-    focus_location(world, center, 8.0 if kind == "walker" else 14.0,
-                   3.5 if kind == "walker" else 6.0)
+    focus_location(world, center, 8.0 if kind in ("walker", "prop") else 14.0,
+                   3.5 if kind in ("walker", "prop") else 6.0)
     return {"ok": True, "actor_id": actor.id, "kind": kind,
             "location": vector(center)}
 
@@ -256,6 +443,28 @@ def apply_building_texture(payload: bytes, target: str) -> dict:
             "material_slot": 0, "resolution": [image.width, image.height]}
 
 
+def apply_environment_texture(payload: bytes, object_id: int) -> dict:
+    image, texture = decode_texture(payload, (1024, 1024))
+    world = connect_world()
+    category, obj = find_environment(world, object_id)
+    names = set(world.get_names_of_all_objects())
+    candidates = [obj.name]
+    for suffix in ("_SM_0", "_SM"):
+        if obj.name.endswith(suffix):
+            candidates.append(obj.name[:-len(suffix)])
+    target = next((candidate for candidate in candidates if candidate in names), None)
+    if target is None:
+        target = next((name for name in names
+                       if name.startswith(candidates[-1]) or candidates[-1].startswith(name)), None)
+    if target is None:
+        raise RuntimeError(
+            f"The selected {category} object has no runtime material target: {obj.name}")
+    world.apply_color_texture_to_object(
+        target, carla.MaterialParameter.Diffuse, texture)
+    return {"ok": True, "kind": category, "object_id": str(obj.id),
+            "object_name": target, "resolution": [image.width, image.height]}
+
+
 def apply_pedestrian_texture(payload: bytes) -> dict:
     image, texture = decode_texture(payload, (1024, 1024))
     world = connect_world()
@@ -287,7 +496,20 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         request = urlparse(self.path)
         self._headers()
-        if request.path == "/scene/state":
+        params = parse_qs(request.query)
+        if request.path == "/catalog/categories":
+            self.wfile.write(json.dumps(catalog_categories()).encode())
+        elif request.path == "/catalog/objects":
+            result = catalog_objects(
+                params.get("category", ["buildings"])[0],
+                params.get("q", [""])[0],
+                max(0, int(params.get("offset", ["0"])[0])),
+                min(200, max(1, int(params.get("limit", ["50"])[0]))))
+            self.wfile.write(json.dumps(result).encode())
+        elif request.path == "/catalog/blueprints":
+            result = spawnable_blueprints(params.get("q", [""])[0], 200)
+            self.wfile.write(json.dumps(result).encode())
+        elif request.path == "/scene/state":
             self.wfile.write(json.dumps(scene_state()).encode())
         elif request.path == "/targets":
             kind = parse_qs(request.query).get("kind", [""])[0]
@@ -302,9 +524,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         request = urlparse(self.path)
         if request.path not in ("/apply", "/apply/road", "/apply/building",
+                                "/apply/environment",
                                 "/apply/pedestrian", "/focus/actor",
                                 "/focus/static", "/focus/bev",
-                                "/camera/hero-lock"):
+                                "/focus/environment", "/camera/hero-lock",
+                                "/objects/environment/visibility",
+                                "/objects/spawn", "/objects/update",
+                                "/objects/duplicate", "/objects/delete"):
             self._headers(404)
             self.wfile.write(b'{"ok":false,"error":"not found"}')
             return
@@ -317,18 +543,40 @@ class Handler(BaseHTTPRequestHandler):
             elif request.path == "/focus/static":
                 data = json.loads(payload or b"{}")
                 result = focus_static(str(data["kind"]), str(data["name"]))
+            elif request.path == "/focus/environment":
+                data = json.loads(payload or b"{}")
+                result = focus_environment(int(data["object_id"]))
             elif request.path == "/focus/bev":
                 data = json.loads(payload or b"{}")
                 result = focus_bev(float(data["x"]), float(data["y"]))
             elif request.path == "/camera/hero-lock":
                 data = json.loads(payload or b"{}")
                 result = set_hero_lock(bool(data.get("enabled")))
+            elif request.path == "/objects/environment/visibility":
+                data = json.loads(payload or b"{}")
+                result = set_environment_visibility(
+                    int(data["object_id"]), bool(data.get("visible", True)))
+            elif request.path == "/objects/spawn":
+                data = json.loads(payload or b"{}")
+                result = spawn_object(str(data["blueprint_id"]), data.get("transform", {}))
+            elif request.path == "/objects/update":
+                data = json.loads(payload or b"{}")
+                result = update_actor(int(data["actor_id"]), data.get("transform", {}))
+            elif request.path == "/objects/duplicate":
+                data = json.loads(payload or b"{}")
+                result = duplicate_actor(int(data["actor_id"]))
+            elif request.path == "/objects/delete":
+                data = json.loads(payload or b"{}")
+                result = delete_actor(int(data["actor_id"]))
             elif request.path == "/apply/road":
                 scope = parse_qs(request.query).get("scope", ["all"])[0]
                 result = apply_road_texture(payload, scope)
             elif request.path == "/apply/building":
                 target = parse_qs(request.query).get("target", ["BP_House16"])[0]
                 result = apply_building_texture(payload, target)
+            elif request.path == "/apply/environment":
+                object_id = int(parse_qs(request.query)["object_id"][0])
+                result = apply_environment_texture(payload, object_id)
             elif request.path == "/apply/pedestrian":
                 result = apply_pedestrian_texture(payload)
             else:

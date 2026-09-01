@@ -37,8 +37,6 @@ int main(int argc, char **argv) {
     for (int i = 0; i < node->GetChildCount(); ++i) stack.push_back(node->GetChild(i));
     FbxMesh *mesh = node->GetMesh();
     if (!mesh) continue;
-    const std::string node_name = node->GetName();
-    if (node_name.find("_LOD0") == std::string::npos) continue;
     FbxStringList uv_sets;
     mesh->GetUVSetNames(uv_sets);
     if (uv_sets.GetCount() == 0) continue;
@@ -76,7 +74,8 @@ int main(int argc, char **argv) {
   const double scale=2.0/std::max({max_x-min_x,max_y-min_y,max_z-min_z});
   std::ofstream out(argv[2]);
   out << std::fixed << std::setprecision(6);
-  out << "{\"source\":\"SM_TeslaM3_v2/UV0/material-slot-5\",\"triangleCount\":" << vertices.size()/3 << ",\"vertices\":[";
+  out << "{\"source\":\"" << argv[1] << "/UV0/material-slot-" << wanted_material
+      << "\",\"triangleCount\":" << vertices.size()/3 << ",\"vertices\":[";
   for (size_t i=0; i<vertices.size(); ++i) {
     const auto &v=vertices[i]; if(i) out << ',';
     out << (v.x-cx)*scale << ',' << (v.y-cy)*scale << ',' << (v.z-cz)*scale << ',' << v.u << ',' << v.v;

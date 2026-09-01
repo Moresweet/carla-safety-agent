@@ -1,0 +1,29 @@
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
+@@ -372,9 +372,25 @@ void ACarlaGameModeBase::ApplyTextureToActor(
+       {
+         continue;
+       }
++      const bool IsEuropeanHGV =
++          Actor->GetName().StartsWith(TEXT("BP_European_HGV"));
++      const bool IsHGVBodywork = IsEuropeanHGV && i == 1;
++      if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
++          IsHGVBodywork)
++      {
++        OriginalMaterial = LoadObject<UMaterialInterface>(nullptr,
++            TEXT("/Game/Carla/Static/Truck/European_HGV/"
++                 "M_CarlaHGVLiveryRuntime.M_CarlaHGVLiveryRuntime"));
++      }
++      if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
++          IsEuropeanHGV && !IsHGVBodywork)
++      {
++        continue;
++      }
+       if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
+           Mesh->IsA<USkeletalMeshComponent>() &&
+           !IsVerifiedWalker &&
++          !IsEuropeanHGV &&
+           i != 5)
+       {
+         continue;

@@ -7,6 +7,7 @@ import os
 import math
 import threading
 import time
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -31,6 +32,7 @@ _environment_cache = {}
 _actor_object_names = {}
 _thumbnail_cache = {}
 _thumbnail_lock = threading.Lock()
+_thumbnail_dir = os.environ.get("THUMBNAIL_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), ".runtime", "thumbnails"))
 ENVIRONMENT_CATEGORIES = {
     "buildings": (carla.CityObjectLabel.Buildings, "architecture", "building"),
     "bridges": (carla.CityObjectLabel.Bridge, "architecture", "building"),
@@ -299,6 +301,13 @@ def blueprint_thumbnail(blueprint_id: str) -> bytes:
     with _thumbnail_lock:
         if blueprint_id in _thumbnail_cache:
             return _thumbnail_cache[blueprint_id]
+        os.makedirs(_thumbnail_dir, exist_ok=True)
+        cache_path = os.path.join(_thumbnail_dir, hashlib.sha256(blueprint_id.encode()).hexdigest() + ".png")
+        if os.path.isfile(cache_path):
+            with open(cache_path, "rb") as cached:
+                payload = cached.read()
+            _thumbnail_cache[blueprint_id] = payload
+            return payload
         world = connect_world()
         library = world.get_blueprint_library()
         actor = sensor = None
@@ -341,6 +350,10 @@ def blueprint_thumbnail(blueprint_id: str) -> bytes:
             if not captured.wait(8.0):
                 raise RuntimeError(f"Timed out rendering {blueprint_id}")
             _thumbnail_cache[blueprint_id] = frames[0]
+            temporary = cache_path + ".tmp"
+            with open(temporary, "wb") as cached:
+                cached.write(frames[0])
+            os.replace(temporary, cache_path)
             return frames[0]
         finally:
             if sensor:
@@ -357,6 +370,10 @@ def runtime_name_for_actor(world, actor):
         return mapped
     if actor.type_id == "vehicle.tesla.model3":
         matches = sorted(name for name in names if name.startswith("BP_TeslaM3_C_"))
+        if matches:
+            return matches[-1]
+    if actor.type_id == "vehicle.carlamotors.european_hgv":
+        matches = sorted(name for name in names if name.startswith("BP_European_HGV_C_"))
         if matches:
             return matches[-1]
     if actor.type_id == "walker.pedestrian.0001":

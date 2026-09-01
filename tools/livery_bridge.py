@@ -3,6 +3,7 @@
 
 import io
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -11,7 +12,9 @@ from PIL import Image
 
 
 HOST = "127.0.0.1"
-PORT = 8765
+PORT = int(os.environ.get("BRIDGE_PORT", "8765"))
+CARLA_PORT = int(os.environ.get("CARLA_PORT", "2000"))
+FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000")
 
 
 def decode_texture(payload: bytes, size: tuple[int, int]) -> tuple[Image.Image, carla.TextureColor]:
@@ -28,7 +31,7 @@ def decode_texture(payload: bytes, size: tuple[int, int]) -> tuple[Image.Image, 
 
 
 def connect_world():
-    client = carla.Client(HOST, 2000)
+    client = carla.Client(HOST, CARLA_PORT)
     client.set_timeout(20.0)
     return client.get_world()
 
@@ -104,7 +107,7 @@ def apply_pedestrian_texture(payload: bytes) -> dict:
 class Handler(BaseHTTPRequestHandler):
     def _headers(self, status=200):
         self.send_response(status)
-        self.send_header("Access-Control-Allow-Origin", "http://localhost:3000")
+        self.send_header("Access-Control-Allow-Origin", FRONTEND_ORIGIN)
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS, GET")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Content-Type", "application/json")

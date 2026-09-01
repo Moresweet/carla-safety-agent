@@ -211,6 +211,25 @@ Start the local bridge in a second terminal with CARLA's Python module available
 PYTHONPATH=/path/to/carla/python/site-packages python3 tools/livery_bridge.py
 ```
 
+For the source-build environment used during development, start CARLA, the
+texture bridge, and Surface Studio together with:
+
+```bash
+./scripts/start_surface_studio.sh
+```
+
+Stop only the processes recorded by that launcher with:
+
+```bash
+./scripts/stop_surface_studio.sh
+```
+
+Runtime PID files and logs are written under `.runtime/` and are not committed.
+Container images can override `CARLA_ROOT`, `UE4_ROOT`, `CARLA_PYTHONPATH`,
+`NODE_BIN`, `PNPM_BIN`,
+`CARLA_MAP`, and `CARLA_PORT` without editing the scripts. Surface Studio and
+the bridge intentionally retain their browser contract on ports 3000 and 8765.
+
 The Surface Studio also includes a **Road** workspace. It tiles an uploaded
 image into a 1024x1024 diffuse texture and applies it to every `Road_Road_*`
 mesh in the loaded town while preserving separate lane-marking, curb,

@@ -69,6 +69,9 @@ patch and rebuilding.
 - Texture bridge: `127.0.0.1:8765`
 - Python dependencies: the CARLA Python module and Pillow
 - Frontend runtime: Node.js and pnpm
+- Unified launcher variables: `CARLA_ROOT`, `UE4_ROOT`, `CARLA_PYTHONPATH`,
+  `NODE_BIN`, `PNPM_BIN`,
+  `CARLA_MAP`, and `CARLA_PORT`; browser services use ports 3000 and 8765
 
 No files under Unreal Engine itself have been modified. Temporary validation
 scripts and screenshots under `/tmp` or `work/` are not required at runtime.

@@ -224,6 +224,13 @@ image on wall material slot 0 while preserving the independent window, roof,
 and balcony slots. The target is deliberately allow-listed until each additional
 building blueprint has been inspected and assigned a verified wall slot.
 
+The **Pedestrian** workspace targets `walker.pedestrian.0001`. Its verified
+slot 14 controls the visible pants section, so uploaded images can be tiled and
+rotated on clothing without changing skin, hair, eyes, or the upper garment.
+The runtime material is compiled with skeletal-mesh usage enabled. Additional
+garment sections require an atomic multi-section update to avoid repeated
+render-proxy reconstruction in CARLA 0.9.15/UE 4.26.
+
 To regenerate the web mesh after replacing the CARLA vehicle asset, first run
 `integration/carla/export_tesla_uv_mesh.py` with UE4Editor-Cmd, then compile and
 run `tools/fbx_mesh_to_json.cpp` against Unreal's bundled FBX SDK.

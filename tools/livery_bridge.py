@@ -85,6 +85,22 @@ def apply_building_texture(payload: bytes, target: str) -> dict:
             "material_slot": 0, "resolution": [image.width, image.height]}
 
 
+def apply_pedestrian_texture(payload: bytes) -> dict:
+    image, texture = decode_texture(payload, (1024, 1024))
+    world = connect_world()
+    walkers = list(world.get_actors().filter("walker.pedestrian.0001"))
+    names = sorted(name for name in world.get_names_of_all_objects()
+                   if name.startswith("BP_Walker_Female1_v1_C_"))
+    if not walkers or not names:
+        raise RuntimeError("No walker.pedestrian.0001 is running")
+    target = names[-1]
+    world.apply_color_texture_to_object(
+        target, carla.MaterialParameter.Diffuse, texture)
+    return {"ok": True, "kind": "pedestrian", "actor_id": walkers[-1].id,
+            "object_name": target, "material_slots": [14],
+            "resolution": [image.width, image.height]}
+
+
 class Handler(BaseHTTPRequestHandler):
     def _headers(self, status=200):
         self.send_response(status)
@@ -112,7 +128,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         request = urlparse(self.path)
-        if request.path not in ("/apply", "/apply/road", "/apply/building"):
+        if request.path not in ("/apply", "/apply/road", "/apply/building",
+                                "/apply/pedestrian"):
             self._headers(404)
             self.wfile.write(b'{"ok":false,"error":"not found"}')
             return
@@ -125,6 +142,8 @@ class Handler(BaseHTTPRequestHandler):
             elif request.path == "/apply/building":
                 target = parse_qs(request.query).get("target", ["BP_House16"])[0]
                 result = apply_building_texture(payload, target)
+            elif request.path == "/apply/pedestrian":
+                result = apply_pedestrian_texture(payload)
             else:
                 result = apply_livery(payload)
             self._headers()

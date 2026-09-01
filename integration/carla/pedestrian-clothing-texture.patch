@@ -1,0 +1,39 @@
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
+@@ -263,6 +263,8 @@ TArray<FString> ACarlaGameModeBase::GetNamesOfAllActors()
+     TArray<UStaticMeshComponent*> StaticMeshes;
+     Actor->GetComponents(StaticMeshes);
+-    if (StaticMeshes.Num())
++    TArray<USkeletalMeshComponent*> SkeletalMeshes;
++    Actor->GetComponents(SkeletalMeshes);
++    if (StaticMeshes.Num() || SkeletalMeshes.Num())
+     {
+       Names.Add(Actor->GetName());
+     }
+@@ -368,8 +368,25 @@ void ACarlaGameModeBase::ApplyTextureToActor(
+       {
+         continue;
+       }
++      const bool IsVerifiedWalker =
++          Actor->GetName().StartsWith(TEXT("BP_Walker_Female1_v1"));
++      const bool IsVerifiedClothing = IsVerifiedWalker && i == 14;
++      if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
++          IsVerifiedClothing)
++      {
++        OriginalMaterial = LoadObject<UMaterialInterface>(nullptr,
++            TEXT("/Game/Carla/Static/Pedestrian/Materials/"
++                 "M_CarlaPedestrianClothingRuntime."
++                 "M_CarlaPedestrianClothingRuntime"));
++      }
++      if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
++          IsVerifiedWalker && !IsVerifiedClothing)
++      {
++        continue;
++      }
+       if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
+           Mesh->IsA<USkeletalMeshComponent>() &&
++          !IsVerifiedWalker &&
+           i != 5)
+       {
+         continue;

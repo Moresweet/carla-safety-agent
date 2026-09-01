@@ -15,6 +15,7 @@ CARLA source root used during development: `/home/moresweet/carla`.
 | `Unreal/CarlaUE4/Plugins/Carla/Source/Carla/OpenDrive/OpenDriveGenerator.cpp` | `opendrive-road-material.patch` | Preserve generated road UV/color data and assign the asphalt material. |
 | `Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp` | `road-runtime-texture.patch` (apply after `vehicle-skeletal-texture.patch`) | Switch `Road_Road_*` objects to the runtime-replaceable road material. |
 | `Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp` | `building-runtime-texture.patch` (apply after the road patch) | Route BP_House16 wall slot 0 to the building runtime material. |
+| `Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp` | `pedestrian-clothing-texture.patch` (apply after the building patch) | Enumerate skeletal actors and route the verified walker clothing section to its runtime material. |
 
 Apply the patches from the CARLA source root and rebuild the editor target:
 
@@ -23,6 +24,7 @@ git apply --check /workspace/carla-safety-agent/integration/carla/vehicle-skelet
 git apply /workspace/carla-safety-agent/integration/carla/vehicle-skeletal-texture.patch
 git apply /workspace/carla-safety-agent/integration/carla/road-runtime-texture.patch
 git apply /workspace/carla-safety-agent/integration/carla/building-runtime-texture.patch
+git apply /workspace/carla-safety-agent/integration/carla/pedestrian-clothing-texture.patch
 git apply /workspace/carla-safety-agent/integration/carla/static-mesh-factory-nonuniform-scale.patch
 git apply /workspace/carla-safety-agent/integration/carla/opendrive-road-material.patch
 make CarlaUE4Editor
@@ -40,6 +42,7 @@ than copied into this repository:
 | `Content/Carla/Static/Car/4Wheeled/Tesla/SM_TeslaM3_v2.uasset` (slot 5 updated) | `install_tesla_livery_material.py` |
 | `Content/Carla/Static/GenericMaterials/RoadPainterMaterials/M_CarlaRoadRuntime.uasset` | `install_road_runtime_material.py` |
 | `Content/Carla/Static/Building/Materials/M_CarlaBuildingRuntime.uasset` | `install_building_runtime_material.py` |
+| `Content/Carla/Static/Pedestrian/Materials/M_CarlaPedestrianClothingRuntime.uasset` | `install_pedestrian_clothing_material.py` |
 
 Generate assets with the same UE build used to run CARLA:
 
@@ -55,6 +58,9 @@ Run the same command with `install_road_runtime_material.py` to generate
 Run it once more with `install_building_runtime_material.py` to generate
 `M_CarlaBuildingRuntime`, then rebuild after applying
 `building-runtime-texture.patch`.
+Run it again with `install_pedestrian_clothing_material.py` to create the
+skeletal-mesh-compatible clothing material before applying the pedestrian
+patch and rebuilding.
 
 ## Runtime services
 

@@ -8,11 +8,18 @@ import math
 import threading
 import time
 import hashlib
+import sys
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import carla
 from PIL import Image
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from carla_safety_agent.carla_adapter import CarlaAdapter
+from carla_safety_agent.natural_language import NaturalLanguageCompiler
 
 
 HOST = "127.0.0.1"
@@ -53,6 +60,21 @@ ENVIRONMENT_CATEGORIES = {
     "dynamic_props": (carla.CityObjectLabel.Dynamic, "props", "building"),
     "static_props": (carla.CityObjectLabel.Static, "props", "building"),
 }
+
+
+def compile_scenario(data: dict, execute: bool = False) -> dict:
+    compilation = NaturalLanguageCompiler().compile(
+        str(data.get("description", "")), int(data.get("seed", 7)))
+    response = {"ok": True, "scenario": compilation.scenario.to_dict(),
+                "warnings": list(compilation.warnings),
+                "extracted": compilation.extracted}
+    if execute:
+        output = PROJECT_ROOT / ".runtime" / "generated-scenarios"
+        result = CarlaAdapter(HOST, CARLA_PORT, 120.0).run(
+            compilation.scenario, output, render=True)
+        response["result"] = result.to_dict()
+        response["output_dir"] = str(output)
+    return response
 
 
 def decode_texture(payload: bytes, size: tuple[int, int]) -> tuple[Image.Image, carla.TextureColor]:
@@ -659,14 +681,18 @@ class Handler(BaseHTTPRequestHandler):
                                 "/focus/environment", "/camera/hero-lock",
                                 "/objects/environment/visibility",
                                 "/objects/spawn", "/objects/update",
-                                "/objects/duplicate", "/objects/delete"):
+                                "/objects/duplicate", "/objects/delete",
+                                "/scenario/compile", "/scenario/run"):
             self._headers(404)
             self.wfile.write(b'{"ok":false,"error":"not found"}')
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = self.rfile.read(length)
-            if request.path == "/focus/actor":
+            if request.path in ("/scenario/compile", "/scenario/run"):
+                data = json.loads(payload or b"{}")
+                result = compile_scenario(data, request.path.endswith("/run"))
+            elif request.path == "/focus/actor":
                 data = json.loads(payload or b"{}")
                 result = focus_actor(int(data["actor_id"]))
             elif request.path == "/focus/static":

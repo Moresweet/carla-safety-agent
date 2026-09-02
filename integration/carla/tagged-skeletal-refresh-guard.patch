@@ -1,0 +1,52 @@
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.h b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.h
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.h
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.h
+@@ -64,6 +64,8 @@ public:
+   TArray<UMaterialInstanceDynamic*> GetTaggedMaterials();
++
++  void WaitForParentSkeletalMesh(int32 Frames = 3);
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp
+@@ -70,6 +70,12 @@ TArray<UMaterialInstanceDynamic*> UTaggedComponent::GetTaggedMaterials()
+ }
++void UTaggedComponent::WaitForParentSkeletalMesh(int32 Frames)
++{
++  bShouldWaitFrame = true;
++  NumFramesToWait = FMath::Max(Frames, 1);
++}
+@@ -228,14 +234,17 @@ void UTaggedComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction * ThisTickFunction)
+   if (bSkeletalMesh)
+   {
+-    MarkRenderStateDirty();
+     if(bShouldWaitFrame)
+     {
+       if(NumFramesToWait < 0)
+       {
+         bShouldWaitFrame = false;
++        MarkRenderStateDirty();
+       }
+       NumFramesToWait--;
+     }
++    else
++    {
++      MarkRenderStateDirty();
++    }
+   }
+ }
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
+@@ -433,6 +433,13 @@ void ACarlaGameModeBase::ApplyTextureToActor(
+       if(!DynamicMaterial)
+       {
+         DynamicMaterial = UMaterialInstanceDynamic::Create(OriginalMaterial, NULL);
++        if (USkeletalMeshComponent* SkeletalMesh = Cast<USkeletalMeshComponent>(Mesh))
++        {
++          if (UTaggedComponent* TaggedComponent = ATagger::FindTaggedComponent(SkeletalMesh))
++          {
++            TaggedComponent->WaitForParentSkeletalMesh();
++          }
++        }
+         Mesh->SetMaterial(i, DynamicMaterial);
+       }

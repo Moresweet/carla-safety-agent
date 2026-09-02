@@ -18,6 +18,7 @@ CARLA source root used during development: `/home/moresweet/carla`.
 | `Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp` | `pedestrian-clothing-texture.patch` (apply after the building patch) | Enumerate skeletal actors and route the verified walker clothing section to its runtime material. |
 | `Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp` | `hgv-livery-texture.patch` (apply last) | Route European HGV skeletal material slot 1 to its dedicated runtime livery material. |
 | `Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp` | `all-vehicle-livery-texture.patch` (apply after the HGV patch) | Detect each skeletal vehicle's actual bodywork material slot instead of assuming slot 5. |
+| `Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.{h,cpp}` and `CarlaGameModeBase.cpp` | `tagged-skeletal-refresh-guard.patch` (apply last) | Pause semantic-tag proxy recreation while a skeletal vehicle replaces its runtime material. |
 
 Apply the patches from the CARLA source root and rebuild the editor target:
 
@@ -29,6 +30,7 @@ git apply /workspace/carla-safety-agent/integration/carla/building-runtime-textu
 git apply /workspace/carla-safety-agent/integration/carla/pedestrian-clothing-texture.patch
 git apply /workspace/carla-safety-agent/integration/carla/hgv-livery-texture.patch
 git apply /workspace/carla-safety-agent/integration/carla/all-vehicle-livery-texture.patch
+git apply /workspace/carla-safety-agent/integration/carla/tagged-skeletal-refresh-guard.patch
 git apply /workspace/carla-safety-agent/integration/carla/static-mesh-factory-nonuniform-scale.patch
 git apply /workspace/carla-safety-agent/integration/carla/opendrive-road-material.patch
 make CarlaUE4Editor

@@ -1,0 +1,39 @@
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
+@@ -400,11 +400,34 @@ void ACarlaGameModeBase::ApplyTextureToActor(
+       {
+         continue;
+       }
++      const TArray<FName> MaterialSlotNames = Mesh->GetMaterialSlotNames();
++      const FString MaterialSlotName = MaterialSlotNames.IsValidIndex(i)
++          ? MaterialSlotNames[i].ToString().ToLower()
++          : FString();
++      const bool IsTeslaModel3 =
++          Actor->GetName().StartsWith(TEXT("BP_TeslaM3"));
++      const bool IsGenericVehicleBodywork =
++          Mesh->IsA<USkeletalMeshComponent>() &&
++          !IsVerifiedWalker &&
++          !IsEuropeanHGV &&
++          !IsTeslaModel3 &&
++          (MaterialSlotName.Contains(TEXT("bodywork")) ||
++           MaterialSlotName.Contains(TEXT("carexterior")) ||
++           MaterialSlotName.Contains(TEXT("car_exterior")) ||
++           (Actor->GetName().StartsWith(TEXT("BP_CarlaCola")) && i == 3));
++      if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
++          IsGenericVehicleBodywork)
++      {
++        OriginalMaterial = LoadObject<UMaterialInterface>(nullptr,
++            TEXT("/Game/Carla/Static/GenericMaterials/"
++                 "M_CarlaVehicleLiveryRuntime.M_CarlaVehicleLiveryRuntime"));
++      }
+       if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
+           Mesh->IsA<USkeletalMeshComponent>() &&
+           !IsVerifiedWalker &&
+           !IsEuropeanHGV &&
+-          i != 5)
++          !IsGenericVehicleBodywork &&
++          !(IsTeslaModel3 && i == 5))
+       {
+         continue;
+       }

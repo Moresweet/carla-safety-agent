@@ -1,0 +1,236 @@
+{
+  "vehicle.audi.a2": {
+    "baseType": "car",
+    "slot": 4,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-audi-a2.json"
+  },
+  "vehicle.audi.etron": {
+    "baseType": "car",
+    "slot": 1,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-audi-etron.json"
+  },
+  "vehicle.audi.tt": {
+    "baseType": "car",
+    "slot": 3,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-audi-tt.json"
+  },
+  "vehicle.bh.crossbike": {
+    "baseType": "bicycle",
+    "slot": 2,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-bh-crossbike.json"
+  },
+  "vehicle.bmw.grandtourer": {
+    "baseType": "",
+    "slot": 8,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-bmw-grandtourer.json"
+  },
+  "vehicle.carlamotors.carlacola": {
+    "baseType": "truck",
+    "slot": 3,
+    "slotName": "CarlaCola",
+    "url": "/vehicles/vehicle-carlamotors-carlacola.json"
+  },
+  "vehicle.carlamotors.european_hgv": {
+    "baseType": "truck",
+    "slot": 1,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-carlamotors-european_hgv.json"
+  },
+  "vehicle.carlamotors.firetruck": {
+    "baseType": "truck",
+    "slot": 0,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-carlamotors-firetruck.json"
+  },
+  "vehicle.chevrolet.impala": {
+    "baseType": "car",
+    "slot": 5,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-chevrolet-impala.json"
+  },
+  "vehicle.citroen.c3": {
+    "baseType": "car",
+    "slot": 4,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-citroen-c3.json"
+  },
+  "vehicle.diamondback.century": {
+    "baseType": "bicycle",
+    "slot": 0,
+    "slotName": "BodyWork_Mat",
+    "url": "/vehicles/vehicle-diamondback-century.json"
+  },
+  "vehicle.dodge.charger_2020": {
+    "baseType": "car",
+    "slot": 1,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-dodge-charger_2020.json"
+  },
+  "vehicle.dodge.charger_police": {
+    "baseType": "car",
+    "slot": 0,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-dodge-charger_police.json"
+  },
+  "vehicle.dodge.charger_police_2020": {
+    "baseType": "car",
+    "slot": 2,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-dodge-charger_police_2020.json"
+  },
+  "vehicle.ford.ambulance": {
+    "baseType": "van",
+    "slot": 2,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-ford-ambulance.json"
+  },
+  "vehicle.ford.crown": {
+    "baseType": "car",
+    "slot": 2,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-ford-crown.json"
+  },
+  "vehicle.ford.mustang": {
+    "baseType": "car",
+    "slot": 3,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-ford-mustang.json"
+  },
+  "vehicle.gazelle.omafiets": {
+    "baseType": "bicycle",
+    "slot": 4,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-gazelle-omafiets.json"
+  },
+  "vehicle.harley-davidson.low_rider": {
+    "baseType": "motorcycle",
+    "slot": 6,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-harley-davidson-low_rider.json"
+  },
+  "vehicle.jeep.wrangler_rubicon": {
+    "baseType": "car",
+    "slot": 12,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-jeep-wrangler_rubicon.json"
+  },
+  "vehicle.kawasaki.ninja": {
+    "baseType": "motorcycle",
+    "slot": 3,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-kawasaki-ninja.json"
+  },
+  "vehicle.lincoln.mkz_2017": {
+    "baseType": "car",
+    "slot": 6,
+    "slotName": "MI_CarExterior_Lincoln",
+    "url": "/vehicles/vehicle-lincoln-mkz_2017.json"
+  },
+  "vehicle.lincoln.mkz_2020": {
+    "baseType": "car",
+    "slot": 1,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-lincoln-mkz_2020.json"
+  },
+  "vehicle.mercedes.coupe": {
+    "baseType": "car",
+    "slot": 0,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-mercedes-coupe.json"
+  },
+  "vehicle.mercedes.sprinter": {
+    "baseType": "van",
+    "slot": 0,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-mercedes-sprinter.json"
+  },
+  "vehicle.micro.microlino": {
+    "baseType": "car",
+    "slot": 4,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-micro-microlino.json"
+  },
+  "vehicle.mini.cooper_s": {
+    "baseType": "",
+    "slot": 10,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-mini-cooper_s.json"
+  },
+  "vehicle.mitsubishi.fusorosa": {
+    "baseType": "Bus",
+    "slot": 0,
+    "slotName": "BodyWork_fuso",
+    "url": "/vehicles/vehicle-mitsubishi-fusorosa.json"
+  },
+  "vehicle.nissan.micra": {
+    "baseType": "car",
+    "slot": 3,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-nissan-micra.json"
+  },
+  "vehicle.nissan.patrol": {
+    "baseType": "car",
+    "slot": 9,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-nissan-patrol.json"
+  },
+  "vehicle.nissan.patrol_2021": {
+    "baseType": "car",
+    "slot": 0,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-nissan-patrol_2021.json"
+  },
+  "vehicle.seat.leon": {
+    "baseType": "car",
+    "slot": 0,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-seat-leon.json"
+  },
+  "vehicle.tesla.cybertruck": {
+    "baseType": "truck",
+    "slot": 1,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-tesla-cybertruck.json"
+  },
+  "vehicle.tesla.model3": {
+    "baseType": "car",
+    "slot": 5,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-tesla-model3.json"
+  },
+  "vehicle.toyota.prius": {
+    "baseType": "car",
+    "slot": 6,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-toyota-prius.json"
+  },
+  "vehicle.vespa.zx125": {
+    "baseType": "motorcycle",
+    "slot": 2,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-vespa-zx125.json"
+  },
+  "vehicle.volkswagen.t2": {
+    "baseType": "van",
+    "slot": 8,
+    "slotName": "Bodywork_mat",
+    "url": "/vehicles/vehicle-volkswagen-t2.json"
+  },
+  "vehicle.volkswagen.t2_2021": {
+    "baseType": "van",
+    "slot": 0,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-volkswagen-t2_2021.json"
+  },
+  "vehicle.yamaha.yzf": {
+    "baseType": "motorcycle",
+    "slot": 0,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-yamaha-yzf.json"
+  }
+}

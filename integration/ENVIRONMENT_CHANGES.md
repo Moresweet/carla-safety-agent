@@ -17,6 +17,7 @@ CARLA source root used during development: `/home/moresweet/carla`.
 | `Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp` | `building-runtime-texture.patch` (apply after the road patch) | Route BP_House16 wall slot 0 to the building runtime material. |
 | `Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp` | `pedestrian-clothing-texture.patch` (apply after the building patch) | Enumerate skeletal actors and route the verified walker clothing section to its runtime material. |
 | `Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp` | `hgv-livery-texture.patch` (apply last) | Route European HGV skeletal material slot 1 to its dedicated runtime livery material. |
+| `Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp` | `all-vehicle-livery-texture.patch` (apply after the HGV patch) | Detect each skeletal vehicle's actual bodywork material slot instead of assuming slot 5. |
 
 Apply the patches from the CARLA source root and rebuild the editor target:
 
@@ -27,6 +28,7 @@ git apply /workspace/carla-safety-agent/integration/carla/road-runtime-texture.p
 git apply /workspace/carla-safety-agent/integration/carla/building-runtime-texture.patch
 git apply /workspace/carla-safety-agent/integration/carla/pedestrian-clothing-texture.patch
 git apply /workspace/carla-safety-agent/integration/carla/hgv-livery-texture.patch
+git apply /workspace/carla-safety-agent/integration/carla/all-vehicle-livery-texture.patch
 git apply /workspace/carla-safety-agent/integration/carla/static-mesh-factory-nonuniform-scale.patch
 git apply /workspace/carla-safety-agent/integration/carla/opendrive-road-material.patch
 make CarlaUE4Editor
@@ -46,6 +48,7 @@ than copied into this repository:
 | `Content/Carla/Static/Building/Materials/M_CarlaBuildingRuntime.uasset` | `install_building_runtime_material.py` |
 | `Content/Carla/Static/Pedestrian/Materials/M_CarlaPedestrianClothingRuntime.uasset` | `install_pedestrian_clothing_material.py` |
 | `Content/Carla/Static/Truck/European_HGV/M_CarlaHGVLiveryRuntime.uasset` | `install_hgv_livery_material.py` |
+| `Content/Carla/Static/GenericMaterials/M_CarlaVehicleLiveryRuntime.uasset` | `install_vehicle_livery_material.py` |
 
 Generate assets with the same UE build used to run CARLA:
 
@@ -66,6 +69,14 @@ skeletal-mesh-compatible clothing material before applying the pedestrian
 patch and rebuilding.
 Run it with `install_hgv_livery_material.py` to create the European HGV UV0
 bodywork material before applying `hgv-livery-texture.patch` and rebuilding.
+Run it with `install_vehicle_livery_material.py` to create the shared UV0
+skeletal vehicle material before applying `all-vehicle-livery-texture.patch`.
+
+Browser UV/3D assets for the registered vehicle catalog are exported with
+`export_vehicle_uv_catalog.py`. The generated JSON catalog and meshes are
+stored under `tools/livery-designer/public/vehicle-mesh-catalog.json` and
+`tools/livery-designer/public/vehicles/` so the browser never substitutes a
+photograph for a successfully exported vehicle mesh.
 
 The browser mesh is reproducibly exported from
 `/Game/Carla/Static/Truck/European_HGV/SK_European_HGV` by

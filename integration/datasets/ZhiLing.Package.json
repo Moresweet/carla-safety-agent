@@ -1,0 +1,15 @@
+{
+  "maps": [
+    {"path":"/Game/ZhiLing/Plugin_Import/Maps","name":"HighD_1","use_carla_materials":false},
+    {"path":"/Game/ZhiLing/Plugin_Import/Maps","name":"HighD_2","use_carla_materials":false},
+    {"path":"/Game/ZhiLing/Plugin_Import/Maps","name":"HighD_3","use_carla_materials":false},
+    {"path":"/Game/ZhiLing/Plugin_Import/Maps","name":"HighD_4","use_carla_materials":false},
+    {"path":"/Game/ZhiLing/Plugin_Import/Maps","name":"HighD_5","use_carla_materials":false},
+    {"path":"/Game/ZhiLing/Plugin_Import/Maps","name":"HighD_6","use_carla_materials":false},
+    {"path":"/Game/ZhiLing/Plugin_Import/Maps","name":"NGSIM_I-80_20260427","use_carla_materials":false},
+    {"path":"/Game/ZhiLing/Plugin_Import/Maps","name":"NGSIM_LankershimBlvd_20260427","use_carla_materials":false},
+    {"path":"/Game/ZhiLing/Plugin_Import/Maps","name":"NGSIM_PeachtreeStreet_20260427","use_carla_materials":false},
+    {"path":"/Game/ZhiLing/Plugin_Import/Maps","name":"NGSIM_US-101_20260427","use_carla_materials":false}
+  ],
+  "props": []
+}

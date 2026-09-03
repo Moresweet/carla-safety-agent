@@ -6,6 +6,11 @@ RUNTIME_DIR="${SURFACE_RUNTIME_DIR:-$ROOT_DIR/.runtime}"
 CARLA_ROOT="${CARLA_ROOT:-/home/moresweet/carla}"
 UE4_ROOT="${UE4_ROOT:-/home/moresweet/UnrealEngine_4.26}"
 CARLA_MAP="${CARLA_MAP:-Town04}"
+if [[ "$CARLA_MAP" == /Game/* ]]; then
+  CARLA_MAP_PATH="$CARLA_MAP"
+else
+  CARLA_MAP_PATH="/Game/Carla/Maps/$CARLA_MAP"
+fi
 CARLA_PORT="${CARLA_PORT:-2000}"
 BRIDGE_PORT=8765
 FRONTEND_PORT=3000
@@ -60,7 +65,7 @@ cleanup_on_error() {
 }
 trap cleanup_on_error EXIT
 
-start_process carla "$UE4_EDITOR" "$CARLA_PROJECT" "/Game/Carla/Maps/$CARLA_MAP" \
+start_process carla "$UE4_EDITOR" "$CARLA_PROJECT" "$CARLA_MAP_PATH" \
   -game -windowed -ResX=1280 -ResY=720 -carla-server \
   "-carla-port=$CARLA_PORT" -quality-level=Low
 wait_port "$CARLA_PORT" CARLA 120

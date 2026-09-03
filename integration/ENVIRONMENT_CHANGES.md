@@ -4,6 +4,14 @@ This file records every required change outside this repository. Keep it in
 sync with `integration/carla/` so the host installation can be reproduced in a
 container image.
 
+## ZhiLing highD and NGSIM maps
+
+- Source archives: `/home/moresweet/Data/zhilingMap/highd_ZhiLing.zip` and `/home/moresweet/Data/zhilingMap/ngsim_ZhiLing.zip`.
+- Installed all members under `/home/moresweet/carla/Unreal/CarlaUE4/Content/ZhiLing`.
+- Added `Content/ZhiLing/Config/ZhiLing.Package.json` from the repository recipe so CARLA can enumerate all ten maps.
+- Reproduce with `scripts/install_zhiling_maps.sh`; restart UE4Editor afterward so its asset registry discovers the loose assets.
+- Raw trajectories remain under `/home/moresweet/Data/higd` and `/home/moresweet/Data/ngsim` and are not copied into Git.
+
 ## Source tree
 
 CARLA source root used during development: `/home/moresweet/carla`.

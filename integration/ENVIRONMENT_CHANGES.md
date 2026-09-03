@@ -100,6 +100,19 @@ material slot 1. Runtime thumbnail PNGs are cached under
 No files under Unreal Engine itself have been modified. Temporary validation
 scripts and screenshots under `/tmp` or `work/` are not required at runtime.
 
+## End-to-end driving targets
+
+External UniAD evaluation sources and weights are kept outside the repository:
+
+| Path | Source / version |
+| --- | --- |
+| `/home/moresweet/Data/e2e/Bench2Drive` | `Thinklab-SJTU/Bench2Drive`, branch `0.0.4`, commit `7ec25d1c9f7522d923ce5f3420986cef1cb2d956` |
+| `/home/moresweet/Data/e2e/Bench2DriveZoo` | `Thinklab-SJTU/Bench2DriveZoo`, branch `uniad/vad-0.0.4`, commit `d9caa0af805ec3c435533aa268e2723d80c20017` |
+| `/home/moresweet/Data/e2e/Bench2DriveZoo/ckpts/uniad_tiny_b2d.pth` | Official UniAD-Tiny checkpoint; 872547048 bytes; SHA-256 `de4396893c0a48a324fad4b87e4e5010a0eca22663ad434d0cf7c89c9bb5b7cc` |
+
+These clones are unmodified. Runtime symlinks into Bench2Drive are created by
+`scripts/run_uniad_target.sh` and need not be copied into an image layer.
+
 ## Container verification
 
 Run `integration/carla/verify_external_environment.py` after image assembly.

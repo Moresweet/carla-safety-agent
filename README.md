@@ -373,6 +373,21 @@ PYTHONPATH=src /home/moresweet/carla/.venv/bin/python -m carla_safety_agent.cli 
 
 The output contains `results.json` sorted by risk plus a per-scenario trace.
 
+## UniAD closed-loop target
+
+The first end-to-end driving target uses the official Bench2DriveZoo UniAD
+adapter. Run `scripts/run_uniad_target.sh --doctor` to validate the isolated
+model environment, then use `scripts/run_uniad_target.sh` for a closed-loop
+route. Convert the benchmark result into a safety-critical failure ranking with:
+
+```bash
+PYTHONPATH=src python tools/uniad_results.py \
+  runs/uniad/bench2drive.json --output runs/uniad/failure-report.json
+```
+
+Pinned sources, compatibility constraints and external files are documented in
+`integration/uniad/README.md` and `integration/ENVIRONMENT_CHANGES.md`.
+
 The agent loop is: define a scenario family and parameter envelope, generate a
 boundary-biased campaign, execute it through the narrow CARLA adapter, evaluate
 each trace with explicit oracles, rank critical evidence, then use retained

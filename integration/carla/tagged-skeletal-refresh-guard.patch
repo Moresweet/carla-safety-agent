@@ -1,21 +1,27 @@
 diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.h b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.h
 --- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.h
 +++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.h
-@@ -64,6 +64,8 @@ public:
+@@ -64,1 +64,3 @@ public:
    TArray<UMaterialInstanceDynamic*> GetTaggedMaterials();
 +
 +  void WaitForParentSkeletalMesh(int32 Frames = 3);
 diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp
 --- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp
 +++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp
-@@ -70,6 +70,12 @@ TArray<UMaterialInstanceDynamic*> UTaggedComponent::GetTaggedMaterials()
+@@ -4,2 +4,3 @@
+ #include "Rendering/SkeletalMeshRenderData.h"
++#include "RenderingThread.h"
+ #include "SkeletalRenderPublic.h"
+@@ -70,1 +70,8 @@ TArray<UMaterialInstanceDynamic*> UTaggedComponent::GetTaggedMaterials()
  }
 +void UTaggedComponent::WaitForParentSkeletalMesh(int32 Frames)
 +{
 +  bShouldWaitFrame = true;
 +  NumFramesToWait = FMath::Max(Frames, 1);
++  MarkRenderStateDirty();
++  FlushRenderingCommands();
 +}
-@@ -228,14 +234,17 @@ void UTaggedComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction * ThisTickFunction)
+@@ -228,13 +235,13 @@ void UTaggedComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction * ThisTickFunction)
    if (bSkeletalMesh)
    {
 -    MarkRenderStateDirty();
@@ -28,16 +34,12 @@ diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp
        }
        NumFramesToWait--;
      }
-+    else
-+    {
-+      MarkRenderStateDirty();
-+    }
    }
  }
 diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
 --- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
 +++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
-@@ -433,6 +433,13 @@ void ACarlaGameModeBase::ApplyTextureToActor(
+@@ -433,5 +433,16 @@ void ACarlaGameModeBase::ApplyTextureToActor(
        if(!DynamicMaterial)
        {
          DynamicMaterial = UMaterialInstanceDynamic::Create(OriginalMaterial, NULL);
@@ -48,5 +50,9 @@ diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.c
 +            TaggedComponent->WaitForParentSkeletalMesh();
 +          }
 +        }
-         Mesh->SetMaterial(i, DynamicMaterial);
-       }
+        Mesh->SetMaterial(i, DynamicMaterial);
++        if (Mesh->IsA<USkeletalMeshComponent>())
++        {
++          FlushRenderingCommands();
++        }
+      }

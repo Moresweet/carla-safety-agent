@@ -1,0 +1,13 @@
+diff --git a/mmcv/ops/csrc/pytorch/cpu/nms_rotated.cpp b/mmcv/ops/csrc/pytorch/cpu/nms_rotated.cpp
+index 976871e..855e03f 100644
+--- a/mmcv/ops/csrc/pytorch/cpu/nms_rotated.cpp
++++ b/mmcv/ops/csrc/pytorch/cpu/nms_rotated.cpp
+@@ -59,7 +59,7 @@ Tensor nms_rotated_cpu(const Tensor dets, const Tensor scores,
+   Tensor keep = at::empty({dets_num}, dets.options().dtype(at::kLong));
+   Tensor order_t = std::get<1>(scores.sort(0, /* descending=*/true));
+
+-  AT_DISPATCH_FLOATING_TYPES(dets.type(), "nms_rotated", [&] {
++  AT_DISPATCH_FLOATING_TYPES(dets.scalar_type(), "nms_rotated", [&] {
+     nms_rotated_cpu_kernel<scalar_t>(dets, order_t, dets_sorted, areas,
+                                      suppressed, keep, iou_threshold);
+   });

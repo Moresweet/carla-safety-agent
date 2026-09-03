@@ -64,11 +64,15 @@ def main() -> int:
         import torch
         cuda = {"torch": torch.__version__, "available": torch.cuda.is_available(),
                 "runtime": torch.version.cuda,
-                "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None}
+                "device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+                "capability": list(torch.cuda.get_device_capability(0)) if torch.cuda.is_available() else None}
+    profile = sys.version_info[:2] == (3, 10)
+    cuda_profile = bool(cuda and cuda["available"] and cuda["runtime"] == "12.8")
     report = {
         "python": sys.version.split()[0],
-        "supported_python": sys.version_info[:2] == (3, 8),
-        "nvcc": shutil.which("nvcc"),
+        "supported_python": profile,
+        "nvcc": shutil.which("nvcc") or str(Path(sys.prefix) / "bin/nvcc")
+        if (Path(sys.prefix) / "bin/nvcc").is_file() else None,
         "repositories": repos,
         "checkpoint": {"path": str(checkpoint), "exists": checkpoint.is_file(),
                        "bytes": checkpoint.stat().st_size if checkpoint.is_file() else 0,
@@ -83,7 +87,7 @@ def main() -> int:
         report["supported_python"] and all(packages.values())
         and checkpoint.is_file() and checkpoint.stat().st_size == CHECKPOINT_BYTES
         and all(v["head"] == v["expected"] for v in repos.values())
-        and bool(cuda and cuda["available"])
+        and cuda_profile
     )
     print(json.dumps(report, indent=2))
     return 0 if report["ready"] else 2

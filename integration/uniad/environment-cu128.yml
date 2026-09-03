@@ -1,0 +1,17 @@
+name: uniad-cu128
+channels:
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pip
+  - setuptools=80.9.0
+  - wheel
+  - cmake
+  - ninja
+  - packaging
+  - gcc_linux-64=11
+  - gxx_linux-64=11
+  - cuda-nvcc=12.8
+  - cuda-cudart-dev=12.8
+  - cuda-libraries-dev=12.8

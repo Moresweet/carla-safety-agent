@@ -1,0 +1,29 @@
+diff --git a/PythonAPI/carla/setup.py b/PythonAPI/carla/setup.py
+--- a/PythonAPI/carla/setup.py
++++ b/PythonAPI/carla/setup.py
+@@ -65,8 +65,12 @@ def get_libcarla_extensions():
+                 '-Wduplicate-enum', '-Wnon-virtual-dtor', '-Wheader-hygiene',
+                 '-Wconversion', '-Wfloat-overflow-conversion',
+                 '-Wno-error=unused-command-line-argument',
++                '-Wno-error=ignored-optimization-argument',
+                 '-DBOOST_ERROR_CODE_HEADER_ONLY', '-DLIBCARLA_WITH_PYTHON_SUPPORT',
+                 '-stdlib=libstdc++'
+             ]
++            if os.environ.get('CARLA_UE4_GCC_TOOLCHAIN'):
++                extra_compile_args += [
++                    '--gcc-toolchain=' + os.environ['CARLA_UE4_GCC_TOOLCHAIN']]
+             if is_rss_variant_enabled():
+                 extra_compile_args += ['-DLIBCARLA_RSS_ENABLED']
+diff --git a/Util/BuildTools/Setup.sh b/Util/BuildTools/Setup.sh
+--- a/Util/BuildTools/Setup.sh
++++ b/Util/BuildTools/Setup.sh
+@@ -202,6 +202,6 @@ for PY_VERSION in "${PY_VERSION_LIST[@]}" ; do
+         _B2_LINK_EXTRA=""
+     fi
+
+-    ./b2 toolset="${BOOST_TOOLSET}" cxxflags="${BOOST_CFLAGS}" ${_B2_LINK_EXTRA} --prefix="../${BOOST_BASENAME}-install" -j ${CARLA_BUILD_CONCURRENCY} stage release
+-    ./b2 toolset="${BOOST_TOOLSET}" cxxflags="${BOOST_CFLAGS}" ${_B2_LINK_EXTRA} --prefix="../${BOOST_BASENAME}-install" -j ${CARLA_BUILD_CONCURRENCY} install
++    ./b2 toolset="${BOOST_TOOLSET}" python="${pyv}" cxxflags="${BOOST_CFLAGS}" ${_B2_LINK_EXTRA} --prefix="../${BOOST_BASENAME}-install" -j ${CARLA_BUILD_CONCURRENCY} stage release
++    ./b2 toolset="${BOOST_TOOLSET}" python="${pyv}" cxxflags="${BOOST_CFLAGS}" ${_B2_LINK_EXTRA} --prefix="../${BOOST_BASENAME}-install" -j ${CARLA_BUILD_CONCURRENCY} install
+
+     popd >/dev/null

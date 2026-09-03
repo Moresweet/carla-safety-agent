@@ -110,8 +110,28 @@ External UniAD evaluation sources and weights are kept outside the repository:
 | `/home/moresweet/Data/e2e/Bench2DriveZoo` | `Thinklab-SJTU/Bench2DriveZoo`, branch `uniad/vad-0.0.4`, commit `d9caa0af805ec3c435533aa268e2723d80c20017` |
 | `/home/moresweet/Data/e2e/Bench2DriveZoo/ckpts/uniad_tiny_b2d.pth` | Official UniAD-Tiny checkpoint; 872547048 bytes; SHA-256 `de4396893c0a48a324fad4b87e4e5010a0eca22663ad434d0cf7c89c9bb5b7cc` |
 
-These clones are unmodified. Runtime symlinks into Bench2Drive are created by
-`scripts/run_uniad_target.sh` and need not be copied into an image layer.
+The upstream commits remain pinned. Runtime symlinks into Bench2Drive are
+created by `scripts/run_uniad_target.sh` and need not be copied into an image
+layer; source compatibility changes are captured as repository patches.
+
+The local Bench2DriveZoo clone has one source compatibility change recorded in
+`integration/uniad/torch-2.7-dispatch.patch`: MMCV's retired `Tensor.type()`
+dispatch call is replaced with `Tensor.scalar_type()` for PyTorch 2.7.
+
+The CARLA source tree has Python 3.10 wheel-build compatibility changes,
+recorded in `integration/uniad/carla-python310-conda-flags.patch`. It prevents
+the UE4 Clang toolchain from treating Conda's unsupported GCC optimization flag
+as a fatal error and lets the wheel build select a toolchain explicitly. The
+CARLA setup script also pins the requested Boost.Python version instead of
+silently selecting the host's Python 3.14 configuration. These changes do not
+alter CARLA runtime behavior or RPC messages.
+
+Miniconda is installed at `/home/moresweet/Data/e2e/miniconda3`; the tested
+environment is `/home/moresweet/Data/e2e/miniconda3/envs/uniad-cu128`. The
+matching source-built wheel is
+`/home/moresweet/carla/PythonAPI/carla/dist/carla-0.9.16-cp310-cp310-linux_x86_64.whl`.
+Use `scripts/install_uniad_cu128.sh` and `scripts/build_carla_python310.sh` when
+assembling a container image.
 
 ## Container verification
 

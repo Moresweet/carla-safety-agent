@@ -37,7 +37,6 @@ _hero_lock = threading.Event()
 _map_cache = {}
 _environment_cache = {}
 _actor_object_names = {}
-_user_created_actor_ids = set()
 _thumbnail_cache = {}
 _thumbnail_lock = threading.Lock()
 _thumbnail_dir = os.environ.get("THUMBNAIL_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), ".runtime", "thumbnails"))
@@ -130,9 +129,7 @@ def actor_record(actor) -> dict:
             "name": actor.type_id, "label": f"{actor.type_id} · #{actor.id}",
             "location": vector(actor.get_location()),
             "extent": vector(extent),
-            "hero": actor.attributes.get("role_name") == "hero",
-            "origin": "user" if actor.id in _user_created_actor_ids else "native",
-            "user_created": actor.id in _user_created_actor_ids}
+            "hero": actor.attributes.get("role_name") == "hero"}
 
 
 def environment_objects(world, category: str):
@@ -151,8 +148,7 @@ def environment_record(obj, category: str) -> dict:
     box = obj.bounding_box
     location = box.location
     return {"key": f"environment:{obj.id}", "id": str(obj.id),
-            "source": "environment", "origin": "native", "user_created": False,
-            "category": category, "group": group,
+            "source": "environment", "category": category, "group": group,
             "kind": coarse, "name": obj.name,
             "label": f"{obj.name} · {str(obj.id)[-6:]}",
             "location": vector(location), "extent": vector(box.extent),
@@ -249,7 +245,7 @@ def spawn_object(blueprint_id: str, transform_data: dict) -> dict:
             lane_type=carla.LaneType.Driving | carla.LaneType.Sidewalk)
         if waypoint:
             spawn_location.z = waypoint.transform.location.z + (
-                0.5 if blueprint_id.startswith("vehicle.") else
+                3.0 if blueprint_id.startswith("vehicle.") else
                 1.0 if blueprint_id.startswith("walker.") else 0.5)
     transform = carla.Transform(
         spawn_location,
@@ -261,13 +257,6 @@ def spawn_object(blueprint_id: str, transform_data: dict) -> dict:
         blueprint.set_attribute("role_name", "hero")
     before = set(world.get_names_of_all_objects())
     actor = world.spawn_actor(blueprint, transform)
-    _user_created_actor_ids.add(actor.id)
-    if blueprint_id.startswith("vehicle."):
-        actor.set_autopilot(False)
-        actor.set_target_velocity(carla.Vector3D())
-        actor.set_target_angular_velocity(carla.Vector3D())
-        actor.apply_control(carla.VehicleControl(brake=1.0, hand_brake=True))
-        actor.set_simulate_physics(False)
     after = set(world.get_names_of_all_objects())
     created_names = sorted(after-before)
     if created_names:
@@ -313,7 +302,6 @@ def delete_actor(actor_id: int) -> dict:
     type_id = actor.type_id
     actor.destroy()
     _actor_object_names.pop(actor_id, None)
-    _user_created_actor_ids.discard(actor_id)
     return {"ok": True, "actor_id": actor_id, "type_id": type_id}
 
 
@@ -421,8 +409,6 @@ def runtime_name_for_actor(world, actor):
 
 def scene_state() -> dict:
     world = connect_world()
-    _user_created_actor_ids.intersection_update(
-        actor.id for actor in world.get_actors())
     actors = [actor_record(actor) for actor in world.get_actors()
               if actor.type_id.startswith(("vehicle.", "walker."))]
     map_name = world.get_map().name

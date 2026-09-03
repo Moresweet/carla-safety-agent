@@ -1,6 +1,6 @@
 "use client";
 type V={x:number;y:number;z:number};
-export type SceneObject={key:string;id?:number;kind:"vehicle"|"walker"|"building"|"road"|"prop";name:string;label:string;location:V;extent:V;hero?:boolean;origin?:"native"|"user";user_created?:boolean};
+export type SceneObject={key:string;id?:number;kind:"vehicle"|"walker"|"building"|"road"|"prop";name:string;label:string;location:V;extent:V;hero?:boolean};
 export type SceneState={map:string;bounds:{min_x:number;max_x:number;min_y:number;max_y:number};road_points:V[];objects:SceneObject[];static_targets:SceneObject[];spectator:{location:V;rotation:{yaw:number;pitch:number}};hero_id:number|null;hero_lock:boolean};
 const colors={vehicle:"#00aaff",walker:"#ffc800",building:"#be50ff",road:"#ff4646",prop:"#3cdc78"};
 export default function BevMap({state,selected,onPick,onDropBlueprint}:{state:SceneState|null;selected:string;onPick:(object:SceneObject)=>void;onDropBlueprint?:(blueprint:string,x:number,y:number)=>void}){

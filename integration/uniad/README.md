@@ -5,6 +5,23 @@ searches for difficult interactions, while the official Bench2Drive adapter
 provides six-camera inference and CARLA control. Bench2Drive output is converted
 to a failure-first ranking for replay and scenario minimization.
 
+## Project-owned runtime boundary
+
+The web application no longer talks to Bench2Drive while a route is running.
+`carla_safety_agent.evaluation_control` owns the live-state schema, object-edit
+command queue, user/evaluation provenance labels and camera focus behavior.
+The evaluator invokes that module once per synchronous CARLA frame through the
+small `bench2drive-live-edit-hook.patch`; this is the only benchmark-specific
+control hook.
+
+This is the first extraction step toward a native evaluator. Today the route
+construction and UniAD sensor wrapper still come from the pinned upstream
+sources. They must remain explicit compatibility dependencies until their
+behavior is replaced and regression-tested; copying the whole benchmark into
+this repository would hide rather than remove that dependency. The next
+extraction unit is the route/scenario executor, while the UI, edit protocol and
+failure-first result schema remain unchanged.
+
 ## Pinned external sources
 
 - Bench2Drive `0.0.4`: `7ec25d1c9f7522d923ce5f3420986cef1cb2d956`

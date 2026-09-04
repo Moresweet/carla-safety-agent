@@ -127,6 +127,9 @@ already managed by Surface Studio instead of requiring a packaged
 `CarlaUE4.sh` and launching a second simulator.
 `integration/uniad/bench2drive-python310.patch` replaces the three removed
 ElementTree `getchildren()` calls used while parsing route and scenario XML.
+`integration/uniad/bench2drive-live-edit-hook.patch` adds one frame-boundary
+callback into the evaluator. The callback implementation, command protocol and
+live state schema are owned by this repository in `evaluation_control.py`.
 
 The CARLA source tree has Python 3.10 wheel-build compatibility changes,
 recorded in `integration/uniad/carla-python310-conda-flags.patch`. It prevents

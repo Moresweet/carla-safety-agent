@@ -32,7 +32,7 @@ ln -sfn "$ZOO/team_code/planner.py" "$B2D/leaderboard/team_code/planner.py"
 
 export CARLA_ROOT
 export CARLA_SERVER="${CARLA_SERVER:-$CARLA_ROOT/CarlaUE4.sh}"
-export PYTHONPATH="$CARLA_ROOT/PythonAPI/carla:$B2D:$B2D/leaderboard:$B2D/leaderboard/team_code:$B2D/scenario_runner:$ZOO"
+export PYTHONPATH="$REPO_ROOT/src:$CARLA_ROOT/PythonAPI/carla:$B2D:$B2D/leaderboard:$B2D/leaderboard/team_code:$B2D/scenario_runner:$ZOO"
 export SCENARIO_RUNNER_ROOT="$B2D/scenario_runner"
 export LEADERBOARD_ROOT="$B2D/leaderboard"
 export CHALLENGE_TRACK_CODENAME=SENSORS

@@ -11,6 +11,7 @@ import hashlib
 import sys
 import signal
 import subprocess
+import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -49,6 +50,7 @@ _e2e_job = {"state": "idle", "kind": None, "started_at": None,
 _scene_snapshot = None
 _e2e_log = PROJECT_ROOT / ".runtime" / "uniad-ui.log"
 _e2e_pid = PROJECT_ROOT / ".runtime" / "uniad.pid"
+_evaluation_control_dir = PROJECT_ROOT / ".runtime" / "evaluation-control"
 E2E_ROOT = Path(os.environ.get("E2E_ROOT", "/home/moresweet/Data/e2e"))
 UNIAD_PYTHON = Path(os.environ.get(
     "UNIAD_PYTHON", str(E2E_ROOT / "miniconda3/envs/uniad-cu128/bin/python")))
@@ -91,6 +93,48 @@ def e2e_routes() -> list[dict]:
     return routes
 
 
+def evaluation_active() -> bool:
+    with _e2e_lock:
+        return _e2e_job["state"] in ("running", "stopping")
+
+
+def evaluation_snapshot() -> dict | None:
+    path = _evaluation_control_dir / "state.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def evaluation_command(action: str, payload: dict, timeout: float = 30.0) -> dict:
+    if not evaluation_active():
+        raise RuntimeError("No closed-loop evaluation is running")
+    commands = _evaluation_control_dir / "commands"
+    results = _evaluation_control_dir / "results"
+    commands.mkdir(parents=True, exist_ok=True)
+    results.mkdir(parents=True, exist_ok=True)
+    command_id = uuid.uuid4().hex
+    target = commands / f"{command_id}.json"
+    temporary = target.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"action": action, "payload": payload}), encoding="utf-8")
+    temporary.replace(target)
+    result_path = results / target.name
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+            result_path.unlink(missing_ok=True)
+            if not result.get("ok"):
+                raise RuntimeError(result.get("error", "Evaluation edit failed"))
+            return result
+        except FileNotFoundError:
+            time.sleep(0.05)
+        except json.JSONDecodeError:
+            time.sleep(0.02)
+    target.unlink(missing_ok=True)
+    raise RuntimeError("The evaluator did not apply the edit within 30 seconds")
+
+
 def _finish_e2e(process):
     returncode = process.wait()
     try:
@@ -120,7 +164,7 @@ def e2e_status() -> dict:
         except (OSError, json.JSONDecodeError):
             results = {"error": "Result file is not valid JSON"}
     return {"ok": True, "algorithms": [{"id": "uniad", "name": "UniAD-Tiny",
-            "framework": "Bench2Drive", "checkpoint": "uniad_tiny_b2d.pth",
+            "framework": "CARLA Safety Runtime", "checkpoint": "uniad_tiny_b2d.pth",
             "sensors": "6 cameras", "enabled": True}], "job": job,
             "routes": e2e_routes(), "log": log, "results": results}
 
@@ -150,9 +194,16 @@ def start_e2e(data: dict) -> dict:
         log_stream = _e2e_log.open("wb")
         env = os.environ.copy()
         env.pop("PYTHONPATH", None)
-        env.update(E2E_ROOT=str(E2E_ROOT), UNIAD_PYTHON=str(UNIAD_PYTHON))
+        env.update(E2E_ROOT=str(E2E_ROOT), UNIAD_PYTHON=str(UNIAD_PYTHON),
+                   CSA_EVALUATION_CONTROL_DIR=str(_evaluation_control_dir))
         if action == "run":
             env["ROUTES"] = str(route)
+            for directory in (_evaluation_control_dir / "commands",
+                              _evaluation_control_dir / "results"):
+                directory.mkdir(parents=True, exist_ok=True)
+                for stale in directory.glob("*.json"):
+                    stale.unlink()
+            (_evaluation_control_dir / "state.json").unlink(missing_ok=True)
         _e2e_process = subprocess.Popen(
             command, cwd=PROJECT_ROOT, env=env, stdout=log_stream,
             stderr=subprocess.STDOUT, start_new_session=True)
@@ -271,6 +322,19 @@ def environment_record(obj, category: str) -> dict:
 
 
 def catalog_categories() -> dict:
+    if evaluation_active():
+        snapshot = evaluation_snapshot() or {}
+        actors = snapshot.get("objects", [])
+        categories = [{"id": name, "group": group, "coarse": coarse,
+                       "count": 0, "editable": "visibility_texture"}
+                      for name, (_, group, coarse) in ENVIRONMENT_CATEGORIES.items()]
+        for name, kind in (("vehicles", "vehicle"), ("pedestrians", "walker"),
+                           ("spawned_props", "prop")):
+            categories.append({"id": name, "group": "dynamic", "coarse": kind,
+                               "count": sum(item.get("kind") == kind for item in actors),
+                               "editable": "full"})
+        return {"ok": True, "map": snapshot.get("map", "evaluation"),
+                "categories": categories, "evaluation_active": True}
     world = connect_world()
     dynamic = world.get_actors()
     categories = []
@@ -290,6 +354,23 @@ def catalog_categories() -> dict:
 
 
 def catalog_objects(category: str, query: str, offset: int, limit: int) -> dict:
+    if evaluation_active():
+        if category in ENVIRONMENT_CATEGORIES:
+            return evaluation_command("catalog_environment", {
+                "category": category, "query": query, "offset": offset, "limit": limit})
+        snapshot = evaluation_snapshot() or {}
+        kind = {"vehicles": "vehicle", "pedestrians": "walker",
+                "spawned_props": "prop"}.get(category)
+        if not kind:
+            raise RuntimeError(f"Unknown category: {category}")
+        records = [item for item in snapshot.get("objects", []) if item.get("kind") == kind]
+        if query:
+            needle = query.casefold()
+            records = [item for item in records if needle in item["name"].casefold()
+                       or needle in str(item["id"])]
+        return {"ok": True, "category": category, "total": len(records),
+                "offset": offset, "limit": limit, "objects": records[offset:offset+limit],
+                "evaluation_active": True}
     world = connect_world()
     if category in ENVIRONMENT_CATEGORIES:
         records = [environment_record(obj, category)
@@ -321,6 +402,8 @@ def find_environment(world, object_id: int):
 
 
 def focus_environment(object_id: int) -> dict:
+    if evaluation_active():
+        return evaluation_command("focus_environment", {"object_id": object_id})
     world = connect_world()
     category, obj = find_environment(world, object_id)
     record = environment_record(obj, category)
@@ -335,6 +418,9 @@ def focus_environment(object_id: int) -> dict:
 
 
 def set_environment_visibility(object_id: int, enabled: bool) -> dict:
+    if evaluation_active():
+        return evaluation_command("environment_visibility", {
+            "object_id": object_id, "visible": enabled})
     world = connect_world()
     category, obj = find_environment(world, object_id)
     world.enable_environment_objects({obj.id}, enabled)
@@ -343,6 +429,9 @@ def set_environment_visibility(object_id: int, enabled: bool) -> dict:
 
 
 def spawn_object(blueprint_id: str, transform_data: dict) -> dict:
+    if evaluation_active():
+        return evaluation_command("spawn", {"blueprint_id": blueprint_id,
+                                             "transform": transform_data})
     world = connect_world()
     blueprint = world.get_blueprint_library().find(blueprint_id)
     if not blueprint_id.startswith(("vehicle.", "walker.", "static.prop.")):
@@ -378,6 +467,9 @@ def spawn_object(blueprint_id: str, transform_data: dict) -> dict:
 
 
 def update_actor(actor_id: int, transform_data: dict) -> dict:
+    if evaluation_active():
+        return evaluation_command("update", {"actor_id": actor_id,
+                                              "transform": transform_data})
     world = connect_world()
     actor = world.get_actor(actor_id)
     if not actor:
@@ -395,6 +487,8 @@ def update_actor(actor_id: int, transform_data: dict) -> dict:
 
 
 def duplicate_actor(actor_id: int) -> dict:
+    if evaluation_active():
+        return evaluation_command("duplicate", {"actor_id": actor_id})
     world = connect_world()
     actor = world.get_actor(actor_id)
     if not actor:
@@ -408,6 +502,8 @@ def duplicate_actor(actor_id: int) -> dict:
 
 
 def delete_actor(actor_id: int) -> dict:
+    if evaluation_active():
+        return evaluation_command("delete", {"actor_id": actor_id})
     world = connect_world()
     actor = world.get_actor(actor_id)
     if not actor:
@@ -419,6 +515,12 @@ def delete_actor(actor_id: int) -> dict:
 
 
 def spawnable_blueprints(query: str, limit: int) -> dict:
+    if evaluation_active():
+        ids = list((evaluation_snapshot() or {}).get("blueprints", []))
+        if query:
+            ids = [item for item in ids if query.casefold() in item.casefold()]
+        return {"ok": True, "total": len(ids), "blueprints": ids[:limit],
+                "evaluation_active": True}
     world = connect_world()
     patterns = ("vehicle.*", "walker.pedestrian.*", "static.prop.*")
     ids = sorted({bp.id for pattern in patterns
@@ -522,10 +624,18 @@ def runtime_name_for_actor(world, actor):
 
 def scene_state() -> dict:
     global _scene_snapshot
-    with _e2e_lock:
-        evaluation_active = _e2e_job["state"] in ("running", "stopping")
-    if evaluation_active and _scene_snapshot is not None:
-        return {**_scene_snapshot, "evaluation_active": True}
+    if evaluation_active():
+        live = evaluation_snapshot()
+        if live:
+            hero = next((item for item in live.get("objects", []) if item.get("hero")), None)
+            return {"ok": True, "map": live["map"], "bounds": live["bounds"],
+                    "road_points": live.get("road_points", []), "objects": live.get("objects", []),
+                    "static_targets": [], "spectator": live["spectator"],
+                    "hero_id": hero.get("id") if hero else None,
+                    "hero_lock": False, "evaluation_active": True,
+                    "updated_at": live.get("updated_at")}
+        if _scene_snapshot is not None:
+            return {**_scene_snapshot, "evaluation_active": True}
     world = connect_world()
     actors = [actor_record(actor) for actor in world.get_actors()
               if actor.type_id.startswith(("vehicle.", "walker."))]
@@ -566,6 +676,8 @@ def scene_state() -> dict:
 
 
 def focus_actor(actor_id: int) -> dict:
+    if evaluation_active():
+        return evaluation_command("focus_actor", {"actor_id": actor_id})
     world = connect_world()
     actor = world.get_actor(actor_id)
     if not actor:
@@ -605,6 +717,8 @@ def focus_static(kind: str, name: str) -> dict:
 
 
 def focus_bev(x: float, y: float) -> dict:
+    if evaluation_active():
+        return evaluation_command("focus_bev", {"x": x, "y": y})
     world = connect_world()
     _hero_lock.clear()
     target = carla.Location(x=x, y=y, z=0.0)

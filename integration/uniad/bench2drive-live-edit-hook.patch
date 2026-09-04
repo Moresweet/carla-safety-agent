@@ -1,0 +1,27 @@
+diff --git a/leaderboard/leaderboard/scenarios/scenario_manager.py b/leaderboard/leaderboard/scenarios/scenario_manager.py
+--- a/leaderboard/leaderboard/scenarios/scenario_manager.py
++++ b/leaderboard/leaderboard/scenarios/scenario_manager.py
+@@ -17,6 +17,7 @@ import time
+ 
+ import py_trees
+ import carla
++from carla_safety_agent.evaluation_control import EvaluationControl
+ import threading
+ 
+ from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
+@@ -70,6 +71,7 @@ class ScenarioManager(object):
+ 
+         self._watchdog = None
+         self._agent_watchdog = None
++        self._safety_control = EvaluationControl()
+         self._scenario_thread = None
+ 
+         self._statistics_manager = statistics_manager
+@@ -230,6 +232,7 @@ class ScenarioManager(object):
+             ego_trans = self.ego_vehicles[0].get_transform()
+             self._spectator.set_transform(carla.Transform(ego_trans.location + carla.Location(z=70),
+                                                           carla.Rotation(pitch=-90)))
++            self._safety_control.on_frame(CarlaDataProvider.get_world())
+ 
+     def get_running_status(self):
+         """

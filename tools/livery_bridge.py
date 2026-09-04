@@ -9,6 +9,9 @@ import threading
 import time
 import hashlib
 import sys
+import signal
+import subprocess
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -39,6 +42,14 @@ _environment_cache = {}
 _actor_object_names = {}
 _thumbnail_cache = {}
 _thumbnail_lock = threading.Lock()
+_e2e_lock = threading.Lock()
+_e2e_process = None
+_e2e_job = {"state": "idle", "kind": None, "started_at": None,
+            "ended_at": None, "returncode": None, "command": None}
+_e2e_log = PROJECT_ROOT / ".runtime" / "uniad-ui.log"
+E2E_ROOT = Path(os.environ.get("E2E_ROOT", "/home/moresweet/Data/e2e"))
+UNIAD_PYTHON = Path(os.environ.get(
+    "UNIAD_PYTHON", str(E2E_ROOT / "miniconda3/envs/uniad-cu128/bin/python")))
 _thumbnail_dir = os.environ.get("THUMBNAIL_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), ".runtime", "thumbnails"))
 ENVIRONMENT_CATEGORIES = {
     "buildings": (carla.CityObjectLabel.Buildings, "architecture", "building"),
@@ -60,6 +71,99 @@ ENVIRONMENT_CATEGORIES = {
     "dynamic_props": (carla.CityObjectLabel.Dynamic, "props", "building"),
     "static_props": (carla.CityObjectLabel.Static, "props", "building"),
 }
+
+
+def e2e_routes() -> list[dict]:
+    route_root = E2E_ROOT / "Bench2Drive/leaderboard/data"
+    paths = sorted(route_root.rglob("*.xml")) if route_root.is_dir() else []
+    routes = []
+    for path in paths:
+        try:
+            root = ET.parse(path).getroot()
+            count = (1 if root.tag == "route" else 0) + len(root.findall(".//route"))
+        except (OSError, ET.ParseError):
+            continue
+        if count:
+            routes.append({"name": path.stem, "path": str(path), "count": count,
+                           "relative": str(path.relative_to(route_root))})
+    return routes
+
+
+def _finish_e2e(process):
+    returncode = process.wait()
+    with _e2e_lock:
+        if _e2e_process is process:
+            _e2e_job.update(state="succeeded" if returncode == 0 else "failed",
+                            ended_at=time.time(), returncode=returncode)
+
+
+def e2e_status() -> dict:
+    with _e2e_lock:
+        job = dict(_e2e_job)
+    log = ""
+    if _e2e_log.is_file():
+        with _e2e_log.open("rb") as stream:
+            stream.seek(max(0, _e2e_log.stat().st_size - 24000))
+            log = stream.read().decode("utf-8", errors="replace")
+    results_path = PROJECT_ROOT / "runs/uniad/bench2drive.json"
+    results = None
+    if results_path.is_file():
+        try:
+            results = json.loads(results_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            results = {"error": "Result file is not valid JSON"}
+    return {"ok": True, "algorithms": [{"id": "uniad", "name": "UniAD-Tiny",
+            "framework": "Bench2Drive", "checkpoint": "uniad_tiny_b2d.pth",
+            "sensors": "6 cameras", "enabled": True}], "job": job,
+            "routes": e2e_routes(), "log": log, "results": results}
+
+
+def start_e2e(data: dict) -> dict:
+    global _e2e_process
+    action = str(data.get("action", "doctor"))
+    if action not in ("doctor", "model-smoke", "run"):
+        raise RuntimeError(f"Unknown UniAD action: {action}")
+    if not UNIAD_PYTHON.is_file():
+        raise RuntimeError(f"UniAD environment is missing: {UNIAD_PYTHON}")
+    with _e2e_lock:
+        if _e2e_process is not None and _e2e_process.poll() is None:
+            raise RuntimeError("A UniAD task is already running")
+        if action == "doctor":
+            command = [str(UNIAD_PYTHON), str(PROJECT_ROOT / "integration/uniad/doctor.py"),
+                       "--root", str(E2E_ROOT), "--carla-port", str(CARLA_PORT)]
+        elif action == "model-smoke":
+            command = [str(UNIAD_PYTHON), str(PROJECT_ROOT / "integration/uniad/model_smoke.py")]
+        else:
+            route = Path(str(data.get("route", ""))).resolve()
+            allowed = {Path(item["path"]).resolve() for item in e2e_routes()}
+            if route not in allowed:
+                raise RuntimeError("Select a route from the local Bench2Drive catalog")
+            command = [str(PROJECT_ROOT / "scripts/run_uniad_target.sh")]
+        _e2e_log.parent.mkdir(parents=True, exist_ok=True)
+        log_stream = _e2e_log.open("wb")
+        env = os.environ.copy()
+        env.update(E2E_ROOT=str(E2E_ROOT), UNIAD_PYTHON=str(UNIAD_PYTHON))
+        if action == "run":
+            env["ROUTES"] = str(route)
+        _e2e_process = subprocess.Popen(
+            command, cwd=PROJECT_ROOT, env=env, stdout=log_stream,
+            stderr=subprocess.STDOUT, start_new_session=True)
+        log_stream.close()
+        _e2e_job.clear()
+        _e2e_job.update(state="running", kind=action, started_at=time.time(),
+                        ended_at=None, returncode=None, command=command)
+        threading.Thread(target=_finish_e2e, args=(_e2e_process,), daemon=True).start()
+        return {"ok": True, "job": dict(_e2e_job)}
+
+
+def stop_e2e() -> dict:
+    with _e2e_lock:
+        process = _e2e_process
+        if process is None or process.poll() is not None:
+            return {"ok": True, "state": _e2e_job["state"]}
+        os.killpg(process.pid, signal.SIGTERM)
+        _e2e_job["state"] = "stopping"
+        return {"ok": True, "state": "stopping"}
 
 
 def compile_scenario(data: dict, execute: bool = False) -> dict:
@@ -662,6 +766,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(result).encode())
         elif request.path == "/scene/state":
             self.wfile.write(json.dumps(scene_state()).encode())
+        elif request.path == "/e2e/status":
+            self.wfile.write(json.dumps(e2e_status()).encode())
         elif request.path == "/targets":
             kind = parse_qs(request.query).get("kind", [""])[0]
             prefix = {"road": "Road_Road_", "building": "BP_House"}.get(kind, "")
@@ -682,14 +788,19 @@ class Handler(BaseHTTPRequestHandler):
                                 "/objects/environment/visibility",
                                 "/objects/spawn", "/objects/update",
                                 "/objects/duplicate", "/objects/delete",
-                                "/scenario/compile", "/scenario/run"):
+                                "/scenario/compile", "/scenario/run",
+                                "/e2e/start", "/e2e/stop"):
             self._headers(404)
             self.wfile.write(b'{"ok":false,"error":"not found"}')
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = self.rfile.read(length)
-            if request.path in ("/scenario/compile", "/scenario/run"):
+            if request.path == "/e2e/start":
+                result = start_e2e(json.loads(payload or b"{}"))
+            elif request.path == "/e2e/stop":
+                result = stop_e2e()
+            elif request.path in ("/scenario/compile", "/scenario/run"):
                 data = json.loads(payload or b"{}")
                 result = compile_scenario(data, request.path.endswith("/run"))
             elif request.path == "/focus/actor":

@@ -39,6 +39,17 @@ start_process() {
   echo "Started $name (PID $pid, log $RUNTIME_DIR/$name.log)"
 }
 
+resolve_map_asset() {
+  local map="$1"
+  if [[ "$map" == /Game/* ]]; then
+    printf '%s' "$map"
+  elif [[ -f "$CARLA_ROOT/Unreal/CarlaUE4/Content/Carla/Maps/$map/$map.umap" ]]; then
+    printf '/Game/Carla/Maps/%s/%s' "$map" "$map"
+  else
+    printf '/Game/Carla/Maps/%s' "$map"
+  fi
+}
+
 [[ -x "$UE4_EDITOR" ]] || fail "UE4Editor not found: $UE4_EDITOR"
 [[ -f "$CARLA_PROJECT" ]] || fail "CARLA project not found: $CARLA_PROJECT"
 [[ -d "$CARLA_PYTHONPATH" ]] || fail "CARLA Python path not found: $CARLA_PYTHONPATH"
@@ -60,9 +71,10 @@ cleanup_on_error() {
 }
 trap cleanup_on_error EXIT
 
-start_process carla "$UE4_EDITOR" "$CARLA_PROJECT" "/Game/Carla/Maps/$CARLA_MAP" \
+CARLA_MAP_ASSET="$(resolve_map_asset "$CARLA_MAP")"
+start_process carla "$UE4_EDITOR" "$CARLA_PROJECT" "$CARLA_MAP_ASSET" \
   -game -windowed -ResX=1280 -ResY=720 -carla-server \
-  "-carla-port=$CARLA_PORT" -quality-level=Low
+  "-carla-port=$CARLA_PORT" -quality-level=Low "-ExecCmds=r.GPUScene 0"
 wait_port "$CARLA_PORT" CARLA 120
 
 start_process bridge env PYTHONPATH="$CARLA_PYTHONPATH" \

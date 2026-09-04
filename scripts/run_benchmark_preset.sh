@@ -16,6 +16,7 @@ mkdir -p "$(dirname "$RESULTS")" "$REPO_ROOT/runs/benchmark/sensors"
 export PYTHONPATH="$B2D/leaderboard:$B2D/scenario_runner:$REPO_ROOT/src:$CARLA_ROOT/PythonAPI/carla:$E2E_ROOT:$ZOO"
 export CARLA_ROOT CARLA_SERVER="$CARLA_ROOT/CarlaUE4.sh"
 export BENCH2DRIVE_EXISTING_SERVER=1 IS_BENCH2DRIVE=True PLANNER_TYPE=traj
+export SCENARIO_RUNNER_ROOT="$B2D/scenario_runner"
 export SAVE_PATH="$REPO_ROOT/runs/benchmark/sensors"
 CONFIG="$ZOO/adzoo/uniad/configs/stage2_e2e/tiny_e2e_b2d.py+$ZOO/ckpts/uniad_tiny_b2d.pth+$RUN_NAME"
 

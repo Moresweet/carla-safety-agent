@@ -1,0 +1,18 @@
+diff --git a/leaderboard/leaderboard/leaderboard_evaluator.py b/leaderboard/leaderboard/leaderboard_evaluator.py
+--- a/leaderboard/leaderboard/leaderboard_evaluator.py
++++ b/leaderboard/leaderboard/leaderboard_evaluator.py
+@@ -273,7 +273,14 @@ class LeaderboardEvaluator(object):
+         """
+         Load a new CARLA world without changing the settings and provide data to CarlaDataProvider
+         """
+-        self.world = self.client.load_world(town, reset_settings=False)
++        current_world = self.client.get_world()
++        current_map = current_world.get_map().name.split("/")[-1]
++        if current_map == town:
++            print("Reusing the current CARLA world for {}".format(town), flush=True)
++            self.world = current_world
++        else:
++            self.world = self.client.load_world(town, reset_settings=False)
+
+         # Large Map settings are always reset, for some reason
+         settings = self.world.get_settings()

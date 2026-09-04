@@ -96,6 +96,13 @@ material slot 1. Runtime thumbnail PNGs are cached under
 - Unified launcher variables: `CARLA_ROOT`, `UE4_ROOT`, `CARLA_PYTHONPATH`,
   `NODE_BIN`, `PNPM_BIN`,
   `CARLA_MAP`, and `CARLA_PORT`; browser services use ports 3000 and 8765
+- The unified launcher resolves large-map directory layouts such as
+  `Content/Carla/Maps/Town12/Town12.umap`; `CARLA_MAP=Town12` therefore starts
+  `/Game/Carla/Maps/Town12/Town12` instead of the invalid flat-map path.
+- The editor is launched with `r.GPUScene 0` in the existing low-quality
+  research profile. UE4.26 otherwise races skeletal-proxy transform updates
+  with Town12 distance-field/GPU-scene updates while preset actors activate;
+  physics, CARLA sensors, semantic tags and evaluator logic remain enabled.
 - UniAD evaluator process groups are recorded in `.runtime/uniad.pid` so the
   unified stop script also terminates an active closed-loop run.
 
@@ -110,6 +117,7 @@ External UniAD evaluation sources and weights are kept outside the repository:
 | --- | --- |
 | `/home/moresweet/Data/e2e/Bench2DriveZoo` | `Thinklab-SJTU/Bench2DriveZoo`, branch `uniad/vad-0.0.4`, commit `d9caa0af805ec3c435533aa268e2723d80c20017` |
 | `/home/moresweet/Data/e2e/Bench2DriveZoo/ckpts/uniad_tiny_b2d.pth` | Official UniAD-Tiny checkpoint; 872547048 bytes; SHA-256 `de4396893c0a48a324fad4b87e4e5010a0eca22663ad434d0cf7c89c9bb5b7cc` |
+| `/home/moresweet/Data/e2e/Bench2Drive` | External preset-route evaluator; local compatibility changes are reproducible from `integration/bench2drive/` |
 
 The UniAD implementation commit remains pinned. The native project executor
 does not require the Bench2Drive evaluator, ScenarioRunner, XML routes, runtime
@@ -126,6 +134,16 @@ as a fatal error and lets the wheel build select a toolchain explicitly. The
 CARLA setup script also pins the requested Boost.Python version instead of
 silently selecting the host's Python 3.14 configuration. These changes do not
 alter CARLA runtime behavior or RPC messages.
+
+The external preset-route evaluator applies
+`integration/bench2drive/reuse-current-world.patch`. It reuses the connected
+CARLA world when the requested town is already loaded. This prevents a second
+same-town preset selection from rebuilding Town12's renderer state and avoids
+the UE4 distance-field/GPU-scene crash observed during redundant world loads.
+The project preset launcher also pins `SCENARIO_RUNNER_ROOT` to the external
+ScenarioRunner checkout. Without it the evaluator searches its working
+directory, silently skips named scenarios such as `ParkingCutIn`, and produces
+a route with no adversarial actors.
 
 Miniconda is installed at `/home/moresweet/Data/e2e/miniconda3`; the tested
 environment is `/home/moresweet/Data/e2e/miniconda3/envs/uniad-cu128`. The

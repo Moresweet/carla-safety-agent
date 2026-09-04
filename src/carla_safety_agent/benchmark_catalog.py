@@ -56,15 +56,25 @@ def route_catalog(root: Path) -> dict[str, Any]:
 def algorithm_catalog(zoo: Path) -> list[dict[str, Any]]:
     definitions = [
         ("uniad-tiny", "UniAD-Tiny", "team_code/uniad_b2d_agent.py",
-         "ckpts/uniad_tiny_b2d.pth", "available"),
-        ("vad", "VAD", "team_code/vad_b2d_agent.py", "ckpts/vad_b2d.pth", "missing_checkpoint"),
+         "ckpts/uniad_tiny_b2d.pth", "available", "UniAD/VAD"),
+        ("vad", "VAD", "team_code/vad_b2d_agent.py", "ckpts/vad_b2d_base.pth",
+         "missing_checkpoint", "UniAD/VAD"),
+        ("tcp", "TCP", "team_code/tcp_b2d_agent.py", "ckpts/tcp_b2d.pth",
+         "not_installed", "TCP/ADMLP branch"),
+        ("admlp", "AD-MLP", "team_code/admlp_b2d_agent.py", "ckpts/admlp_b2d.pth",
+         "not_installed", "TCP/ADMLP branch"),
+        ("driveadapter", "DriveAdapter", "team_code/driveadapter_b2d_agent.py",
+         "ckpts/driveadapter_b2d.pth", "not_released", "published comparison"),
+        ("thinktwice", "ThinkTwice", "team_code/thinktwice_b2d_agent.py",
+         "ckpts/thinktwice_b2d.pth", "not_released", "published comparison"),
     ]
     result = []
-    for identifier, name, agent, checkpoint, fallback in definitions:
+    for identifier, name, agent, checkpoint, fallback, availability_source in definitions:
         agent_path, checkpoint_path = zoo / agent, zoo / checkpoint
         state = "available" if agent_path.is_file() and checkpoint_path.is_file() else fallback
         result.append({"id": identifier, "name": name, "adapter": str(agent_path),
                        "checkpoint": str(checkpoint_path), "status": state,
+                       "availability_source": availability_source,
                        "source": "Thinklab-SJTU/Bench2DriveZoo"})
     return result
 

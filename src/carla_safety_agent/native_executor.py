@@ -216,7 +216,7 @@ class NativeScenarioExecutor:
                        "scenario": spec.to_dict(), "result": result.to_dict(), "trace": trace}
             output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             print(json.dumps(result.to_dict()), flush=True)
-            preview_hold = max(0.0, float(os.environ.get("CSA_RESULT_PREVIEW_SECONDS", "5")))
+            preview_hold = max(0.0, float(os.environ.get("CSA_RESULT_PREVIEW_SECONDS", "30")))
             if preview_hold:
                 print(f"Keeping finished scene visible for {preview_hold:g} seconds", flush=True)
                 time.sleep(preview_hold)

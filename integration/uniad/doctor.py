@@ -13,7 +13,6 @@ from pathlib import Path
 
 
 EXPECTED = {
-    "Bench2Drive": "7ec25d1c9f7522d923ce5f3420986cef1cb2d956",
     "Bench2DriveZoo": "d9caa0af805ec3c435533aa268e2723d80c20017",
 }
 CHECKPOINT_BYTES = 872_547_048

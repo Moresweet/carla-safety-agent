@@ -1,30 +1,19 @@
 # UniAD closed-loop target
 
-This integration treats UniAD as a system under test. The scenario generator
-searches for difficult interactions, while the official Bench2Drive adapter
-provides six-camera inference and CARLA control. Bench2Drive output is converted
-to a failure-first ranking for replay and scenario minimization.
+This integration treats UniAD as a replaceable system under test. The project
+owns natural-language compilation, ScenarioSpec, CARLA construction, six-camera
+sensor synchronization, route execution, live editing and safety evaluation.
+Only the official UniAD implementation and checkpoint remain external.
 
 ## Project-owned runtime boundary
 
-The web application no longer talks to Bench2Drive while a route is running.
-`carla_safety_agent.evaluation_control` owns the live-state schema, object-edit
-command queue, user/evaluation provenance labels and camera focus behavior.
-The evaluator invokes that module once per synchronous CARLA frame through the
-small `bench2drive-live-edit-hook.patch`; this is the only benchmark-specific
-control hook.
-
-This is the first extraction step toward a native evaluator. Today the route
-construction and UniAD sensor wrapper still come from the pinned upstream
-sources. They must remain explicit compatibility dependencies until their
-behavior is replaced and regression-tested; copying the whole benchmark into
-this repository would hide rather than remove that dependency. The next
-extraction unit is the route/scenario executor, while the UI, edit protocol and
-failure-first result schema remain unchanged.
+`carla_safety_agent.native_executor` consumes the exact JSON emitted by Generate
+Scene. It constructs the world, route, actors and sensors without an external
+benchmark evaluator. `evaluation_control` applies UI commands on synchronous
+frame boundaries, so scene editing remains available during model execution.
 
 ## Pinned external sources
 
-- Bench2Drive `0.0.4`: `7ec25d1c9f7522d923ce5f3420986cef1cb2d956`
 - Bench2DriveZoo `uniad/vad-0.0.4`: `d9caa0af805ec3c435533aa268e2723d80c20017`
 - Model: official `uniad_tiny_b2d.pth` under `Bench2DriveZoo/ckpts`, 872547048
   bytes, SHA-256 `de4396893c0a48a324fad4b87e4e5010a0eca22663ad434d0cf7c89c9bb5b7cc`
@@ -38,14 +27,11 @@ outside this repository because model weights and upstream sources are large.
 source /home/moresweet/Data/e2e/miniconda3/bin/activate uniad-cu128
 scripts/run_uniad_target.sh --doctor
 python integration/uniad/model_smoke.py
-scripts/run_uniad_target.sh
-PYTHONPATH=src python tools/uniad_results.py \
-  runs/uniad/bench2drive.json --output runs/uniad/failure-report.json
+SCENARIO=.runtime/generated-scenarios/my-scenario.json scripts/run_uniad_target.sh
 ```
 
-Use `ROUTES=/absolute/path/to/one-route.xml` for a short smoke run. A campaign
-should generate a small route/scenario batch, evaluate UniAD, rank failures,
-then mutate the highest-ranked scenario near its failure boundary.
+The web UI's “Test this scene with UniAD” action performs compilation and launch
+in one step. The output uses `carla-safety-evaluation/0.1` JSON.
 
 ## Compatibility boundary
 

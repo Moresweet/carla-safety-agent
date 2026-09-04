@@ -375,14 +375,15 @@ The output contains `results.json` sorted by risk plus a per-scenario trace.
 
 ## UniAD closed-loop target
 
-The first end-to-end driving target uses the official Bench2DriveZoo UniAD
-adapter. Run `scripts/run_uniad_target.sh --doctor` to validate the isolated
-model environment, then use `scripts/run_uniad_target.sh` for a closed-loop
-route. Convert the benchmark result into a safety-critical failure ranking with:
+The first end-to-end target uses the official UniAD adapter as a replaceable
+model plugin. Scenario compilation, CARLA actor construction, sensor timing,
+live editing, route execution and safety oracles are owned by this project.
+Generate Scene can launch its ScenarioSpec directly, or the same contract can
+be evaluated from the command line:
 
 ```bash
-PYTHONPATH=src python tools/uniad_results.py \
-  runs/uniad/bench2drive.json --output runs/uniad/failure-report.json
+SCENARIO=.runtime/generated-scenarios/my-scenario.json \
+  scripts/run_uniad_target.sh
 ```
 
 Pinned sources, compatibility constraints and external files are documented in

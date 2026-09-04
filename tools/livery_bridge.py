@@ -12,7 +12,7 @@ import sys
 import signal
 import subprocess
 import uuid
-import xml.etree.ElementTree as ET
+from dataclasses import replace
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -78,18 +78,18 @@ ENVIRONMENT_CATEGORIES = {
 
 
 def e2e_routes() -> list[dict]:
-    route_root = E2E_ROOT / "Bench2Drive/leaderboard/data"
-    paths = sorted(route_root.rglob("*.xml")) if route_root.is_dir() else []
+    route_root = PROJECT_ROOT / ".runtime/generated-scenarios"
+    paths = sorted(route_root.glob("*.json")) if route_root.is_dir() else []
     routes = []
     for path in paths:
         try:
-            root = ET.parse(path).getroot()
-            count = (1 if root.tag == "route" else 0) + len(root.findall(".//route"))
-        except (OSError, ET.ParseError):
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not all(key in payload for key in ("scenario_id", "ego", "oracle")):
+                continue
+        except (OSError, json.JSONDecodeError):
             continue
-        if count:
-            routes.append({"name": path.stem, "path": str(path), "count": count,
-                           "relative": str(path.relative_to(route_root))})
+        routes.append({"name": payload["scenario_id"], "path": str(path), "count": 1,
+                       "relative": f"{payload['scenario_id']} · {payload.get('family', 'scenario')}"})
     return routes
 
 
@@ -156,7 +156,7 @@ def e2e_status() -> dict:
         with _e2e_log.open("rb") as stream:
             stream.seek(max(0, _e2e_log.stat().st_size - 24000))
             log = stream.read().decode("utf-8", errors="replace")
-    results_path = PROJECT_ROOT / "runs/uniad/bench2drive.json"
+    results_path = Path(job.get("results") or PROJECT_ROOT / "runs/uniad/latest.json")
     results = None
     if results_path.is_file():
         try:
@@ -164,7 +164,7 @@ def e2e_status() -> dict:
         except (OSError, json.JSONDecodeError):
             results = {"error": "Result file is not valid JSON"}
     return {"ok": True, "algorithms": [{"id": "uniad", "name": "UniAD-Tiny",
-            "framework": "CARLA Safety Runtime", "checkpoint": "uniad_tiny_b2d.pth",
+            "framework": "Native Scenario Executor", "checkpoint": "uniad_tiny_b2d.pth",
             "sensors": "6 cameras", "enabled": True}], "job": job,
             "routes": e2e_routes(), "log": log, "results": results}
 
@@ -188,7 +188,7 @@ def start_e2e(data: dict) -> dict:
             route = Path(str(data.get("route", ""))).resolve()
             allowed = {Path(item["path"]).resolve() for item in e2e_routes()}
             if route not in allowed:
-                raise RuntimeError("Select a route from the local Bench2Drive catalog")
+                raise RuntimeError("Select a generated ScenarioSpec from the local catalog")
             command = [str(PROJECT_ROOT / "scripts/run_uniad_target.sh")]
         _e2e_log.parent.mkdir(parents=True, exist_ok=True)
         log_stream = _e2e_log.open("wb")
@@ -197,7 +197,9 @@ def start_e2e(data: dict) -> dict:
         env.update(E2E_ROOT=str(E2E_ROOT), UNIAD_PYTHON=str(UNIAD_PYTHON),
                    CSA_EVALUATION_CONTROL_DIR=str(_evaluation_control_dir))
         if action == "run":
-            env["ROUTES"] = str(route)
+            results_path = PROJECT_ROOT / "runs/uniad" / f"{route.stem}.json"
+            env["SCENARIO"] = str(route)
+            env["RESULTS"] = str(results_path)
             for directory in (_evaluation_control_dir / "commands",
                               _evaluation_control_dir / "results"):
                 directory.mkdir(parents=True, exist_ok=True)
@@ -211,7 +213,8 @@ def start_e2e(data: dict) -> dict:
         _e2e_pid.write_text(f"{_e2e_process.pid}\n")
         _e2e_job.clear()
         _e2e_job.update(state="running", kind=action, started_at=time.time(),
-                        ended_at=None, returncode=None, command=command)
+                        ended_at=None, returncode=None, command=command,
+                        results=str(results_path) if action == "run" else None)
         threading.Thread(target=_finish_e2e, args=(_e2e_process,), daemon=True).start()
         return {"ok": True, "job": dict(_e2e_job)}
 
@@ -229,15 +232,33 @@ def stop_e2e() -> dict:
 def compile_scenario(data: dict, execute: bool = False) -> dict:
     compilation = NaturalLanguageCompiler().compile(
         str(data.get("description", "")), int(data.get("seed", 7)))
-    response = {"ok": True, "scenario": compilation.scenario.to_dict(),
+    scenario = compilation.scenario
+    if data.get("max_duration_s") is not None:
+        duration = max(0.05, float(data["max_duration_s"]))
+        scenario = replace(scenario, oracle=replace(scenario.oracle, max_duration_s=duration))
+    response = {"ok": True, "scenario": scenario.to_dict(),
                 "warnings": list(compilation.warnings),
                 "extracted": compilation.extracted}
+    catalog = PROJECT_ROOT / ".runtime" / "generated-scenarios"
+    catalog.mkdir(parents=True, exist_ok=True)
+    scenario_path = catalog / f"{scenario.scenario_id}.json"
+    scenario_path.write_text(json.dumps(scenario.to_dict(), indent=2,
+                                        ensure_ascii=False), encoding="utf-8")
+    response["scenario_path"] = str(scenario_path)
     if execute:
         output = PROJECT_ROOT / ".runtime" / "generated-scenarios"
         result = CarlaAdapter(HOST, CARLA_PORT, 120.0).run(
-            compilation.scenario, output, render=True)
+            scenario, output, render=True)
         response["result"] = result.to_dict()
         response["output_dir"] = str(output)
+    return response
+
+
+def evaluate_scenario(data: dict) -> dict:
+    """Compile a natural-language scene and launch it in the native executor."""
+    response = compile_scenario(data)
+    response["evaluation"] = start_e2e({
+        "action": "run", "algorithm": "uniad", "route": response["scenario_path"]})
     return response
 
 
@@ -918,7 +939,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "/objects/environment/visibility",
                                 "/objects/spawn", "/objects/update",
                                 "/objects/duplicate", "/objects/delete",
-                                "/scenario/compile", "/scenario/run",
+                                "/scenario/compile", "/scenario/run", "/scenario/evaluate",
                                 "/e2e/start", "/e2e/stop"):
             self._headers(404)
             self.wfile.write(b'{"ok":false,"error":"not found"}')
@@ -930,6 +951,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = start_e2e(json.loads(payload or b"{}"))
             elif request.path == "/e2e/stop":
                 result = stop_e2e()
+            elif request.path == "/scenario/evaluate":
+                result = evaluate_scenario(json.loads(payload or b"{}"))
             elif request.path in ("/scenario/compile", "/scenario/run"):
                 data = json.loads(payload or b"{}")
                 result = compile_scenario(data, request.path.endswith("/run"))

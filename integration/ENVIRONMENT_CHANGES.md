@@ -108,28 +108,16 @@ External UniAD evaluation sources and weights are kept outside the repository:
 
 | Path | Source / version |
 | --- | --- |
-| `/home/moresweet/Data/e2e/Bench2Drive` | `Thinklab-SJTU/Bench2Drive`, branch `0.0.4`, commit `7ec25d1c9f7522d923ce5f3420986cef1cb2d956` |
 | `/home/moresweet/Data/e2e/Bench2DriveZoo` | `Thinklab-SJTU/Bench2DriveZoo`, branch `uniad/vad-0.0.4`, commit `d9caa0af805ec3c435533aa268e2723d80c20017` |
 | `/home/moresweet/Data/e2e/Bench2DriveZoo/ckpts/uniad_tiny_b2d.pth` | Official UniAD-Tiny checkpoint; 872547048 bytes; SHA-256 `de4396893c0a48a324fad4b87e4e5010a0eca22663ad434d0cf7c89c9bb5b7cc` |
 
-The upstream commits remain pinned. Runtime symlinks into Bench2Drive are
-created by `scripts/run_uniad_target.sh` and need not be copied into an image
-layer; source compatibility changes are captured as repository patches.
+The UniAD implementation commit remains pinned. The native project executor
+does not require the Bench2Drive evaluator, ScenarioRunner, XML routes, runtime
+symlinks, or modifications to an external evaluation repository.
 
 The local Bench2DriveZoo clone has one source compatibility change recorded in
 `integration/uniad/torch-2.7-dispatch.patch`: MMCV's retired `Tensor.type()`
 dispatch call is replaced with `Tensor.scalar_type()` for PyTorch 2.7.
-
-The local Bench2Drive evaluator applies
-`integration/uniad/bench2drive-existing-server.patch`. With
-`BENCH2DRIVE_EXISTING_SERVER=1`, it connects to the source-built CARLA process
-already managed by Surface Studio instead of requiring a packaged
-`CarlaUE4.sh` and launching a second simulator.
-`integration/uniad/bench2drive-python310.patch` replaces the three removed
-ElementTree `getchildren()` calls used while parsing route and scenario XML.
-`integration/uniad/bench2drive-live-edit-hook.patch` adds one frame-boundary
-callback into the evaluator. The callback implementation, command protocol and
-live state schema are owned by this repository in `evaluation_control.py`.
 
 The CARLA source tree has Python 3.10 wheel-build compatibility changes,
 recorded in `integration/uniad/carla-python310-conda-flags.patch`. It prevents

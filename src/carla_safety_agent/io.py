@@ -37,3 +37,20 @@ def load_specs(path: Path) -> list[ScenarioSpec]:
             item["generated_map"] = GeneratedMapSpec(**generated_map)
         result.append(ScenarioSpec(**item))
     return result
+
+
+def scenario_from_dict(value: dict[str, Any]) -> ScenarioSpec:
+    """Load one generated-scene contract without an intermediate list file."""
+    item = dict(value)
+    item["ego"] = ActorSpec(**item["ego"])
+    item["adversaries"] = tuple(ActorSpec(**actor) for actor in item["adversaries"])
+    item["environment"] = EnvironmentSpec(**item["environment"])
+    item["oracle"] = OracleSpec(**item["oracle"])
+    item["generated_assets"] = tuple(
+        ProceduralAssetSpec(**asset) for asset in item.get("generated_assets", []))
+    if item.get("generated_map"):
+        generated = dict(item["generated_map"])
+        generated["segments"] = tuple(RoadSegmentSpec(**segment)
+                                      for segment in generated["segments"])
+        item["generated_map"] = GeneratedMapSpec(**generated)
+    return ScenarioSpec(**item)

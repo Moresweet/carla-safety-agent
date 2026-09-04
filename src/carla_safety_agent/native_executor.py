@@ -136,6 +136,7 @@ class NativeScenarioExecutor:
                 sun_altitude_angle=spec.environment.sun_altitude_angle))
             ego = adapter._spawn(world, spec.ego, world.get_map().get_spawn_points())
             actors.append(ego)
+            self._focus_spectator(carla, world, ego)
             world.tick()
             adversaries = [adapter._spawn_interaction_actor(
                 carla, world, ego, actor, spec.family, index)
@@ -215,6 +216,10 @@ class NativeScenarioExecutor:
                        "scenario": spec.to_dict(), "result": result.to_dict(), "trace": trace}
             output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             print(json.dumps(result.to_dict()), flush=True)
+            preview_hold = max(0.0, float(os.environ.get("CSA_RESULT_PREVIEW_SECONDS", "5")))
+            if preview_hold:
+                print(f"Keeping finished scene visible for {preview_hold:g} seconds", flush=True)
+                time.sleep(preview_hold)
             return payload
         finally:
             if rig:
@@ -234,6 +239,17 @@ class NativeScenarioExecutor:
             if actor_ids:
                 client.apply_batch([carla.command.DestroyActor(actor_id) for actor_id in actor_ids])
             world.apply_settings(original)
+
+    @staticmethod
+    def _focus_spectator(carla: Any, world: Any, ego: Any) -> None:
+        """Place the free spectator behind the ego without attaching or locking it."""
+        transform = ego.get_transform()
+        forward = transform.get_forward_vector()
+        location = carla.Location(x=transform.location.x-forward.x*9.0,
+                                  y=transform.location.y-forward.y*9.0,
+                                  z=transform.location.z+4.5)
+        rotation = carla.Rotation(pitch=-16.0, yaw=transform.rotation.yaw)
+        world.get_spectator().set_transform(carla.Transform(location, rotation))
 
     @staticmethod
     def _global_plan(world: Any, ego: Any) -> tuple[list[Any], list[Any]]:

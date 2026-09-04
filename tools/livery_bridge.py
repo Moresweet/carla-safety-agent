@@ -23,6 +23,7 @@ from PIL import Image
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from carla_safety_agent.carla_adapter import CarlaAdapter
+from carla_safety_agent.benchmark_catalog import algorithm_catalog, benchmark_report, route_catalog
 from carla_safety_agent.natural_language import NaturalLanguageCompiler
 
 
@@ -52,6 +53,8 @@ _e2e_log = PROJECT_ROOT / ".runtime" / "uniad-ui.log"
 _e2e_pid = PROJECT_ROOT / ".runtime" / "uniad.pid"
 _evaluation_control_dir = PROJECT_ROOT / ".runtime" / "evaluation-control"
 E2E_ROOT = Path(os.environ.get("E2E_ROOT", "/home/moresweet/Data/e2e"))
+BENCH2DRIVE_ROOT = Path(os.environ.get("BENCH2DRIVE_ROOT", str(E2E_ROOT / "Bench2Drive")))
+BENCH2DRIVE_ZOO = Path(os.environ.get("BENCH2DRIVE_ZOO", str(E2E_ROOT / "Bench2DriveZoo")))
 UNIAD_PYTHON = Path(os.environ.get(
     "UNIAD_PYTHON", str(E2E_ROOT / "miniconda3/envs/uniad-cu128/bin/python")))
 _thumbnail_dir = os.environ.get("THUMBNAIL_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), ".runtime", "thumbnails"))
@@ -163,9 +166,11 @@ def e2e_status() -> dict:
             results = json.loads(results_path.read_text())
         except (OSError, json.JSONDecodeError):
             results = {"error": "Result file is not valid JSON"}
-    return {"ok": True, "algorithms": [{"id": "uniad", "name": "UniAD-Tiny",
-            "framework": "Native Scenario Executor", "checkpoint": "uniad_tiny_b2d.pth",
-            "sensors": "6 cameras", "enabled": True}], "job": job,
+    algorithms = algorithm_catalog(BENCH2DRIVE_ZOO)
+    for item in algorithms:
+        item.update(framework="Native Scenario Executor", sensors="6 cameras",
+                    enabled=item["status"] == "available")
+    return {"ok": True, "algorithms": algorithms, "job": job,
             "routes": e2e_routes(), "log": log, "results": results}
 
 
@@ -952,6 +957,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"ok": True, "telemetry": payload}).encode())
             except (OSError, json.JSONDecodeError):
                 self.wfile.write(b'{"ok":true,"telemetry":null}')
+        elif request.path == "/e2e/benchmark/catalog":
+            self.wfile.write(json.dumps({"ok": True,
+                "routes": route_catalog(BENCH2DRIVE_ROOT),
+                "algorithms": algorithm_catalog(BENCH2DRIVE_ZOO)}).encode())
+        elif request.path == "/e2e/benchmark/report":
+            self.wfile.write(json.dumps({"ok": True,
+                "report": benchmark_report(BENCH2DRIVE_ZOO)}).encode())
         elif request.path == "/targets":
             kind = parse_qs(request.query).get("kind", [""])[0]
             prefix = {"road": "Road_Road_", "building": "BP_House"}.get(kind, "")

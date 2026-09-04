@@ -98,7 +98,13 @@ def e2e_routes() -> list[dict]:
 
 def evaluation_active() -> bool:
     with _e2e_lock:
-        return _e2e_job["state"] in ("running", "stopping")
+        active = _e2e_job["state"] in ("running", "stopping")
+    state = _evaluation_control_dir / "state.json"
+    try:
+        fresh = time.time() - state.stat().st_mtime < 3.0
+    except OSError:
+        fresh = False
+    return active and fresh
 
 
 def evaluation_snapshot() -> dict | None:
@@ -177,7 +183,7 @@ def e2e_status() -> dict:
 def start_e2e(data: dict) -> dict:
     global _e2e_process
     action = str(data.get("action", "doctor"))
-    if action not in ("doctor", "model-smoke", "run"):
+    if action not in ("doctor", "model-smoke", "run", "preset-run"):
         raise RuntimeError(f"Unknown UniAD action: {action}")
     if not UNIAD_PYTHON.is_file():
         raise RuntimeError(f"UniAD environment is missing: {UNIAD_PYTHON}")
@@ -189,20 +195,36 @@ def start_e2e(data: dict) -> dict:
                        "--root", str(E2E_ROOT), "--carla-port", str(CARLA_PORT)]
         elif action == "model-smoke":
             command = [str(UNIAD_PYTHON), str(PROJECT_ROOT / "integration/uniad/model_smoke.py")]
-        else:
+        elif action == "run":
             route = Path(str(data.get("route", ""))).resolve()
             allowed = {Path(item["path"]).resolve() for item in e2e_routes()}
             if route not in allowed:
                 raise RuntimeError("Select a generated ScenarioSpec from the local catalog")
             command = [str(PROJECT_ROOT / "scripts/run_uniad_target.sh")]
+        else:
+            collection = Path(str(data.get("collection", ""))).resolve()
+            route_id = str(data.get("route_id", ""))
+            catalogs = route_catalog(BENCH2DRIVE_ROOT)["collections"]
+            allowed = {Path(item["path"]).resolve(): {route["id"] for route in item["routes"]}
+                       for item in catalogs}
+            if collection not in allowed or route_id not in allowed[collection]:
+                raise RuntimeError("Select a valid preset route from the external catalog")
+            if str(data.get("algorithm", "uniad-tiny")) != "uniad-tiny":
+                raise RuntimeError("The selected algorithm is not installed with a runnable checkpoint")
+            route = collection
+            command = [str(PROJECT_ROOT / "scripts/run_benchmark_preset.sh")]
         _e2e_log.parent.mkdir(parents=True, exist_ok=True)
         log_stream = _e2e_log.open("wb")
         env = os.environ.copy()
         env.pop("PYTHONPATH", None)
         env.update(E2E_ROOT=str(E2E_ROOT), UNIAD_PYTHON=str(UNIAD_PYTHON),
                    CSA_EVALUATION_CONTROL_DIR=str(_evaluation_control_dir))
+        if action in ("run", "preset-run"):
+            results_path = (PROJECT_ROOT / "runs/uniad" / f"{route.stem}.json"
+                            if action == "run" else PROJECT_ROOT / "runs/benchmark" /
+                            f"{route.stem}-{route_id}.json")
+            (_evaluation_control_dir / "state.json").unlink(missing_ok=True)
         if action == "run":
-            results_path = PROJECT_ROOT / "runs/uniad" / f"{route.stem}.json"
             env["SCENARIO"] = str(route)
             env["RESULTS"] = str(results_path)
             for directory in (_evaluation_control_dir / "commands",
@@ -210,12 +232,15 @@ def start_e2e(data: dict) -> dict:
                 directory.mkdir(parents=True, exist_ok=True)
                 for stale in directory.glob("*.json"):
                     stale.unlink()
-            (_evaluation_control_dir / "state.json").unlink(missing_ok=True)
             telemetry_dir = _evaluation_control_dir / "telemetry"
             telemetry_dir.mkdir(parents=True, exist_ok=True)
             for stale in telemetry_dir.glob("*"):
                 if stale.is_file():
                     stale.unlink()
+        elif action == "preset-run":
+            env.update(ROUTES=str(route), ROUTE_ID=route_id, RESULTS=str(results_path),
+                       BENCH2DRIVE_ROOT=str(BENCH2DRIVE_ROOT),
+                       BENCH2DRIVE_ZOO=str(BENCH2DRIVE_ZOO))
         _e2e_process = subprocess.Popen(
             command, cwd=PROJECT_ROOT, env=env, stdout=log_stream,
             stderr=subprocess.STDOUT, start_new_session=True)
@@ -224,7 +249,7 @@ def start_e2e(data: dict) -> dict:
         _e2e_job.clear()
         _e2e_job.update(state="running", kind=action, started_at=time.time(),
                         ended_at=None, returncode=None, command=command,
-                        results=str(results_path) if action == "run" else None)
+                        results=str(results_path) if action in ("run", "preset-run") else None)
         threading.Thread(target=_finish_e2e, args=(_e2e_process,), daemon=True).start()
         return {"ok": True, "job": dict(_e2e_job)}
 

@@ -40,9 +40,15 @@ def route_catalog(root: Path) -> dict[str, Any]:
         scenarios = Counter(s.get("type", "Unknown") for route in routes
                             for s in route.findall("./scenarios/scenario"))
         towns = Counter(route.get("town", "Unknown") for route in routes)
+        entries = []
+        for route in routes:
+            kinds = [s.get("type", "Unknown") for s in route.findall("./scenarios/scenario")]
+            entries.append({"id": route.get("id", ""), "town": route.get("town", "Unknown"),
+                            "scenarios": kinds})
         collections.append({"id": path.stem, "name": path.name, "path": str(path),
                             "route_count": len(routes), "towns": dict(towns),
-                            "scenario_types": dict(scenarios), "sha256": _sha256(path)})
+                            "scenario_types": dict(scenarios), "routes": entries,
+                            "sha256": _sha256(path)})
     return {"source": "Thinklab-SJTU/Bench2Drive", "mode": "external-read-only",
             "license": "CC BY-NC-ND 4.0", "collections": collections}
 

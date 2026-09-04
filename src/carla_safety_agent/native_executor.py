@@ -181,6 +181,7 @@ class NativeScenarioExecutor:
                 sensor_data = agent.sensor_interface.get_data(frame)
                 elapsed = (step + 1) * settings.fixed_delta_seconds
                 control = agent.run_step(sensor_data, elapsed)
+                self._publish_telemetry(sensor_data, agent, control, frame, elapsed)
                 control.manual_gear_shift = False
                 ego.apply_control(control)
                 control_runtime.on_frame(world)
@@ -243,6 +244,43 @@ class NativeScenarioExecutor:
             if actor_ids:
                 client.apply_batch([carla.command.DestroyActor(actor_id) for actor_id in actor_ids])
             world.apply_settings(original)
+
+    @staticmethod
+    def _publish_telemetry(sensor_data: dict[str, Any], agent: Any, control: Any,
+                           frame: int, elapsed: float) -> None:
+        """Publish synchronized model evidence for the local evaluation UI."""
+        import numpy as np
+        from PIL import Image
+
+        root = Path(os.environ.get("CSA_EVALUATION_CONTROL_DIR", ".runtime/evaluation-control")) / "telemetry"
+        root.mkdir(parents=True, exist_ok=True)
+        camera_ids = ["CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT",
+                      "CAM_BACK", "CAM_BACK_LEFT", "CAM_BACK_RIGHT"]
+        for camera_id in camera_ids:
+            image = sensor_data.get(camera_id, (None, None))[1]
+            if image is None:
+                continue
+            target = root / f"{camera_id}.jpg"
+            temporary = target.with_suffix(".tmp.jpg")
+            Image.fromarray(np.asarray(image)[:, :, :3][:, :, ::-1]).save(
+                temporary, format="JPEG", quality=72)
+            temporary.replace(target)
+        speed = sensor_data.get("SPEED", (None, {"speed": 0.0}))[1]["speed"]
+        gps = sensor_data.get("GPS", (None, []))[1]
+        imu = sensor_data.get("IMU", (None, []))[1]
+        metadata = getattr(agent, "pid_metadata", {}) or {}
+        payload = {
+            "frame": frame, "elapsed_s": elapsed,
+            "inputs": {"camera_ids": camera_ids, "speed_mps": float(speed),
+                       "gps": np.asarray(gps).tolist(), "imu": np.asarray(imu).tolist(),
+                       "synchronized": len({value[0] for value in sensor_data.values()}) == 1},
+            "outputs": {"steer": float(control.steer), "throttle": float(control.throttle),
+                        "brake": float(control.brake), "plan": metadata.get("plan", []),
+                        "target_speed": metadata.get("target_speed")},
+        }
+        temporary = root / "latest.tmp"
+        temporary.write_text(json.dumps(payload), encoding="utf-8")
+        temporary.replace(root / "latest.json")
 
     @staticmethod
     def _focus_spectator(carla: Any, world: Any, ego: Any) -> None:

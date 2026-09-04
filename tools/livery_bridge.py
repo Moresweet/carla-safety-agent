@@ -206,6 +206,11 @@ def start_e2e(data: dict) -> dict:
                 for stale in directory.glob("*.json"):
                     stale.unlink()
             (_evaluation_control_dir / "state.json").unlink(missing_ok=True)
+            telemetry_dir = _evaluation_control_dir / "telemetry"
+            telemetry_dir.mkdir(parents=True, exist_ok=True)
+            for stale in telemetry_dir.glob("*"):
+                if stale.is_file():
+                    stale.unlink()
         _e2e_process = subprocess.Popen(
             command, cwd=PROJECT_ROOT, env=env, stdout=log_stream,
             stderr=subprocess.STDOUT, start_new_session=True)
@@ -888,6 +893,27 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         request = urlparse(self.path)
         params = parse_qs(request.query)
+        if request.path == "/e2e/camera":
+            camera_id = params.get("id", [""])[0]
+            if camera_id not in {"CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT",
+                                 "CAM_BACK", "CAM_BACK_LEFT", "CAM_BACK_RIGHT"}:
+                self._headers(404)
+                self.wfile.write(b'{"ok":false,"error":"unknown camera"}')
+                return
+            path = _evaluation_control_dir / "telemetry" / f"{camera_id}.jpg"
+            if not path.is_file():
+                self._headers(404)
+                self.wfile.write(b'{"ok":false,"error":"camera frame unavailable"}')
+                return
+            payload = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Access-Control-Allow-Origin", FRONTEND_ORIGIN)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if request.path == "/catalog/thumbnail":
             try:
                 payload = blueprint_thumbnail(params.get("blueprint", [""])[0])
@@ -919,6 +945,13 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(scene_state()).encode())
         elif request.path == "/e2e/status":
             self.wfile.write(json.dumps(e2e_status()).encode())
+        elif request.path == "/e2e/telemetry":
+            path = _evaluation_control_dir / "telemetry" / "latest.json"
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                self.wfile.write(json.dumps({"ok": True, "telemetry": payload}).encode())
+            except (OSError, json.JSONDecodeError):
+                self.wfile.write(b'{"ok":true,"telemetry":null}')
         elif request.path == "/targets":
             kind = parse_qs(request.query).get("kind", [""])[0]
             prefix = {"road": "Road_Road_", "building": "BP_House"}.get(kind, "")

@@ -34,6 +34,7 @@ stop_process() {
   echo "Stopped $name"
 }
 
+stop_process uniad "leaderboard_evaluator.py"
 stop_process frontend "livery-designer"
 stop_process bridge "livery_bridge.py"
 stop_process carla "CarlaUE4.uproject"

@@ -96,6 +96,8 @@ material slot 1. Runtime thumbnail PNGs are cached under
 - Unified launcher variables: `CARLA_ROOT`, `UE4_ROOT`, `CARLA_PYTHONPATH`,
   `NODE_BIN`, `PNPM_BIN`,
   `CARLA_MAP`, and `CARLA_PORT`; browser services use ports 3000 and 8765
+- UniAD evaluator process groups are recorded in `.runtime/uniad.pid` so the
+  unified stop script also terminates an active closed-loop run.
 
 No files under Unreal Engine itself have been modified. Temporary validation
 scripts and screenshots under `/tmp` or `work/` are not required at runtime.
@@ -117,6 +119,14 @@ layer; source compatibility changes are captured as repository patches.
 The local Bench2DriveZoo clone has one source compatibility change recorded in
 `integration/uniad/torch-2.7-dispatch.patch`: MMCV's retired `Tensor.type()`
 dispatch call is replaced with `Tensor.scalar_type()` for PyTorch 2.7.
+
+The local Bench2Drive evaluator applies
+`integration/uniad/bench2drive-existing-server.patch`. With
+`BENCH2DRIVE_EXISTING_SERVER=1`, it connects to the source-built CARLA process
+already managed by Surface Studio instead of requiring a packaged
+`CarlaUE4.sh` and launching a second simulator.
+`integration/uniad/bench2drive-python310.patch` replaces the three removed
+ElementTree `getchildren()` calls used while parsing route and scenario XML.
 
 The CARLA source tree has Python 3.10 wheel-build compatibility changes,
 recorded in `integration/uniad/carla-python310-conda-flags.patch`. It prevents

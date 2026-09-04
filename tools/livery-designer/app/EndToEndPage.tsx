@@ -7,7 +7,7 @@ type Status={algorithms:{id:string;name:string;framework:string;checkpoint:strin
 
 export default function EndToEndPage(){
  const [data,setData]=useState<Status|null>(null),[route,setRoute]=useState(""),[message,setMessage]=useState("Connecting to evaluation service…"),[filter,setFilter]=useState("");
- const refresh=()=>fetch(`${bridge}/e2e/status`).then(r=>r.json()).then(v=>{setData(v);setMessage(v.job.state==="running"?`${v.job.kind} is running`:"Evaluation service ready");if(!route&&v.routes.length)setRoute(v.routes[0].path)}).catch(e=>setMessage(String(e)));
+ const refresh=()=>fetch(`${bridge}/e2e/status`).then(r=>r.json()).then(v=>{setData(v);setMessage(v.job.state==="running"?`${v.job.kind} is running`:v.job.state==="failed"?`${v.job.kind} failed with exit code ${v.job.returncode}`:"Evaluation service ready");setRoute(current=>current||v.routes[0]?.path||"")}).catch(e=>setMessage(String(e)));
  useEffect(()=>{refresh();const timer=setInterval(refresh,1500);return()=>clearInterval(timer)},[]);
  const routes=useMemo(()=>data?.routes.filter(v=>v.relative.toLowerCase().includes(filter.toLowerCase()))??[],[data,filter]);
  async function action(kind:string){setMessage(`Starting ${kind}…`);const r=await fetch(`${bridge}/e2e/start`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action:kind,algorithm:"uniad",route})}),v=await r.json();setMessage(r.ok?`${kind} started`:v.error);refresh()}

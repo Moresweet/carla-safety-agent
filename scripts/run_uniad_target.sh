@@ -32,11 +32,12 @@ ln -sfn "$ZOO/team_code/planner.py" "$B2D/leaderboard/team_code/planner.py"
 
 export CARLA_ROOT
 export CARLA_SERVER="${CARLA_SERVER:-$CARLA_ROOT/CarlaUE4.sh}"
-export PYTHONPATH="$B2D/leaderboard:$B2D/scenario_runner:${PYTHONPATH:-}"
+export PYTHONPATH="$CARLA_ROOT/PythonAPI/carla:$B2D:$B2D/leaderboard:$B2D/leaderboard/team_code:$B2D/scenario_runner:$ZOO"
 export SCENARIO_RUNNER_ROOT="$B2D/scenario_runner"
 export LEADERBOARD_ROOT="$B2D/leaderboard"
 export CHALLENGE_TRACK_CODENAME=SENSORS
 export IS_BENCH2DRIVE=True
+export BENCH2DRIVE_EXISTING_SERVER="${BENCH2DRIVE_EXISTING_SERVER:-1}"
 export PLANNER_TYPE=traj
 export SAVE_PATH="${SAVE_PATH:-$PWD/runs/uniad/sensors}"
 

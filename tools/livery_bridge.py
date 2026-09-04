@@ -46,7 +46,9 @@ _e2e_lock = threading.Lock()
 _e2e_process = None
 _e2e_job = {"state": "idle", "kind": None, "started_at": None,
             "ended_at": None, "returncode": None, "command": None}
+_scene_snapshot = None
 _e2e_log = PROJECT_ROOT / ".runtime" / "uniad-ui.log"
+_e2e_pid = PROJECT_ROOT / ".runtime" / "uniad.pid"
 E2E_ROOT = Path(os.environ.get("E2E_ROOT", "/home/moresweet/Data/e2e"))
 UNIAD_PYTHON = Path(os.environ.get(
     "UNIAD_PYTHON", str(E2E_ROOT / "miniconda3/envs/uniad-cu128/bin/python")))
@@ -91,6 +93,11 @@ def e2e_routes() -> list[dict]:
 
 def _finish_e2e(process):
     returncode = process.wait()
+    try:
+        if _e2e_pid.read_text().strip() == str(process.pid):
+            _e2e_pid.unlink(missing_ok=True)
+    except OSError:
+        pass
     with _e2e_lock:
         if _e2e_process is process:
             _e2e_job.update(state="succeeded" if returncode == 0 else "failed",
@@ -142,6 +149,7 @@ def start_e2e(data: dict) -> dict:
         _e2e_log.parent.mkdir(parents=True, exist_ok=True)
         log_stream = _e2e_log.open("wb")
         env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
         env.update(E2E_ROOT=str(E2E_ROOT), UNIAD_PYTHON=str(UNIAD_PYTHON))
         if action == "run":
             env["ROUTES"] = str(route)
@@ -149,6 +157,7 @@ def start_e2e(data: dict) -> dict:
             command, cwd=PROJECT_ROOT, env=env, stdout=log_stream,
             stderr=subprocess.STDOUT, start_new_session=True)
         log_stream.close()
+        _e2e_pid.write_text(f"{_e2e_process.pid}\n")
         _e2e_job.clear()
         _e2e_job.update(state="running", kind=action, started_at=time.time(),
                         ended_at=None, returncode=None, command=command)
@@ -512,6 +521,11 @@ def runtime_name_for_actor(world, actor):
 
 
 def scene_state() -> dict:
+    global _scene_snapshot
+    with _e2e_lock:
+        evaluation_active = _e2e_job["state"] in ("running", "stopping")
+    if evaluation_active and _scene_snapshot is not None:
+        return {**_scene_snapshot, "evaluation_active": True}
     world = connect_world()
     actors = [actor_record(actor) for actor in world.get_actors()
               if actor.type_id.startswith(("vehicle.", "walker."))]
@@ -540,13 +554,15 @@ def scene_state() -> dict:
                       "y": (bounds["min_y"]+bounds["max_y"])/2, "z": 0.2},
          "extent": {"x": 5.0, "y": 5.0, "z": 0.2}},
     ]
-    return {"ok": True, "map": map_name, "bounds": bounds,
+    _scene_snapshot = {"ok": True, "map": map_name, "bounds": bounds,
             "road_points": cached["road_points"], "objects": actors,
             "static_targets": static_targets,
             "spectator": {"location": vector(spectator.location),
                           "rotation": {"yaw": spectator.rotation.yaw,
                                        "pitch": spectator.rotation.pitch}},
-            "hero_id": hero.id if hero else None, "hero_lock": _hero_lock.is_set()}
+            "hero_id": hero.id if hero else None, "hero_lock": _hero_lock.is_set(),
+            "evaluation_active": False}
+    return _scene_snapshot
 
 
 def focus_actor(actor_id: int) -> dict:

@@ -259,7 +259,9 @@ def stop_e2e() -> dict:
         process = _e2e_process
         if process is None or process.poll() is not None:
             return {"ok": True, "state": _e2e_job["state"]}
-        os.killpg(process.pid, signal.SIGTERM)
+        # Let the evaluator run its finally blocks so synchronous mode and the
+        # traffic manager are restored before the editor becomes interactive.
+        os.killpg(process.pid, signal.SIGINT)
         _e2e_job["state"] = "stopping"
         return {"ok": True, "state": "stopping"}
 

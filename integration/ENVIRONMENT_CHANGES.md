@@ -127,6 +127,13 @@ The local Bench2DriveZoo clone has one source compatibility change recorded in
 `integration/uniad/torch-2.7-dispatch.patch`: MMCV's retired `Tensor.type()`
 dispatch call is replaced with `Tensor.scalar_type()` for PyTorch 2.7.
 
+`integration/uniad/live-model-telemetry.patch` adds frame-boundary evidence
+publication to the external UniAD adapter. It exports the actual six RGB
+camera tensors consumed by UniAD, IMU/GNSS/speed inputs, the predicted
+`sdc_traj` in ego coordinates, and the downstream PID control values. The
+patch is observational: it does not alter model inputs, trajectory inference,
+or vehicle control.
+
 The CARLA source tree has Python 3.10 wheel-build compatibility changes,
 recorded in `integration/uniad/carla-python310-conda-flags.patch`. It prevents
 the UE4 Clang toolchain from treating Conda's unsupported GCC optimization flag

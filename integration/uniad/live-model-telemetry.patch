@@ -1,0 +1,12 @@
+diff --git a/team_code/uniad_b2d_agent.py b/team_code/uniad_b2d_agent.py
+--- a/team_code/uniad_b2d_agent.py
++++ b/team_code/uniad_b2d_agent.py
+@@
+ from scipy.optimize import fsolve
++from carla_safety_agent.live_telemetry import publish_driving_telemetry
+@@
+         self.pid_metadata['plan'] = out_truck.tolist()
++        publish_driving_telemetry(
++            frame=self.step, tick=tick_data, plan=out_truck, control=control,
++            controller=self.pid_metadata, model='UniAD-Tiny')
+         metric_info = self.get_metric_info()

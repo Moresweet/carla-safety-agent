@@ -13,11 +13,12 @@
 struct Vertex { double x, y, z, u, v; };
 
 int main(int argc, char **argv) {
-  if (argc != 4) {
-    std::cerr << "usage: fbx_mesh_to_json input.fbx output.json material-slot\n";
+  if (argc != 4 && argc != 5) {
+    std::cerr << "usage: fbx_mesh_to_json input.fbx output.json material-slot [node-name-suffix]\n";
     return 2;
   }
   const int wanted_material = std::stoi(argv[3]);
+  const std::string wanted_suffix = argc == 5 ? argv[4] : "";
   FbxManager *manager = FbxManager::Create();
   FbxIOSettings *settings = FbxIOSettings::Create(manager, IOSROOT);
   manager->SetIOSettings(settings);
@@ -37,6 +38,11 @@ int main(int argc, char **argv) {
     for (int i = 0; i < node->GetChildCount(); ++i) stack.push_back(node->GetChild(i));
     FbxMesh *mesh = node->GetMesh();
     if (!mesh) continue;
+    const std::string node_name = node->GetName();
+    if (!wanted_suffix.empty() &&
+        (node_name.size() < wanted_suffix.size() ||
+         node_name.compare(node_name.size() - wanted_suffix.size(),
+                           wanted_suffix.size(), wanted_suffix) != 0)) continue;
     FbxStringList uv_sets;
     mesh->GetUVSetNames(uv_sets);
     if (uv_sets.GetCount() == 0) continue;

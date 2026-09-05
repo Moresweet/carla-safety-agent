@@ -143,6 +143,12 @@
     "slotName": "Bodywork_Mat",
     "url": "/vehicles/vehicle-mercedes-coupe.json"
   },
+  "vehicle.mercedes.coupe_2020": {
+    "baseType": "car",
+    "slot": 0,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-mercedes-coupe_2020.json"
+  },
   "vehicle.mercedes.sprinter": {
     "baseType": "van",
     "slot": 0,
@@ -160,6 +166,12 @@
     "slot": 10,
     "slotName": "Bodywork_Mat",
     "url": "/vehicles/vehicle-mini-cooper_s.json"
+  },
+  "vehicle.mini.cooper_s_2021": {
+    "baseType": "car",
+    "slot": 1,
+    "slotName": "Bodywork_Mat",
+    "url": "/vehicles/vehicle-mini-cooper_s_2021.json"
   },
   "vehicle.mitsubishi.fusorosa": {
     "baseType": "Bus",

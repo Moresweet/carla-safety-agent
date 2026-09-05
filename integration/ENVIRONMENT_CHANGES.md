@@ -80,6 +80,13 @@ stored under `tools/livery-designer/public/vehicle-mesh-catalog.json` and
 `tools/livery-designer/public/vehicles/` so the browser never substitutes a
 photograph for a successfully exported vehicle mesh.
 
+The Mercedes Coupe 2020 and Mini Cooper S 2021 skeletal meshes trigger the
+UE4 FBX exporter crash. Their browser previews are therefore exported from the
+matching parked static meshes with `export_missing_vehicle_preview_meshes.py`.
+Convert material slot 0 and select the `LOD2` node with the optional node suffix
+argument supported by `tools/fbx_mesh_to_json.cpp`. This changes no CARLA asset;
+the generated web meshes are committed in this repository.
+
 The browser mesh is reproducibly exported from
 `/Game/Carla/Static/Truck/European_HGV/SK_European_HGV` by
 `export_hgv_uv_mesh.py`, then converted with `tools/fbx_mesh_to_json.cpp` using

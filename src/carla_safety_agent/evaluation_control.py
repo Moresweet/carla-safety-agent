@@ -326,12 +326,6 @@ class EvaluationControl:
         rotation = carla.Rotation(pitch=math.degrees(math.atan2(dz, (dx*dx+dy*dy)**0.5)),
                                   yaw=math.degrees(math.atan2(dy, dx)))
         world.get_spectator().set_transform(carla.Transform(camera, rotation))
-        if mode == "actor":
-            actor = world.get_actor(int(value))
-            transform = actor.get_transform()
-            center = carla.Location(actor.bounding_box.location.x,
-                                    actor.bounding_box.location.y,
-                                    actor.bounding_box.location.z)
-            transform.transform(center)
-            world.debug.draw_box(carla.BoundingBox(center, actor.bounding_box.extent), transform.rotation,
-                                 thickness=0.12, color=carla.Color(0, 220, 255), life_time=0.0)
+        # DebugHelper shapes cannot be moved or individually cleared. A new
+        # box per tick leaves a trail behind moving actors on this UE4 build;
+        # the live BEV keeps the selected-actor highlight instead.

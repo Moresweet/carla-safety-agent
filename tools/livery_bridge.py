@@ -175,6 +175,8 @@ def _finish_e2e(process):
 def e2e_status() -> dict:
     with _e2e_lock:
         job = dict(_e2e_job)
+    if job["state"] == "idle" and evaluation_active():
+        job.update(state="running", kind="recovered-evaluation")
     log = ""
     if _e2e_log.is_file():
         with _e2e_log.open("rb") as stream:
@@ -274,11 +276,17 @@ def start_e2e(data: dict) -> dict:
 def stop_e2e() -> dict:
     with _e2e_lock:
         process = _e2e_process
-        if process is None or process.poll() is not None:
-            return {"ok": True, "state": _e2e_job["state"]}
+        if process is not None and process.poll() is None:
+            pid = process.pid
+        else:
+            try:
+                pid = int(_e2e_pid.read_text().strip())
+                os.kill(pid, 0)
+            except (OSError, ValueError):
+                return {"ok": True, "state": _e2e_job["state"]}
         # Let the evaluator run its finally blocks so synchronous mode and the
         # traffic manager are restored before the editor becomes interactive.
-        os.killpg(process.pid, signal.SIGINT)
+        os.killpg(pid, signal.SIGINT)
         _e2e_job["state"] = "stopping"
         return {"ok": True, "state": "stopping"}
 

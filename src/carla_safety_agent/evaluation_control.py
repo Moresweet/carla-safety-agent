@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import carla
+from PIL import Image
 
 
 ENVIRONMENT_LABELS = {
@@ -54,6 +55,52 @@ def _actor_record(actor: carla.Actor, origin: str = "evaluation") -> dict[str, A
         "hero": actor.attributes.get("role_name") == "hero",
         "origin": origin,
     }
+
+
+def _texture_from_file(path: Path) -> carla.TextureColor:
+    image = Image.open(path).convert("RGBA")
+    if image.size != (2048, 2048):
+        image = image.resize((2048, 2048), Image.Resampling.LANCZOS)
+    texture = carla.TextureColor(image.width, image.height)
+    pixels = image.load()
+    for x in range(image.width):
+        for y in range(image.height):
+            r, g, b, a = pixels[x, image.height - 1 - y]
+            texture.set(x, y, carla.Color(r, g, b, a))
+    return texture
+
+
+def _runtime_vehicle_name(world: carla.World, actor: carla.Actor) -> str:
+    names = sorted(world.get_names_of_all_objects())
+    actor_token = str(actor.id)
+    matches = [name for name in names if actor_token in name and name.startswith("BP_")]
+    if matches:
+        return matches[-1]
+    prefixes = {
+        "vehicle.tesla.model3": "BP_TeslaM3_C_",
+        "vehicle.carlamotors.european_hgv": "BP_European_HGV_C_",
+        "vehicle.lincoln.mkz_2020": "BP_Lincoln2020_C_",
+        "vehicle.dodge.charger_2020": "BP_Charger2020_C_",
+        "vehicle.mini.cooper_s_2021": "BP_Mini2021_C_",
+        "vehicle.mercedes.coupe_2020": "BP_MercedesCCC_C_",
+        "vehicle.audi.tt": "BP_AudiTT_C_",
+    }
+    prefix = prefixes.get(actor.type_id)
+    matches = [name for name in names if prefix and name.startswith(prefix)]
+    if matches:
+        same_type_ids = sorted(item.id for item in world.get_actors().filter(actor.type_id))
+        ordinal = same_type_ids.index(actor.id)
+        if ordinal < len(matches):
+            return matches[ordinal]
+    blueprint_token = actor.type_id.rsplit(".", 1)[-1].replace("_", "").casefold()
+    matches = [name for name in names
+               if blueprint_token and blueprint_token in name.replace("_", "").casefold()
+               and name.startswith("BP_")]
+    if len(matches) == 1:
+        return matches[0]
+    raise RuntimeError(
+        f"Runtime mesh identity is ambiguous for actor {actor.id} ({actor.type_id}); "
+        f"candidates={matches[:8]}")
 
 
 class EvaluationControl:
@@ -248,6 +295,18 @@ class EvaluationControl:
                               "rotation": {"pitch": transform.rotation.pitch,
                                            "yaw": transform.rotation.yaw,
                                            "roll": transform.rotation.roll}}})
+        if action == "apply_vehicle_texture":
+            texture_path = Path(str(data["texture_path"]))
+            if self.root not in texture_path.parents or not texture_path.is_file():
+                raise RuntimeError("Texture payload is outside the evaluation workspace")
+            if not actor.type_id.startswith("vehicle."):
+                raise RuntimeError(f"Actor {actor.id} is not a vehicle")
+            target = _runtime_vehicle_name(world, actor)
+            world.apply_color_texture_to_object(
+                target, carla.MaterialParameter.Diffuse, _texture_from_file(texture_path))
+            texture_path.unlink(missing_ok=True)
+            return {"actor_id": actor.id, "type_id": actor.type_id,
+                    "object_name": target, "resolution": [2048, 2048]}
         raise RuntimeError(f"Unsupported evaluation edit: {action}")
 
     def _apply_camera(self, world: carla.World) -> None:
@@ -275,4 +334,4 @@ class EvaluationControl:
                                     actor.bounding_box.location.z)
             transform.transform(center)
             world.debug.draw_box(carla.BoundingBox(center, actor.bounding_box.extent), transform.rotation,
-                                 thickness=0.12, color=carla.Color(0, 220, 255), life_time=0.5)
+                                 thickness=0.12, color=carla.Color(0, 220, 255), life_time=0.0)

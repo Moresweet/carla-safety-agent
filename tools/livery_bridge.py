@@ -99,12 +99,25 @@ def e2e_routes() -> list[dict]:
 def evaluation_active() -> bool:
     with _e2e_lock:
         active = _e2e_job["state"] in ("running", "stopping")
+    if active:
+        return True
+    try:
+        pid = int(_e2e_pid.read_text().strip())
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def evaluation_ready() -> bool:
+    if not evaluation_active():
+        return False
     state = _evaluation_control_dir / "state.json"
     try:
         fresh = time.time() - state.stat().st_mtime < 3.0
     except OSError:
         fresh = False
-    return active and fresh
+    return fresh
 
 
 def evaluation_snapshot() -> dict | None:
@@ -118,6 +131,8 @@ def evaluation_snapshot() -> dict | None:
 def evaluation_command(action: str, payload: dict, timeout: float = 30.0) -> dict:
     if not evaluation_active():
         raise RuntimeError("No closed-loop evaluation is running")
+    if not evaluation_ready():
+        raise RuntimeError("Closed-loop evaluation is still initializing; try again shortly")
     commands = _evaluation_control_dir / "commands"
     results = _evaluation_control_dir / "results"
     commands.mkdir(parents=True, exist_ok=True)
@@ -224,19 +239,21 @@ def start_e2e(data: dict) -> dict:
                             if action == "run" else PROJECT_ROOT / "runs/benchmark" /
                             f"{route.stem}-{route_id}.json")
             (_evaluation_control_dir / "state.json").unlink(missing_ok=True)
-        if action == "run":
-            env["SCENARIO"] = str(route)
-            env["RESULTS"] = str(results_path)
             for directory in (_evaluation_control_dir / "commands",
-                              _evaluation_control_dir / "results"):
+                              _evaluation_control_dir / "results",
+                              _evaluation_control_dir / "textures"):
                 directory.mkdir(parents=True, exist_ok=True)
-                for stale in directory.glob("*.json"):
-                    stale.unlink()
+                for stale in directory.glob("*"):
+                    if stale.is_file():
+                        stale.unlink()
             telemetry_dir = _evaluation_control_dir / "telemetry"
             telemetry_dir.mkdir(parents=True, exist_ok=True)
             for stale in telemetry_dir.glob("*"):
                 if stale.is_file():
                     stale.unlink()
+        if action == "run":
+            env["SCENARIO"] = str(route)
+            env["RESULTS"] = str(results_path)
         elif action == "preset-run":
             env.update(ROUTES=str(route), ROUTE_ID=route_id, RESULTS=str(results_path),
                        BENCH2DRIVE_ROOT=str(BENCH2DRIVE_ROOT),
@@ -823,6 +840,24 @@ def hero_follow_loop():
 
 def apply_livery(payload: bytes, actor_id: int | None = None) -> dict:
     image, texture = decode_texture(payload, (2048, 2048))
+
+    if evaluation_active():
+        if not actor_id:
+            snapshot = evaluation_snapshot() or {}
+            hero = next((item for item in snapshot.get("objects", []) if item.get("hero")), None)
+            actor_id = int(hero["id"]) if hero else None
+        if not actor_id:
+            raise RuntimeError("Select a running vehicle before applying a texture")
+        upload_dir = _evaluation_control_dir / "textures"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        texture_path = upload_dir / f"{uuid.uuid4().hex}.png"
+        image.save(texture_path, format="PNG")
+        try:
+            return {"ok": True, **evaluation_command("apply_vehicle_texture", {
+                "actor_id": actor_id, "texture_path": str(texture_path)})}
+        except Exception:
+            texture_path.unlink(missing_ok=True)
+            raise
 
     world = connect_world()
     actor = world.get_actor(actor_id) if actor_id else hero_actor(world)

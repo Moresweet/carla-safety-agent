@@ -1,5 +1,9 @@
 # CARLA Safety Agent
 
+Portable runtime: see [Docker setup](integration/docker/README.md) for a local
+image containing the modified CARLA/UE build, ROS/RViz and UniAD dependencies,
+with application code mounted from your checkout.
+
 An original, risk-directed scenario generation agent for CARLA 0.9.16. It borrows
 the useful architectural idea of task packets, adapters, execution and evidence
 from GameFactory-3A, but defines a safety-specific scenario model, sampler,

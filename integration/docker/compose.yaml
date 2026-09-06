@@ -1,0 +1,41 @@
+name: carla-safety
+services:
+  studio:
+    image: carla-safety-runtime:local
+    entrypoint: [/usr/bin/tini, -g, --, /workspace/integration/docker/entrypoint.sh]
+    network_mode: host
+    gpus: all
+    shm_size: 4gb
+    environment:
+      DISPLAY: ${DISPLAY:-:0}
+      XAUTHORITY: /tmp/csa.xauth
+      HEADLESS: ${HEADLESS:-0}
+      CARLA_MAP: ${CARLA_MAP:-Town04}
+    volumes:
+      - ../..:/workspace
+      - frontend-deps:/workspace/tools/livery-designer/node_modules
+      - studio-runtime:/workspace/.runtime
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+      - ${CSA_XAUTHORITY:-/tmp/csa.xauth}:/tmp/csa.xauth:ro
+    stop_grace_period: 30s
+    healthcheck:
+      test: [CMD, python3, -c, "import socket; [socket.create_connection(('127.0.0.1', p), timeout=2).close() for p in (2000,3000,8765)]"]
+      start_period: 15m
+      interval: 15s
+      timeout: 8s
+      retries: 3
+  ros:
+    extends: studio
+    profiles: [ros]
+    command: ros
+    healthcheck:
+      disable: true
+  rviz:
+    extends: studio
+    profiles: [ros]
+    command: rviz
+    healthcheck:
+      disable: true
+volumes:
+  frontend-deps:
+  studio-runtime:

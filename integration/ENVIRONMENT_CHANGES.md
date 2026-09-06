@@ -168,6 +168,25 @@ assembling a container image.
 
 ## Container verification
 
+The container recipes, allowlisted snapshot exporter and launcher are under
+`integration/docker/` and `scripts/docker_studio.sh`. The first snapshot was
+created at `/home/moresweet/Documents/Codex/carla-docker-snapshot-20260906`.
+The small final license/launcher overlay is at
+`/home/moresweet/Documents/Codex/carla-docker-finalize-20260906`.
+It records dependency archive SHA-256 hashes, installed package lists and diffs
+of the actual external source trees. The temporary `.tar` build inputs were
+removed after Docker imported them to recover disk space; regenerate them with
+the snapshot script if rebuilding from the host installation. No native CARLA, UE, ROS or Conda
+file is modified by this container assembly. Docker images/volumes and this
+snapshot directory are the generated files outside the repository. GUI startup
+keeps a display-specific `.runtime/docker.xauth` cookie file with mode 0600 in
+the ignored local runtime directory. The initial test used `/tmp/csa-xauth.H2wMbe`.
+
+The runtime keeps the old absolute prefixes inside the image for compiled code
+and Conda compatibility. Application code is mounted at `/workspace`; neither
+the original home directory nor original dependency directories are mounted.
+The container runs as UID 1000 and has its own service PID/log volume.
+
 Run `integration/carla/verify_external_environment.py` after image assembly.
 It checks source markers, generated assets, and the expected project paths
 without modifying the installation.

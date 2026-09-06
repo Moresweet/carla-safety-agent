@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -25,6 +26,12 @@ def git_head(path: Path) -> str | None:
             ["git", "-C", str(path), "rev-parse", "HEAD"], text=True,
             stderr=subprocess.DEVNULL, timeout=5).strip()
     except (OSError, subprocess.SubprocessError):
+        # Runtime images deliberately omit .git (which may contain credentials).
+        manifest = os.environ.get("CSA_BUILD_MANIFEST")
+        if manifest and path.name == "Bench2DriveZoo":
+            recorded = Path(manifest) / "zoo-commit.txt"
+            if recorded.is_file():
+                return recorded.read_text().strip()
         return None
 
 

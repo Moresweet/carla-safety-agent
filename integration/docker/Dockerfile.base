@@ -1,0 +1,18 @@
+FROM ubuntu:26.04@sha256:2260313b31c8c011cd2eebe728008efac1b3982be73eb71348ea2648d2c0e09b
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl gnupg locales python3 python3-pip python3-pil python3-numpy \
+    python3-yaml python3-venv libvulkan1 mesa-vulkan-drivers libgl1 libegl1 \
+    libxkbcommon0 libxrandr2 libxcursor1 libxi6 libxinerama1 libsm6 libice6 \
+    libasound2t64 libpulse0 libsdl2-2.0-0 libnss3 libatk1.0-0t64 \
+    libatk-bridge2.0-0t64 libgbm1 libgomp1 libxcomposite1 libxdamage1 \
+    libxss1 libxtst6 libglu1-mesa fontconfig fonts-dejavu-core xauth tini \
+    procps iproute2 git rsync && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+      -o /usr/share/keyrings/ros-archive-keyring.gpg && \
+    printf 'deb [signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu resolute main\n' \
+      > /etc/apt/sources.list.d/ros2.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
+      ros-lyrical-desktop python3-colcon-common-extensions && rm -rf /var/lib/apt/lists/*
+RUN if getent passwd 1000; then usermod -l researcher -d /home/researcher -m "$(getent passwd 1000 | cut -d: -f1)"; else useradd --uid 1000 --create-home --shell /bin/bash researcher; fi
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8 NVIDIA_VISIBLE_DEVICES=all NVIDIA_DRIVER_CAPABILITIES=all

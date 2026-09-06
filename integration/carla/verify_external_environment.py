@@ -11,6 +11,8 @@ CHECKS = {
         'TEXT("scale_x")'),
     "Unreal/CarlaUE4/Plugins/Carla/Source/Carla/OpenDrive/OpenDriveGenerator.cpp": (
         'MeshData.UV0'),
+    "Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp": (
+        'FlushRenderingCommands'),
 }
 
 ASSETS = (
@@ -20,6 +22,8 @@ ASSETS = (
     "Unreal/CarlaUE4/Content/Carla/Static/GenericMaterials/RoadPainterMaterials/M_CarlaRoadRuntime.uasset",
     "Unreal/CarlaUE4/Content/Carla/Static/Building/Materials/M_CarlaBuildingRuntime.uasset",
     "Unreal/CarlaUE4/Content/Carla/Static/Pedestrian/Materials/M_CarlaPedestrianClothingRuntime.uasset",
+    "Unreal/CarlaUE4/Content/Carla/Static/Truck/European_HGV/M_CarlaHGVLiveryRuntime.uasset",
+    "Unreal/CarlaUE4/Content/Carla/Static/GenericMaterials/M_CarlaVehicleLiveryRuntime.uasset",
 )
 
 

@@ -1,0 +1,5 @@
+FROM carla-safety-runtime:local
+USER root
+ADD licenses.tar /
+COPY --chmod=755 entrypoint.sh /opt/csa/entrypoint.sh
+USER researcher

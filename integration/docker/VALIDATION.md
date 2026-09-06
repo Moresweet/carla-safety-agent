@@ -35,3 +35,8 @@ No image was uploaded to a registry. Large temporary snapshot archives were
 removed after image import to recover disk space; source files were untouched,
 and the snapshot exporter can regenerate them. Hash/source manifests remain in
 the recorded external snapshot directory.
+
+GPU adaptation launcher follow-up: shell syntax and the disposable-container
+`--check` passed on RTX 5070 Ti, detecting `12.0` and nvcc `sm_120` support.
+The full forced rebuild/derived-image path has not yet been run; no second-GPU
+compatibility claim follows from this preflight test.

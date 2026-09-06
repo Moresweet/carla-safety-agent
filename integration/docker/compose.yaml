@@ -1,7 +1,7 @@
 name: carla-safety
 services:
   studio:
-    image: carla-safety-runtime:local
+    image: ${CSA_RUNTIME_IMAGE:-carla-safety-runtime:local}
     entrypoint: [/usr/bin/tini, -g, --, /workspace/integration/docker/entrypoint.sh]
     network_mode: host
     gpus: all

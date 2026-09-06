@@ -32,6 +32,34 @@ the selected payload). Do not run Docker prune on shared installations.
 
 ## Transfer and run
 
+### Adapt the compiled CUDA extensions to a destination GPU
+
+After loading the base image, run from the checkout:
+
+```bash
+bash scripts/docker_adapt_gpu.sh --check
+bash scripts/docker_adapt_gpu.sh --build
+CSA_RUNTIME_IMAGE=carla-safety-runtime:gpu-local bash scripts/docker_studio.sh start
+```
+
+The check detects all visible NVIDIA GPU compute capabilities and validates them
+against bundled PyTorch/nvcc support. The build uses fresh intermediates, rebuilds
+the Zoo CUDA extensions, executes a CUDA NMS kernel, loads UniAD weights and then
+commits a **new local image**. It does not modify native dependencies, the base
+image or running studio. Source is mounted read-only; networking is disabled.
+Build containers/intermediates are retained for inspection and consume disk space.
+No image is published. An existing output tag is refused; choose another using
+`CSA_GPU_IMAGE=carla-safety-runtime:my-gpu-v2`.
+
+Optional: `TORCH_CUDA_ARCH_LIST='8.6;8.9;12.0' MAX_JOBS=2` targets a known fleet,
+provided every target is supported by the bundled toolchain. The default builds
+only for visible GPUs. This is **not** an all-hardware guarantee: Linux x86_64,
+NVIDIA Container Toolkit, compatible drivers and adequate RAM/VRAM are required.
+Unsupported architectures fail early and require a different base/toolchain.
+Run the texture/ROS checks and an actual closed-loop evaluation on each target
+machine; loading weights alone does not validate every model kernel. CARLA/ROS
+are retained as compiled x86_64 binaries, not rebuilt by this GPU adaptation.
+
 ```bash
 docker save carla-safety-runtime:local | gzip > carla-safety-runtime.tar.gz
 # On the destination Linux x86_64 workstation:

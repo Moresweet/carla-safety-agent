@@ -220,7 +220,11 @@ def _finish_e2e(process):
     returncode = process.wait()
     cleanup_error = None
     if _e2e_process is process:
-        SESSION.transition('recovering')
+        try:
+            SESSION.transition('recovering')
+        except OSError as exc:
+            # Journal storage failure must not prevent restoring the simulator.
+            cleanup_error = f'Session journal: {exc}'
     if _e2e_process is process and _e2e_job.get("kind") in ("run", "preset-run", "sensor-rig"):
         try:
             restore_editor_world()
@@ -235,17 +239,32 @@ def _finish_e2e(process):
         if _e2e_process is process:
             results_path = Path(_e2e_job.get("results") or "")
             benchmark_failed = bool(_e2e_job.get("results")) and returncode == 0 and _benchmark_result_failed(results_path)
-            state = ("stopped" if _e2e_job["state"] == "stopping" else
+            state = ("failed" if _e2e_job.get('startup_error') else "stopped" if _e2e_job["state"] == "stopping" else
                      "succeeded" if returncode == 0 and not benchmark_failed else "failed")
             _e2e_job.update(state="failed" if cleanup_error else state, cleanup_error=cleanup_error,
                             ended_at=time.time(), returncode=returncode)
             SESSION.transition('recovering' if cleanup_error else 'failed' if state == 'failed' else
                                'stopped' if state == 'stopped' else 'completed',
-                               returncode=returncode, error=cleanup_error,
+                               returncode=returncode, error=cleanup_error or _e2e_job.get('startup_error'),
                                outcome={'execution': state, 'benchmark_failed': benchmark_failed,
                                         'failure_category': 'world_recovery' if cleanup_error else
+                                            'startup' if _e2e_job.get('startup_error') else
                                             'process_exit' if returncode not in (0, 130) and state != 'stopped' else
                                             'benchmark_result' if benchmark_failed and state != 'stopped' else None})
+
+
+def _abort_e2e_start(process, error):
+    """Retain ownership until a freshly spawned child actually exits and recovers."""
+    _e2e_job.update(state='running', startup_error=str(error))
+    try:
+        if process.poll() is None:
+            # This Popen is the child just created in this request, not a saved PID.
+            os.killpg(process.pid, signal.SIGINT)
+    except ProcessLookupError:
+        pass
+    finally:
+        # Even failed signalling must retain a waiter; never declare a live child failed/idle.
+        threading.Thread(target=_finish_e2e, args=(process,), daemon=True).start()
 
 
 def collection_request(data):
@@ -388,20 +407,6 @@ def start_e2e(data: dict) -> dict:
         SESSION.begin(action, {'request': data, 'command': command,
                               'python': sys.executable if action == 'sensor-rig' else str(UNIAD_PYTHON), 'carla_port': CARLA_PORT,
                               'results': str(results_path) if action in ('run', 'preset-run') else None})
-        try:
-            _e2e_process = subprocess.Popen(
-                command, cwd=PROJECT_ROOT, env=env, stdout=log_stream,
-                stderr=subprocess.STDOUT, start_new_session=True)
-            SESSION.attach(_e2e_process.pid)
-            if action == 'sensor-rig':
-                collection_request({'recording':data.get('recording',True),
-                                    'every':data.get('every',1),'max_frames':data.get('max_frames',2000)})
-        except Exception as exc:
-            SESSION.transition('failed', error=str(exc))
-            raise
-        finally:
-            log_stream.close()
-        _e2e_pid.write_text(f"{_e2e_process.pid}\n")
         _e2e_job.clear()
         _e2e_job.update(state="running", kind=action, started_at=time.time(),
                         ended_at=None, returncode=None, command=command,
@@ -409,6 +414,26 @@ def start_e2e(data: dict) -> dict:
                         collection=str(route) if action == "preset-run" else None,
                         route_id=route_id if action == "preset-run" else None,
                         results=str(results_path) if action in ("run", "preset-run") else None)
+        launched = None
+        try:
+            _e2e_process = subprocess.Popen(
+                command, cwd=PROJECT_ROOT, env=env, stdout=log_stream,
+                stderr=subprocess.STDOUT, start_new_session=True)
+            launched = _e2e_process
+            SESSION.attach(_e2e_process.pid)
+            if action == 'sensor-rig':
+                collection_request({'recording':data.get('recording',True),
+                                    'every':data.get('every',1),'max_frames':data.get('max_frames',2000)})
+            _e2e_pid.write_text(f"{_e2e_process.pid}\n")
+        except Exception as exc:
+            if launched is not None:
+                _abort_e2e_start(launched, exc)
+            else:
+                _e2e_job.update(state='failed', startup_error=str(exc))
+                SESSION.transition('failed', error=str(exc))
+            raise
+        finally:
+            log_stream.close()
         threading.Thread(target=_finish_e2e, args=(_e2e_process,), daemon=True).start()
         return {"ok": True, "job": dict(_e2e_job)}
 

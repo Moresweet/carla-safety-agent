@@ -316,3 +316,68 @@ def test_bridge_execution_lock_allows_capture_start_reentry():
     with lock:
         assert lock.acquire(blocking=False), 'Starting collection must not deadlock itself'
         lock.release()
+
+
+@pytest.mark.parametrize('exited', [False, True])
+def test_failed_start_keeps_waiter_and_only_signals_live_child(exited):
+    import signal
+    calls = []
+    process = SimpleNamespace(pid=123, poll=lambda:0 if exited else None)
+    job = {'kind':'sensor-rig'}
+    env = functions('_abort_e2e_start', _e2e_job=job, signal=signal,
+        os=SimpleNamespace(killpg=lambda pid,sig:calls.append(('signal',pid,sig))),
+        threading=SimpleNamespace(Thread=lambda **kwargs:SimpleNamespace(start=lambda:calls.append(('wait',kwargs['args'])))),
+        _finish_e2e=lambda _:None)
+    env['_abort_e2e_start'](process, OSError('disk full'))
+    assert job['state']=='running' and job['startup_error']=='disk full'
+    assert calls[-1]==('wait',(process,))
+    assert len(calls)==(1 if exited else 2)
+
+
+def test_failed_start_cannot_be_reported_completed(tmp_path):
+    import threading
+    import time
+    calls = []
+    process = SimpleNamespace(pid=123,wait=lambda:0)
+    job = {'kind':'sensor-rig','state':'running','startup_error':'disk full'}
+    env = functions('_finish_e2e', _e2e_process=process, _e2e_job=job,
+        SESSION=SimpleNamespace(transition=lambda state,**kw:calls.append((state,kw))),
+        restore_editor_world=lambda:calls.append(('restore',{})),
+        _e2e_pid=tmp_path/'pid', _e2e_lock=threading.RLock(), Path=Path,time=time)
+    env['_finish_e2e'](process)
+    assert calls[1][0]=='restore'
+    assert calls[-1][0]=='failed'
+    assert calls[-1][1]['error']=='disk full'
+    assert calls[-1][1]['outcome']['failure_category']=='startup'
+    assert job['state']=='failed'
+
+
+def test_failed_start_signal_error_still_installs_waiter():
+    import signal
+    calls = []
+    def denied(*args):
+        raise PermissionError('signal denied')
+    env = functions('_abort_e2e_start', _e2e_job={}, signal=signal,
+        os=SimpleNamespace(killpg=denied),
+        threading=SimpleNamespace(Thread=lambda **kwargs:SimpleNamespace(start=lambda:calls.append('wait'))),
+        _finish_e2e=lambda _:None)
+    with pytest.raises(PermissionError):
+        env['_abort_e2e_start'](SimpleNamespace(pid=123,poll=lambda:None),'startup error')
+    assert calls==['wait']
+
+
+def test_journal_failure_does_not_skip_world_recovery(tmp_path):
+    import threading
+    import time
+    calls = []
+    def transition(*args,**kwargs):
+        raise OSError('disk full')
+    process = SimpleNamespace(pid=123,wait=lambda:1)
+    env = functions('_finish_e2e', _e2e_process=process,
+        _e2e_job={'kind':'sensor-rig','state':'running'},
+        SESSION=SimpleNamespace(transition=transition),
+        restore_editor_world=lambda:calls.append('restore'),
+        _e2e_pid=tmp_path/'pid', _e2e_lock=threading.RLock(), Path=Path,time=time)
+    with pytest.raises(OSError,match='disk full'):
+        env['_finish_e2e'](process)
+    assert calls==['restore']

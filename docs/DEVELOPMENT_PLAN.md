@@ -386,3 +386,11 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 调试回归 dffc5878fa1c46aa8d1ed540fcdaed58 仍复现退出故障；.runtime/carla.log:80516 记录语义代理持有 MeshObject=0x7ffc856b2440，随后该对象首地址无法解析为已知虚表符号。结合已识别的 FTaggedSkeletalMeshSceneProxy 与 FSkeletalMeshSceneProxy::OnTransformChanged→RefreshClothingTransforms 路径，进一步支持共享资源有效性问题，但单独的“无符号”仍不能严格证明释放时刻。
 - 源码检查确认父 USkinnedMeshComponent::DestroyRenderState_Concurrent 会 ReleaseResources 并 BeginCleanup(MeshObject)，不限于 ActorDispatcher 销毁；已有销毁入口补丁未覆盖所有父渲染状态重建。下一轮比较代理缓存与父组件当前 MeshObject，并读取有限原始字，随后决定是否需要父渲染状态重建通知。
 - 保持失败判定，原生服务已退出；没有据此宣称根因完全确认或修复完成。
+
+### 2026-09-08 父渲染状态通知修复与连续两次完整通过
+
+- 调试执行 fc817e6a07824247a2cd97944af17992 确认语义代理缓存 MeshObject=0x7ffc8894fa00（首地址无已知虚表符号），而父组件当前 MeshObject=0x7ffc8292e080，支持父资源重建后代理仍引用旧资源的失效路径。
+- 新增 tagged-parent-render-state.patch：仅骨骼语义组件订阅父 MarkRenderStateDirtyEvent，在父资源重建前立即撤下语义代理并 FlushRenderingCommands，等待既有帧延迟后创建新代理；注销时解绑。原生编译通过（106.45 秒）。
+- 同一 Town04 服务不重启连续执行完整碰撞采集：638693d619b64447bb6c7cfa6501bbb7 / capture-20260908T144240-2449a583 保存 59 样本、明确跳过 1 帧；227acac2f080412f88d73c1bea689627 / capture-20260908T144342-4f903e7e 保存 60 样本、97 条碰撞观察。两次均完成会话、恢复异步且无传感器/测试车残留，cleanup_errors=[]。
+- 两套数据逐文件验证通过：六视角原始 RGB 一致、米制深度、XYZI、BEV、14/14 外参；144 项 Python 测试通过。此次回归全程未切图，证明该复现无需切图即可触发，不能将此前崩溃一概归因于场景切换。
+- 仅该复现连续通过，不保证所有崩溃已消除；父状态通知线程、直接父销毁/切图、语义等待帧表现、材质修改与全部模型生命周期仍需回归，八阶段计划保持未完成。

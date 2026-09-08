@@ -62,7 +62,8 @@ def main():
         assert hits, 'Native test collision missing from saved dataset'
         assert all(event['replay_frame'] is not None for event in hits)
         assert json.loads((dataset/'manifest.json').read_text())['files']['collisions']=='collisions.json'
-        print(json.dumps({'execution_id':execution,'dataset':dataset.name,'collisions':hits,
+        print(json.dumps({'execution_id':execution,'dataset':dataset.name,'collision_count':len(hits),
+                          'first_collision':hits[0],
                           'samples':events['sample_count']}), flush=True)
     finally:
         # A failed actor RPC must not prevent stopping our still-live worker.

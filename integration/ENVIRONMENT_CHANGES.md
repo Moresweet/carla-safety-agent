@@ -40,6 +40,14 @@ make CarlaUE4Editor
 
 ### Collision sensor lifecycle guard
 
+`carla/tagged-parent-render-state.patch` subscribes skeletal annotation components
+to the parent's MarkRenderStateDirty notification, immediately retires their
+borrowed-resource proxy before parent recreation, and reuses the existing delayed
+proxy recreation. OnUnregister removes the delegate. Apply after the tagged
+skeletal refresh guard with `git apply --recount`, then rebuild the editor. This
+must be validated against both capture teardown and material edits; it is not a
+claim that every native resource lifetime path is protected.
+
 `carla/tagged-skeletal-destroy-order.patch` changes ActorDispatcher destruction:
 registered skeletal annotation components are unregistered and queued render
 work is flushed before the parent actor releases its MeshObject. If actor

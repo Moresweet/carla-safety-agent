@@ -1,0 +1,49 @@
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.h b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.h
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.h
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.h
+@@ -24,2 +24,3 @@
+   virtual void OnRegister() override;
++  virtual void OnUnregister() override;
+   virtual FBoxSphereBounds CalcBounds(const FTransform & LocalToWorld) const ;
+@@ -35,2 +36,4 @@
+ private:
++  void OnParentRenderStateDirty(UActorComponent& Component);
++  FDelegateHandle ParentRenderStateDirtyHandle;
+   FLinearColor Color;
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp
+@@ -41,5 +41,37 @@
+ 
+   SetColor(Color);
++  if (Cast<USkeletalMeshComponent>(GetAttachParent()))
++  {
++    ParentRenderStateDirtyHandle = UActorComponent::MarkRenderStateDirtyEvent.AddUObject(
++        this, &UTaggedComponent::OnParentRenderStateDirty);
++  }
+ }
+ 
++void UTaggedComponent::OnUnregister()
++{
++  UActorComponent::MarkRenderStateDirtyEvent.Remove(ParentRenderStateDirtyHandle);
++  ParentRenderStateDirtyHandle.Reset();
++  Super::OnUnregister();
++}
++
++void UTaggedComponent::OnParentRenderStateDirty(UActorComponent& Component)
++{
++  if (&Component != GetAttachParent() || !IsRegistered()) return;
++  // The annotation proxy borrows the parent's MeshObject. MarkRenderStateDirty
++  // runs before the parent's queued recreation releases that object. Retire the
++  // annotation now, not on a later tick when the old resource may be gone.
++  check(IsInGameThread());
++  bShouldWaitFrame = true;
++  NumFramesToWait = 3;
++  if (IsRenderStateCreated())
++  {
++    RecreateRenderState_Concurrent();
++    FlushRenderingCommands();
++  }
++}
++
+ void UTaggedComponent::SetColor(FLinearColor NewColor)

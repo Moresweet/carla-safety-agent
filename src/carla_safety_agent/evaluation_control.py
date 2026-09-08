@@ -105,9 +105,12 @@ def _runtime_vehicle_name(world: carla.World, actor: carla.Actor) -> str:
 class EvaluationControl:
     """Consume editor commands from the process that owns synchronous ticks."""
 
-    def __init__(self, runtime_dir: str | Path | None = None) -> None:
+    def __init__(self, runtime_dir: str | Path | None = None, audit_dir: Path | None = None) -> None:
         configured = runtime_dir or os.environ.get("CSA_EVALUATION_CONTROL_DIR")
         self.root = Path(configured) if configured else None
+        self.audit_dir = Path(audit_dir) if audit_dir is not None else None
+        if self.audit_dir:
+            self.audit_dir.mkdir(parents=True, exist_ok=True)
         self.provenance = ActorProvenance(self.root.parent/'actor-provenance.json') if self.root else None
         self.visibility = VisibilityStore(self.root.parent.parent/'data') if self.root else None
         self.last_snapshot = 0.0
@@ -176,12 +179,22 @@ class EvaluationControl:
 
     def _process_commands(self, world: carla.World) -> None:
         for path in sorted((self.root / "commands").glob("*.json"))[:8]:
+            command = None
+            observed_frame = world.get_snapshot().frame if getattr(self,'audit_dir',None) else None
             try:
                 command = json.loads(path.read_text(encoding="utf-8"))
                 result = self._execute(world, command["action"], command.get("payload", {}))
                 response = {"ok": True, **result}
             except Exception as exc:
                 response = {"ok": False, "error": str(exc)}
+            if getattr(self,'audit_dir',None):
+                self._atomic_json(self.audit_dir/path.name, {
+                    'schema_version':'carla-editor-command/1', 'command_id':path.stem,
+                    'execution_id':os.environ.get('CSA_EXECUTION_ID'),
+                    'observed_frame_before':observed_frame,
+                    'observed_frame_after':world.get_snapshot().frame,
+                    'recorded_at':time.time(), 'command':command, 'response':response,
+                    'semantics':'Command attempt between ticks; success is not proof of rendered effect'})
             self._atomic_json(self.root / "results" / path.name, response)
             path.unlink(missing_ok=True)
 

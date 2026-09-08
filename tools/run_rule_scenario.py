@@ -34,12 +34,13 @@ def main():
     spec = scenario_from_dict(document)
     runtime = Path(os.environ['CSA_EVALUATION_CONTROL_DIR'])
     destination = Path(os.environ['RESULTS'])
+    audit_dir = destination.parent/(destination.stem+'-editor-commands')
     editor = None
     def on_frame(world):
         nonlocal editor
         if editor is None:
             from carla_safety_agent.evaluation_control import EvaluationControl
-            editor = EvaluationControl(runtime)
+            editor = EvaluationControl(runtime, audit_dir=audit_dir)
         editor.on_frame(world)
     try:
         result = CarlaAdapter(port=int(os.environ.get('CARLA_PORT','2000')), timeout_s=30).run(
@@ -52,7 +53,8 @@ def main():
             report['min_distance_m'] = None
     except RuleRunCancelled:
         report = {'scenario_id':spec.scenario_id, 'status':'stopped', 'elapsed_s':0}
-    report.update(execution_id=execution, scenario_sha256=digest, scenario=document)
+    report.update(execution_id=execution, scenario_sha256=digest, scenario=document,
+                  editor_commands=str(audit_dir))
     atomic_json(destination, report)
 
 

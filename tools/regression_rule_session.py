@@ -58,6 +58,11 @@ def main():
     assert result['scenario'] == plan['scenario']
     if args.stop:
         assert stop_sent and result['status'] == 'stopped' and result['elapsed_s'] < 20
+        records = [json.loads(path.read_text()) for path in Path(result['editor_commands']).glob('*.json')]
+        catalogs = [item for item in records if (item.get('command') or {}).get('action') == 'catalog_environment']
+        assert catalogs and any(item['response']['ok'] for item in catalogs)
+        assert all(item['execution_id'] == execution for item in records)
+        assert all(item['observed_frame_before'] == item['observed_frame_after'] for item in records)
     datasets = []
     for path in (ROOT/'.runtime/generated-scenarios').glob('capture-*/manifest.json'):
         manifest = json.loads(path.read_text())

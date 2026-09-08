@@ -80,6 +80,18 @@ def calibration(spec):
     return result
 
 
+def sample_storage_reserve(arrays, rgb, auxiliary):
+    """Conservative admission estimate, not a filesystem quota or ENOSPC guarantee.
+
+    Include raw NPZ, PNG/NPY derivatives and metadata/format overhead. Other
+    processes can still consume free space after this check.
+    """
+    raw=sum(np.asarray(value).nbytes for value in arrays.values())
+    previews=sum(np.asarray(value).nbytes*2 for value in rgb.values() if value is not None)
+    derived=sum(np.asarray(value).nbytes*3 for value in auxiliary.values())
+    return raw+previews+derived+16*1024**2
+
+
 class SensorCapture:
     def __init__(self, world, ego, specs, runtime, source='model-input'):
         import carla
@@ -285,9 +297,10 @@ class SensorCapture:
         if not metadata['synchronized']:
             self.skipped += 1
             return
-        if self.count >= int(req.get('max_frames', 2000)) or self.bytes > 20*1024**3 or shutil.disk_usage(self.run).free < 1024**3:
+        reserve=sample_storage_reserve(arrays,rgb,aux)
+        if self.count >= int(req.get('max_frames', 2000)) or self.bytes+reserve > 20*1024**3 or shutil.disk_usage(self.run).free-reserve < 1024**3:
             self.stop_reason = ('frame_limit' if self.count >= int(req.get('max_frames',2000)) else
-                                'storage_limit' if self.bytes > 20*1024**3 else 'disk_reserve')
+                                'storage_limit' if self.bytes+reserve > 20*1024**3 else 'disk_reserve')
             self.error = 'Recording stopped at frame/storage limit; existing samples preserved'
             self.manifest('saved_limit')
             self.run = None

@@ -40,6 +40,15 @@ def test_close_reports_manifest_failure():
     assert 'disk full' in capture.close()[0]
 
 
+def test_sample_reserve_accounts_for_raw_and_derived_arrays():
+    from carla_safety_agent.sensor_capture import sample_storage_reserve
+    rgb=np.zeros((360,640,4),dtype=np.uint8)
+    lidar=np.zeros((6400,4),dtype=np.float32)
+    reserve=sample_storage_reserve({'camera':rgb},{'camera':rgb},{'depth':rgb,'LIDAR':lidar})
+    assert reserve>rgb.nbytes*3+lidar.nbytes+16*1024**2
+    assert sample_storage_reserve({}, {}, {})==16*1024**2
+
+
 def test_lidar_bev_orientation():
     view = bev_preview(np.array([[10,10,1,.5], [np.nan,0,0,0]]), size=600, extent=60)
     assert view.shape == (600,600,3)

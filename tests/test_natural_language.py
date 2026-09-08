@@ -4,6 +4,14 @@ from carla_safety_agent.natural_language import DescriptionError, NaturalLanguag
 
 
 class NaturalLanguageTests(unittest.TestCase):
+    def test_explicit_braking_distance_is_not_a_default(self):
+        for phrase, distance in [('在25米处急刹',25),('距离 12.5 米时刹车',12.5),('在18米处急刹',18)]:
+            result=NaturalLanguageCompiler().compile('Town04 前车急刹，'+phrase)
+            self.assertEqual(result.scenario.adversaries[0].trigger_distance_m,distance)
+            self.assertFalse(any(w.startswith('trigger_not_specified') for w in result.warnings))
+        with self.assertRaises(DescriptionError):
+            NaturalLanguageCompiler().compile('Town04 前车在0米处急刹')
+
     def test_realistic_generated_environment_counts(self):
         result = NaturalLanguageCompiler().compile(
             "生成地图真实环境，有12棵树、4栋建筑、3名行人、5辆背景车，前车急刹"

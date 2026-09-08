@@ -58,11 +58,16 @@ class NaturalLanguageCompiler:
         adversary_speed = speeds[1] if len(speeds) > 1 else max(2.0, ego_speed * 0.65)
         if not speeds:
             warnings.append("speed_not_specified: ego defaulted to 12 m/s")
-        trigger = self._number_before(normalized, ("米触发", "m trigger", "meters trigger")) or 18.0
-        if interaction != "road_hazard" and trigger == 18.0 and not any(
-            k in normalized for k in ("触发", "trigger")
-        ):
+        trigger = self._number_before(normalized, ("米触发", "m trigger", "meters trigger"))
+        if trigger is None:
+            match = re.search(r'(?:在|距离|相距)\s*(\d+(?:\.\d+)?)\s*米\s*(?:处|时)?\s*(?:急刹|刹车|紧急制动|触发)', normalized)
+            if match:
+                trigger = float(match.group(1))
+        if trigger is not None and trigger <= 0:
+            raise DescriptionError('trigger distance must be positive')
+        if interaction != "road_hazard" and trigger is None:
             warnings.append("trigger_not_specified: defaulted to 18 m")
+        trigger = 18.0 if trigger is None else trigger
         rain = 70.0 if any(k in normalized for k in ("大雨", "暴雨", "heavy rain")) else 30.0 if any(
             k in normalized for k in ("雨", "rain")) else 0.0
         fog = 45.0 if any(k in normalized for k in ("雾", "fog")) else 0.0

@@ -32,6 +32,7 @@ def main():
         dataset = ROOT/'.runtime/generated-scenarios'/report['run_id']
         manifest=json.loads((dataset/'manifest.json').read_text())
         assert manifest['sampling_every_frames']==3
+        assert manifest['execution_id']==execution_id, 'Dataset must link to its owning execution'
         from carla_safety_agent.data_quality import temporal_quality
         quality=temporal_quality(json.loads((dataset/'index.json').read_text())['frames'],3)
         assert quality['temporal_order_valid'] and not quality['unexpected_intervals'],quality

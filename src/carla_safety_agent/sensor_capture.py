@@ -167,6 +167,7 @@ class SensorCapture:
         self.started = time.time()
         self.last_request = request['id']
         self.sampling_every = int(request.get('every',5))
+        self.execution_id = os.environ.get('CSA_EXECUTION_ID') or None
         atomic_json(self.run/'calibration.json', self.specs)
         self.manifest('recording')
 
@@ -183,6 +184,7 @@ class SensorCapture:
             files={'calibration': 'calibration.json', 'index': 'index.json'}, error=self.error,
             input_archive='model_input.npz' if self.source == 'model-input' else 'sensor_input.npz',
             sampling_every_frames=self.sampling_every,
+            execution_id=self.execution_id,
             notes=[('model_input.npz contains exact pre-model arrays; RGB PNG is lossless RGB conversion'
                     if self.source == 'model-input' else
                     'sensor_input.npz contains raw rig RGB BGRA arrays; no model was invoked'),

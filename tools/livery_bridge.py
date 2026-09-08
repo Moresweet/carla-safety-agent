@@ -404,9 +404,10 @@ def start_e2e(data: dict) -> dict:
                        BENCH2DRIVE_ROOT=str(BENCH2DRIVE_ROOT),
                        BENCH2DRIVE_ZOO=str(BENCH2DRIVE_ZOO),
                        BENCH2DRIVE_TCP_ZOO=str(BENCH2DRIVE_TCP_ZOO))
-        SESSION.begin(action, {'request': data, 'command': command,
+        execution_id = SESSION.begin(action, {'request': data, 'command': command,
                               'python': sys.executable if action == 'sensor-rig' else str(UNIAD_PYTHON), 'carla_port': CARLA_PORT,
                               'results': str(results_path) if action in ('run', 'preset-run') else None})
+        env['CSA_EXECUTION_ID'] = execution_id
         _e2e_job.clear()
         _e2e_job.update(state="running", kind=action, started_at=time.time(),
                         ended_at=None, returncode=None, command=command,

@@ -100,10 +100,12 @@ def test_standalone_capture_records_real_rig_arrays_without_model_claim(tmp_path
     capture.ego = SimpleNamespace(id=3,get_transform=lambda:SimpleNamespace(get_matrix=lambda:np.eye(4).tolist()),
                                   get_velocity=lambda:SimpleNamespace(x=0,y=0,z=0))
     monkeypatch.setenv('CSA_DATASET_ROOT',str(tmp_path/'datasets'))
+    monkeypatch.setenv('CSA_EXECUTION_ID','verified-session-id')
     capture.process_frame(12,SimpleNamespace(steer=0,throttle=0,brake=1))
     assert capture.count == 1
     manifest = json.loads((capture.run/'manifest.json').read_text())
     assert manifest['family']=='sensor-rig' and manifest['model'] is None
+    assert manifest['execution_id']=='verified-session-id'
     folder = capture.run/'samples'/'0000000012'
     meta = json.loads((folder/'frame.json').read_text())
     assert meta['synchronized'] and meta['actual_model_inputs']==[] and meta['model'] is None

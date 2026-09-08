@@ -33,7 +33,7 @@ from carla_safety_agent.provenance import ActorProvenance
 from carla_safety_agent.uv_audit import audit_uv
 from carla_safety_agent.replay import replay_index, replay_file, replay_projection, replay_trajectory, replay_events
 from carla_safety_agent.natural_language import NaturalLanguageCompiler
-from carla_safety_agent.scenario_archive import archive_scenario
+from carla_safety_agent.scenario_archive import archive_scenario, read_verified_scenario
 from carla_safety_agent.session import SessionJournal
 from carla_safety_agent.scene_store import SceneStore, validate_scene
 from carla_safety_agent.material_library import MaterialLibrary, MaterialTransaction, exact_environment_target
@@ -339,6 +339,7 @@ def start_e2e(data: dict) -> dict:
             allowed = {Path(item["path"]).resolve() for item in e2e_routes()}
             if route not in allowed:
                 raise RuntimeError("Select a generated ScenarioSpec from the local catalog")
+            _, scenario_digest = read_verified_scenario(route)
             command = [str(PROJECT_ROOT / "scripts/run_uniad_target.sh")]
         elif action == 'sensor-rig':
             mode, frames = str(data.get('mode','stationary')), data.get('frames',200)
@@ -402,6 +403,7 @@ def start_e2e(data: dict) -> dict:
                     stale.unlink()
         if action == "run":
             env["SCENARIO"] = str(route)
+            env['CSA_SCENARIO_SHA256'] = scenario_digest
             env["RESULTS"] = str(results_path)
         elif action == "preset-run":
             env.update(ROUTES=str(route), ROUTE_ID=route_id, RESULTS=str(results_path),
@@ -411,6 +413,7 @@ def start_e2e(data: dict) -> dict:
                        BENCH2DRIVE_TCP_ZOO=str(BENCH2DRIVE_TCP_ZOO))
         execution_id = SESSION.begin(action, {'request': data, 'command': command,
                               'starting_scene': starting_scene,
+                              'scenario_sha256': scenario_digest if action == 'run' else None,
                               'python': sys.executable if action == 'sensor-rig' else str(UNIAD_PYTHON), 'carla_port': CARLA_PORT,
                               'results': str(results_path) if action in ('run', 'preset-run') else None})
         env['CSA_EXECUTION_ID'] = execution_id

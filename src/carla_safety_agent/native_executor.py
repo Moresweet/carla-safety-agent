@@ -15,6 +15,7 @@ from typing import Any
 from .carla_adapter import CarlaAdapter
 from .evaluation_control import EvaluationControl
 from .io import scenario_from_dict
+from .scenario_archive import read_verified_scenario
 from .metrics import distance, evaluate, ttc
 from .opendrive import build_opendrive
 from leaderboard.autoagents.autonomous_agent import RoadOption
@@ -99,7 +100,8 @@ class NativeScenarioExecutor:
 
     def run(self, scenario_path: Path, agent_path: Path, agent_config: str,
             output: Path) -> dict[str, Any]:
-        spec = scenario_from_dict(json.loads(scenario_path.read_text(encoding="utf-8")))
+        document, scenario_digest = read_verified_scenario(scenario_path, os.environ.get('CSA_SCENARIO_SHA256'))
+        spec = scenario_from_dict(document)
         adapter = CarlaAdapter(self.host, self.port, self.timeout)
         carla = adapter._module()
         client = carla.Client(self.host, self.port)
@@ -229,6 +231,7 @@ class NativeScenarioExecutor:
                               min_distance, elapsed)
             output.parent.mkdir(parents=True, exist_ok=True)
             payload = {"schema_version": "carla-safety-evaluation/0.1",
+                       "scenario_sha256": scenario_digest,
                        "scenario": spec.to_dict(), "result": result.to_dict(), "trace": trace}
             output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             print(json.dumps(result.to_dict()), flush=True)

@@ -6,6 +6,53 @@ Returned indices refer to the original point array; depth is optical forward Z.
 import numpy as np
 
 
+def project_box(vertices, world_to_ego, camera):
+    """Native CARLA vertex order; clip edges to near plane and image bounds.
+
+    Geometry only: does not test depth occlusion or object visibility.
+    """
+    points = np.asarray(vertices, dtype=float)
+    if points.shape != (8, 3) or not np.isfinite(points).all():
+        raise ValueError('Expected eight finite world vertices')
+    # Reuse the rigid calibration validation, treating world as the source.
+    source = {'sensor_to_ego': world_to_ego}
+    project_points(np.empty((0, 3)), source, camera)
+    transform = (np.asarray(camera['sensor_to_optical']) @
+                 np.asarray(camera['ego_to_sensor']) @ np.asarray(world_to_ego))
+    optical = (transform @ np.column_stack((points, np.ones(8))).T).T[:, :3]
+    intrinsic = np.asarray(camera['K'])
+    width, height = camera['width'], camera['height']
+    segments = []
+    # BoundingBox.h orders signs as xyz binary bits: one changed bit = edge.
+    for i in range(8):
+        for bit in (1, 2, 4):
+            j = i ^ bit
+            if j < i:
+                continue
+            a, b = optical[i].copy(), optical[j].copy()
+            near = .01
+            if max(a[2], b[2]) < near:
+                continue
+            if a[2] < near:
+                a += (b-a)*((near-a[2])/(b[2]-a[2]))
+            if b[2] < near:
+                b += (a-b)*((near-b[2])/(a[2]-b[2]))
+            uv = (intrinsic @ np.stack((a, b)).T).T
+            a, b = uv[:, :2]/uv[:, 2, None]
+            delta = b-a
+            lo, hi = 0., 1.
+            for axis, maximum in ((0, width-1), (1, height-1)):
+                if abs(delta[axis]) < 1e-12:
+                    if not 0 <= a[axis] <= maximum:
+                        hi = -1.
+                else:
+                    t0, t1 = sorted((-a[axis]/delta[axis], (maximum-a[axis])/delta[axis]))
+                    lo, hi = max(lo, t0), min(hi, t1)
+            if lo <= hi:
+                segments.append([*(a+lo*delta).tolist(), *(a+hi*delta).tolist()])
+    return segments
+
+
 def project_points(points, source, camera):
     points = np.asarray(points)
     if points.ndim != 2 or points.shape[1] not in (3,4) or points.dtype.kind not in 'fiu':

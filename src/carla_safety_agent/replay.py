@@ -149,6 +149,48 @@ def _indexed_file(path, entry, name):
     return target
 
 
+def replay_boxes(root, run_id, frame, camera):
+    """Project saved native boxes, never invent missing legacy box offsets."""
+    import numpy as np
+    from .projection import project_box
+    from .sensor_capture import CAMERAS
+    if camera not in CAMERAS:
+        raise ValueError('Unknown camera')
+    dataset = dataset_path(root, run_id)
+    calibration_path = (dataset/'calibration.json').resolve()
+    if calibration_path.parent != dataset:
+        raise ValueError('Calibration is outside dataset')
+    calibration = json.loads(calibration_path.read_text())[camera]
+    record = json.loads(replay_file(root, run_id, frame, 'frame.json').read_text())
+    if record['frame'] != int(frame):
+        raise ValueError('Index/sample identity mismatch')
+    pose = np.asarray(record['ego']['matrix'], dtype=float)
+    if pose.shape != (4, 4) or not np.isfinite(pose).all():
+        raise ValueError('Invalid ego pose')
+    try:
+        inverse = np.linalg.inv(pose)
+    except np.linalg.LinAlgError as exc:
+        raise ValueError('Invalid ego pose') from exc
+    actors = record['actors']
+    if not isinstance(actors, list) or len(actors) > 10000:
+        raise ValueError('Invalid or oversized actor list')
+    boxes, missing = [], 0
+    for actor in actors:
+        if actor['id'] == record['ego']['id']:
+            continue
+        box = actor.get('bounding_box')
+        if box is None:
+            missing += 1
+            continue
+        vertices = [[v[k] for k in ('x', 'y', 'z')] for v in box['world_vertices']]
+        segments = project_box(vertices, inverse, calibration)
+        if segments:
+            boxes.append({'actor_id': actor['id'], 'type': actor['type'], 'segments': segments})
+    return {'frame': int(frame), 'camera': camera, 'width': calibration['width'],
+            'height': calibration['height'], 'boxes': boxes, 'missing_geometry': missing,
+            'occlusion_checked': False, 'source': 'recorded_native_world_vertices'}
+
+
 def replay_projection(root, run_id, frame, camera):
     """Bounded diagnostic overlay payload, not an occlusion-correct point label."""
     import numpy as np

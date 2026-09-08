@@ -1168,3 +1168,10 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 找到当次 CarlaUE4_2.log：2026-09-08 12:20:02 UTC出现迁移资产导入标记，随后Success - 0 error(s), 10 warning(s)，12:20:03正常关闭日志。本证据不支持将非零退出直接称为“退出阶段崩溃”；其他历史CarlaUE4_3.log的8月27日堆栈不能混为本次原因。
 - 每次导入新增独立日志JSON，保存真实returncode、stdout/stderr各最多1MiB尾部及截断标记；注册表持久保留import_attempt_id/import_returncode/import_log和warning，避免重新读取注册表后警告消失。措辞改为非零退出且需查看日志，不擅自分类为shutdown。
 - 362项测试通过，覆盖失败日志保存和已写结果但非零退出的警告持久化。此次未再次运行Unreal导入，历史实际退出码无法由新记录功能补造；超时异常日志、退出原因定位和完整迁移仍需继续。
+
+### 2026-09-08 捕获真实导入退出崩溃
+
+- 阅读本机LaunchEngineLoop.cpp确认普通warning不改变成功ErrorLevel；只读probe_commandlet.py实跑在6个环境warning下退出0。导入成功标记改普通日志，新材质不存在时先检查再加载，消除人为警告；未使用忽略退出码。
+- 新独立资产CSA_MigratedBarrier_16367e2f69，任务af1dd7010b5d45f6a29fda2646d96821，日志unreal-log-d9bbcdccd7ba4375a2291243814ef8c8.json捕获returncode=-11、stderr为Pure virtual function called! / Signal 6 caught。stdout仍显示Success - 0 error(s), 6 warning(s)并正常关闭部分模块；证明单看UE文件日志不足以排除退出崩溃。
+- 保存资产可生成，原生尺寸2.4×0.35×0.8米、Actor1633已清理；运行报告runs/validation/blender-package-af1dd7010b5d45f6a29fda2646d96821-93bd2043/report.json的passed仅覆盖原生生成清理，明确不代表导入进程正常退出。362项测试通过。
+- 此次只读最小脚本退出0而资产导入退出-11，将排查范围缩小到资产操作/相关模块清理，尚无调用栈证明具体根因。之前“没有崩溃证据”结论仅限当时所查文件；新stderr证据已补齐。整体计划仍未完成。

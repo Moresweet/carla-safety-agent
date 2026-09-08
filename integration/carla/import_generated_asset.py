@@ -54,7 +54,7 @@ if not mesh:
 # not stable across unattended reimports, especially for external textures.
 material_name = "M_" + asset_id
 material_path = destination + "/" + material_name
-material = unreal.load_asset(material_path)
+material = unreal.load_asset(material_path) if unreal.EditorAssetLibrary.does_asset_exist(material_path) else None
 if not material:
     material = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
         material_name, destination, unreal.Material, unreal.MaterialFactoryNew())
@@ -104,4 +104,4 @@ result = {
 }
 result_path = Path(request["result_path"])
 result_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
-unreal.log_warning("CSA_GENERATED_ASSET_IMPORTED " + mesh.get_path_name())
+unreal.log("CSA_GENERATED_ASSET_IMPORTED " + mesh.get_path_name())

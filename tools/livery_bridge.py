@@ -341,8 +341,8 @@ def start_e2e(data: dict) -> dict:
             command = [str(PROJECT_ROOT / "scripts/run_uniad_target.sh")]
         elif action == 'sensor-rig':
             mode, frames = str(data.get('mode','stationary')), data.get('frames',200)
-            if mode not in ('stationary','autopilot') or isinstance(frames,bool) or not isinstance(frames,int) or not 10 <= frames <= 100000:
-                raise ValueError('Select stationary/autopilot and 10..100000 frames')
+            if mode not in ('stationary','autopilot','manual') or isinstance(frames,bool) or not isinstance(frames,int) or not 10 <= frames <= 100000:
+                raise ValueError('Select stationary/autopilot/manual and 10..100000 frames')
             if not isinstance(data.get('recording',True), bool): raise ValueError('recording must be boolean')
             for key, default, upper in (('every',1,100), ('max_frames',2000,10000)):
                 value = data.get(key,default)
@@ -445,6 +445,23 @@ def stop_sensor_rig(data):
         if current.get('kind') != 'sensor-rig' or current.get('run_id') != data.get('run_id'):
             raise ValueError('Capture session changed; refusing to stop another task')
         return stop_e2e()
+
+
+def manual_sensor_control(data):
+    from carla_safety_agent.manual_control import validate_control
+    from carla_safety_agent.sensor_capture import atomic_json
+    if not isinstance(data,dict) or 'control' not in data: raise ValueError('Control object required')
+    with _e2e_lock:
+        current=SESSION.snapshot()
+        if (current.get('state')!='running' or current.get('kind')!='sensor-rig' or
+            current.get('run_id')!=data.get('run_id') or
+            current.get('configuration',{}).get('request',{}).get('mode')!='manual' or
+            not SESSION.owned_pid()):
+            raise ValueError('No matching live manual capture session')
+        command={'execution_id':current['run_id'],'issued_monotonic':time.monotonic(),
+                 'control':validate_control(data.get('control',{}))}
+        atomic_json(_evaluation_control_dir/'manual-control.json',command)
+        return {'ok':True,'run_id':current['run_id'],'expires_after_s':.5}
 
 
 def stop_e2e() -> dict:
@@ -1747,7 +1764,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "/blender/import", "/blender/spawn",
                                 "/e2e/start", "/e2e/stop", "/collection/control", '/session/recover',
                                 '/scenes/save', '/scenes/restore', '/scenes/history',
-                                '/materials/apply', '/materials/restore', '/collection/start', '/collection/stop'):
+                                '/materials/apply', '/materials/restore', '/collection/start', '/collection/stop', '/collection/control'):
             self._headers(404)
             self.wfile.write(b'{"ok":false,"error":"not found"}')
             return
@@ -1760,6 +1777,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = self.rfile.read(length)
             if request.path == '/collection/start':
                 result = start_e2e({**json.loads(payload or b'{}'), 'action':'sensor-rig'})
+            elif request.path == '/collection/control':
+                result = manual_sensor_control(json.loads(payload or b'{}'))
             elif request.path == '/collection/stop':
                 result = stop_sensor_rig(json.loads(payload or b'{}'))
             elif request.path == '/materials/apply':

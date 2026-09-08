@@ -5,6 +5,7 @@ SAFE_CONTROL={'throttle':0.0,'steer':0.0,'brake':1.0,'hand_brake':True,'reverse'
 
 
 def validate_control(data):
+    if not isinstance(data,dict): raise ValueError('Control must be an object')
     result={}
     for key,low,high in (('throttle',0,1),('brake',0,1),('steer',-1,1)):
         value=data.get(key,0)

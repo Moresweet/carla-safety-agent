@@ -381,3 +381,20 @@ def test_journal_failure_does_not_skip_world_recovery(tmp_path):
     with pytest.raises(OSError,match='disk full'):
         env['_finish_e2e'](process)
     assert calls==['restore']
+
+
+def test_manual_control_rejects_other_sessions_and_uses_server_time(tmp_path):
+    import threading
+    current={'state':'running','kind':'sensor-rig','run_id':'run',
+             'configuration':{'request':{'mode':'manual'}}}
+    env=functions('manual_sensor_control',_e2e_lock=threading.RLock(),
+        SESSION=SimpleNamespace(snapshot=lambda:current,owned_pid=lambda:123),
+        time=SimpleNamespace(monotonic=lambda:42),_evaluation_control_dir=tmp_path)
+    with pytest.raises(ValueError): env['manual_sensor_control']({'run_id':'old','control':{}})
+    assert not (tmp_path/'manual-control.json').exists()
+    env['manual_sensor_control']({'run_id':'run','issued_monotonic':999,'control':{'throttle':.2}})
+    command=json.loads((tmp_path/'manual-control.json').read_text())
+    assert command['issued_monotonic']==42 and command['execution_id']=='run'
+    for mode in ('autopilot','stationary'):
+        current['configuration']['request']['mode']=mode
+        with pytest.raises(ValueError): env['manual_sensor_control']({'run_id':'run','control':{}})

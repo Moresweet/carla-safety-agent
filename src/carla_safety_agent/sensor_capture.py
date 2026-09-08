@@ -166,6 +166,7 @@ class SensorCapture:
         self.error = None
         self.started = time.time()
         self.last_request = request['id']
+        self.sampling_every = int(request.get('every',5))
         atomic_json(self.run/'calibration.json', self.specs)
         self.manifest('recording')
 
@@ -181,6 +182,7 @@ class SensorCapture:
             sensors={name: {'samples': self.count, 'format': 'png/npy/npz', 'path': 'samples'} for name in self.specs},
             files={'calibration': 'calibration.json', 'index': 'index.json'}, error=self.error,
             input_archive='model_input.npz' if self.source == 'model-input' else 'sensor_input.npz',
+            sampling_every_frames=self.sampling_every,
             notes=[('model_input.npz contains exact pre-model arrays; RGB PNG is lossless RGB conversion'
                     if self.source == 'model-input' else
                     'sensor_input.npz contains raw rig RGB BGRA arrays; no model was invoked'),

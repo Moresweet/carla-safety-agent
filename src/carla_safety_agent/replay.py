@@ -15,7 +15,11 @@ def replay_index(root, run_id):
     path = dataset_path(root, run_id)
     if not (path/'index.json').is_file():
         return {'frames': [], 'legacy': True, 'message': '旧数据没有同步帧索引，不能冒充六视角回放'}
-    return json.loads((path/'index.json').read_text())
+    result=json.loads((path/'index.json').read_text())
+    from .data_quality import temporal_quality
+    manifest=json.loads((path/'manifest.json').read_text())
+    result['temporal_quality']=temporal_quality(result['frames'],manifest.get('sampling_every_frames'))
+    return result
 
 
 def replay_file(root, run_id, frame, name):

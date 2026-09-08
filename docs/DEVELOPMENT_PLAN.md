@@ -497,3 +497,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 新增 tools/regression_compile_contract.py；加载最新桥接后经真实本机 HTTP 验证 13 种非法参数均返回 400 和明确错误，归档文件集合不变。
 - 合法大雨急刹、2 秒配置继续编译成功：2 个对象，逐对象 hard_brake 触发列表、precipitation=70、时长和审阅校验值一致；SHA-256 为 5a403e518db217439ea3c7a34c69810162727781d1693b3a34df510125457503。
 - 只编译未执行，不改变 CARLA 世界。此轮补齐上一轮 HTTP 待验收项，不能代替确认流程和其他阶段验收。
+
+### 2026-09-08 执行已审阅计划入口
+
+- 新增 POST /scenario/execute-plan，要求 confirmed=true、scenario_path 和合法 scenario_sha256，固定走已有 UniAD tiny run 生命周期；不重新解析描述。run 在目录校验后按调用方期望哈希读取计划，继续将校验值传到 worker。
+- 185 项测试通过，验证精确路径/哈希转交及缺确认、非法哈希/路径在启动前拒绝。本机 HTTP 空请求返回 400 Explicit plan confirmation is required，执行 ID 保持不变。
+- 成功启动新入口、前端审阅确认尚待验收。旧 /scenario/evaluate、/scenario/run 和直接 /e2e/start 保留兼容，故这不是全入口强制确认或权限安全边界，也不证明用户确实看过计划。

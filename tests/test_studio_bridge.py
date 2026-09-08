@@ -623,3 +623,16 @@ def test_compile_invalid_options_fail_before_compiler_or_archive(invalid):
     env=functions('compile_scenario',math=math)
     with pytest.raises(ValueError):
         env['compile_scenario']({'description':'Town04 前车急刹',**invalid})
+
+
+def test_reviewed_plan_executes_exact_archive_without_recompilation():
+    calls=[]
+    env=functions('execute_reviewed_scenario',start_e2e=lambda value:calls.append(value) or {'ok':True})
+    payload={'confirmed':True,'scenario_path':'/local/plan.json','scenario_sha256':'a'*64}
+    assert env['execute_reviewed_scenario'](payload)['ok']
+    assert calls==[{'action':'run','algorithm':'uniad-tiny','route':'/local/plan.json',
+                   'scenario_sha256':'a'*64,'confirmed':True}]
+    for patch in ({'confirmed':False},{'confirmed':'true'},{'scenario_sha256':'invalid'},
+                  {'scenario_sha256':'A'*64},{'scenario_path':None}):
+        with pytest.raises(ValueError): env['execute_reviewed_scenario']({**payload,**patch})
+    assert len(calls)==1

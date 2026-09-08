@@ -340,7 +340,7 @@ def start_e2e(data: dict) -> dict:
             allowed = {Path(item["path"]).resolve() for item in e2e_routes()}
             if route not in allowed:
                 raise RuntimeError("Select a generated ScenarioSpec from the local catalog")
-            _, scenario_digest = read_verified_scenario(route)
+            _, scenario_digest = read_verified_scenario(route, data.get('scenario_sha256'))
             command = [str(PROJECT_ROOT / "scripts/run_uniad_target.sh")]
         elif action == 'sensor-rig':
             mode, frames = str(data.get('mode','stationary')), data.get('frames',200)
@@ -597,6 +597,20 @@ def compile_scenario(data: dict, execute: bool = False) -> dict:
         if result.trace_path:
             response["manifest_path"] = str(Path(result.trace_path).parent / "manifest.json")
     return response
+
+
+def execute_reviewed_scenario(data: dict) -> dict:
+    """Execute the exact reviewed archive, never recompile mutable prompt text."""
+    digest = data.get('scenario_sha256')
+    if data.get('confirmed') is not True:
+        raise ValueError('Explicit plan confirmation is required')
+    if not isinstance(digest, str) or len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
+        raise ValueError('A valid reviewed scenario SHA-256 is required')
+    route = data.get('scenario_path')
+    if not isinstance(route, str) or not route:
+        raise ValueError('Select the reviewed scenario archive')
+    return start_e2e({'action':'run', 'algorithm':'uniad-tiny', 'route':route,
+                      'scenario_sha256':digest, 'confirmed':True})
 
 
 def evaluate_scenario(data: dict) -> dict:
@@ -1846,7 +1860,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "/objects/environment/visibility",
                                 "/objects/spawn", "/objects/update",
                                 "/objects/duplicate", "/objects/delete",
-                                "/scenario/compile", "/scenario/run", "/scenario/evaluate",
+                                "/scenario/compile", "/scenario/run", "/scenario/evaluate", '/scenario/execute-plan',
                                 "/blender/create", "/blender/retexture",
                                 "/blender/import", "/blender/spawn",
                                 "/e2e/start", "/e2e/stop", "/collection/control", '/session/recover',
@@ -1888,6 +1902,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = start_e2e(json.loads(payload or b"{}"))
             elif request.path == "/e2e/stop":
                 result = stop_e2e()
+            elif request.path == '/scenario/execute-plan':
+                result = execute_reviewed_scenario(json.loads(payload or b'{}'))
             elif request.path == "/scenario/evaluate":
                 result = evaluate_scenario(json.loads(payload or b"{}"))
             elif request.path in ("/scenario/compile", "/scenario/run"):

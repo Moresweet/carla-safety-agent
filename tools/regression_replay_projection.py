@@ -16,6 +16,22 @@ def main():
             return json.load(response)
     index=get('/datasets/index',run_id=args.run_id)
     frame=index['frames'][0]['frame']
+    events=get('/datasets/events',run_id=args.run_id)
+    assert events['ok'] and events['source']=='recorded_control'
+    assert events['collision_detection_available'] is False
+    assert events['sample_count']==len(index['frames'])
+    positions={entry['frame']:offset for offset,entry in enumerate(index['frames'])}
+    previous_end=-1
+    for event in events['events']:
+        start,end=positions[event['start_frame']],positions[event['end_frame']]
+        assert start<=end and start>previous_end
+        assert event['sample_count']==end-start+1
+        assert event['start_timestamp']==index['frames'][start]['timestamp']
+        assert .5<=event['peak_brake']<=1
+        for boundary in (event['start_frame'],event['end_frame']):
+            sample=get('/datasets/frame',run_id=args.run_id,frame=boundary)
+            assert sample['frame']==boundary and sample['control']['brake']>=.5
+        previous_end=end
     counts={}
     for entry in (index['frames'][0],index['frames'][-1]):
         trajectory=get('/datasets/trajectory',run_id=args.run_id,frame=entry['frame'])
@@ -40,7 +56,8 @@ def main():
             assert json.load(exc)['ok'] is False
         else:
             raise AssertionError('Invalid projection request accepted')
-    print(json.dumps({'run_id':args.run_id,'frame':frame,'counts':counts,'invalid_requests_rejected':True}))
+    print(json.dumps({'run_id':args.run_id,'frame':frame,'counts':counts,
+                     'braking_segments':len(events['events']),'invalid_requests_rejected':True}))
 
 
 if __name__=='__main__': main()

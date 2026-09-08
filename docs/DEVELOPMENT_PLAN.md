@@ -1100,3 +1100,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 真实本机三场景 71209f440cec4407ab8716c8eadb737d / 0a20c417434b4abf98a594030cd5781f / 5496922bcd2c4c6aa510fb1301ae77f4 往返通过，10文件含1引用纹理，逐字节及 SceneStore 读取结果一致。证据 runs/validation/project-bundle-pc2c7dz2/report.json；涵盖道路、教堂、加油站材质槽引用。
 - 345项测试通过，覆盖历史游标/重做、纹理校验、独立导入目录、穿越路径/重复ZIP条目/篡改内容和依赖清单拒绝。合成单测纹理仅验证字节保真，真实测试另读取已有材质PNG。
 - 尚未打包外部 Blender/Unreal 资产、运行历史、数据集或模型权重；依赖可用性当前显示 not_checked，未做目标机器缺失依赖诊断或实景恢复。已分叉且不在当前 head.history 的孤立版本不纳入包，尚不构成完整项目一键迁移，S8仍未完成。
+
+### 2026-09-08 项目包目标依赖诊断
+
+- tools/project_bundle.py doctor <archive> --project <目标项目> 只读连接 CARLA，核对可用地图、Blueprint，以及当前已加载地图的精准 UV0 材质槽；其他地图的槽位标记 not_checked，不自动切图。缺失和未检查均不算全部依赖可用。
+- 真实 project-bundle-pc2c7dz2/project.zip 检查发现地图目录返回 Town04 短名称，与保存的 Carla/Maps/Town04 不同；兼容短名称后，Town04 与道路/教堂/加油站三个槽位均 available。完整路径条目仍精确匹配，不对不同完整路径做末级名称合并。
+- 347 项测试通过，包括完整/短地图名称、缺失地图与 Blueprint、缺失材质槽、其他地图未检查。此项证明声明依赖可查，不证明外部资产内容、引擎补丁兼容或实际世界恢复；restore_verified 保持 false，S8 未完成。

@@ -15,6 +15,11 @@ def main():
     export.add_argument('--output', type=Path, required=True)
     inspect = commands.add_parser('inspect')
     inspect.add_argument('archive', type=Path)
+    doctor = commands.add_parser('doctor')
+    doctor.add_argument('archive', type=Path)
+    doctor.add_argument('--project', type=Path, required=True)
+    doctor.add_argument('--host', default='127.0.0.1')
+    doctor.add_argument('--port', type=int, default=2000)
     load = commands.add_parser('import')
     load.add_argument('archive', type=Path)
     load.add_argument('--destination-parent', type=Path, required=True)
@@ -25,6 +30,12 @@ def main():
     elif args.action == 'inspect':
         manifest, _ = read_bundle(args.archive)
         result = {'manifest': manifest, 'dependency_availability': 'not_checked'}
+    elif args.action == 'doctor':
+        from carla_safety_agent.bundle_diagnostics import diagnose
+        import carla
+        manifest, _ = read_bundle(args.archive)
+        client = carla.Client(args.host, args.port); client.set_timeout(10)
+        result = diagnose(manifest, client, args.project/'data')
     else:
         folder = import_bundle(args.archive, args.destination_parent)
         result = {'directory': str(folder.resolve()), 'live_world_modified': False,

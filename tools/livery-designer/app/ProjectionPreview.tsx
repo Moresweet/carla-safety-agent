@@ -1,0 +1,17 @@
+"use client";
+import {useEffect,useState} from 'react';
+type Projection={width:number;height:number;pixels:number[][];visible_count:number;error?:string};
+export default function ProjectionPreview({runId,frame,camera}:{runId:string;frame:number;camera:string}){
+ const [data,setData]=useState<Projection|null>(null),[error,setError]=useState('');
+ useEffect(()=>{const controller=new AbortController();setData(null);setError('');
+ void fetch(`http://127.0.0.1:8765/datasets/projection?${new URLSearchParams({run_id:runId,frame:String(frame),camera})}`,{signal:controller.signal})
+ .then(async response=>{const value=await response.json() as Projection;if(!response.ok)throw new Error(value.error??'投影读取失败');return value})
+ .then(value=>{if(!controller.signal.aborted)setData(value)})
+ .catch(e=>{if(!controller.signal.aborted)setError(String(e))});return()=>controller.abort();
+ },[runId,frame,camera]);
+ if(error)return <span role="status" style={{position:'absolute',bottom:4,left:4,background:'#09121d',color:'#fff'}}>{error}</span>;
+ if(!data)return <span style={{position:'absolute',bottom:4,left:4}}>投影加载中</span>;
+ return <svg aria-label={`点云投影 ${data.visible_count} 点，未检查遮挡`} viewBox={`0 0 ${data.width} ${data.height}`} preserveAspectRatio="xMidYMid meet" style={{position:'absolute',inset:0,width:'100%',height:'100%',pointerEvents:'none'}}>
+ {data.pixels.map(([x,y],i)=><circle key={i} cx={x} cy={y} r={1.5} fill="#ffdc48"/>)}
+ </svg>;
+}

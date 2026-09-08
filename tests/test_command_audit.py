@@ -25,6 +25,8 @@ def test_audit_failure_boundaries(tmp_path, failure):
             if (failure=='intent' and record['state']=='attempting') or (failure=='completion' and record['state']=='responded'):
                 raise OSError('disk full')
             records.append(record)
+            path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_text(json.dumps(record))
     control = SimpleNamespace(root=tmp_path,audit_dir=tmp_path/'audit',_atomic_json=write,
                               _execute=lambda *args:executed.append(args) or {'moved':True})
     world = SimpleNamespace(get_snapshot=lambda:SimpleNamespace(frame=42))
@@ -35,7 +37,17 @@ def test_audit_failure_boundaries(tmp_path, failure):
         env['_process_commands'](control,world)
         assert not command.exists()
     assert len(executed)==(0 if failure=='intent' else 1)
-    if failure=='completion': assert records[-1]['state']=='attempting'
+    if failure=='completion':
+        assert records[-1]['state']=='attempting'
+        before=(control.audit_dir/'cmd.json').read_bytes()
+        with pytest.raises(RuntimeError,match='refusing automatic replay'):
+            env['_process_commands'](control,world)
+        assert len(executed)==1
+        assert (control.audit_dir/'cmd.json').read_bytes()==before
     if failure is None:
         assert records[-1]['state']=='responded' and records[-1]['response']['ok']
         assert records[-1]['observed_frame_after']==42
+        command.write_text(json.dumps({'action':'move','payload':{'x':99}}))
+        with pytest.raises(RuntimeError,match='refusing automatic replay'):
+            env['_process_commands'](control,world)
+        assert len(executed)==1

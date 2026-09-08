@@ -183,6 +183,9 @@ class EvaluationControl:
             observed_frame = world.get_snapshot().frame if getattr(self,'audit_dir',None) else None
             audit = None
             if getattr(self,'audit_dir',None):
+                audit_path = self.audit_dir/path.name
+                if audit_path.exists() or audit_path.is_symlink():
+                    raise RuntimeError('Command already has an audit record; refusing automatic replay: '+path.stem)
                 audit = {'schema_version':'carla-editor-command/1', 'command_id':path.stem,
                          'execution_id':os.environ.get('CSA_EXECUTION_ID'),
                          'observed_frame_before':observed_frame, 'recorded_at':time.time(),

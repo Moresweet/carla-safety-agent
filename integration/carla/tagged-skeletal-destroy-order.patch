@@ -1,0 +1,39 @@
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Actor/ActorDispatcher.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Actor/ActorDispatcher.cpp
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Actor/ActorDispatcher.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Actor/ActorDispatcher.cpp
+@@ -14,2 +14,4 @@
+ #include "Carla/Game/Tagger.h"
++#include "Carla/Game/TaggedComponent.h"
++#include "RenderingThread.h"
+ #include "Carla/Vehicle/VehicleControl.h"
+@@ -160,4 +162,23 @@
+     // Destroy the actor.
++    // Annotation skeletal proxies borrow the parent's MeshObject. Remove them
++    // and drain pending transform updates before Actor::Destroy releases it.
++    TArray<UTaggedComponent*> RetiredTags;
++    TInlineComponentArray<USkeletalMeshComponent*> SkeletalMeshes;
++    Actor->GetComponents(SkeletalMeshes);
++    for (USkeletalMeshComponent* Mesh : SkeletalMeshes)
++    {
++      UTaggedComponent* Tagged = ATagger::FindTaggedComponent(Mesh);
++      if (IsValid(Tagged) && Tagged->IsRegistered())
++      {
++        Tagged->UnregisterComponent();
++        RetiredTags.Add(Tagged);
++      }
++    }
++    if (RetiredTags.Num() > 0)
++    {
++      FlushRenderingCommands();
++    }
+     UE_LOG(LogCarla, Log, TEXT("UActorDispatcher::Destroying actor: '%s' %x"), *Id, Actor);
+     UE_LOG(LogCarla, Log, TEXT("            %s"), Actor?*Actor->GetName():*FString("None"));
+     if (!Actor || !Actor->Destroy())
+@@ -164,3 +185,7 @@
+     {
++      for (UTaggedComponent* Tagged : RetiredTags)
++      {
++        if (IsValid(Tagged)) Tagged->RegisterComponent();
++      }
+       UE_LOG(LogCarla, Error, TEXT("Failed to destroy actor: '%s'"), *Id);
+       return false;

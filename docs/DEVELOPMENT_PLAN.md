@@ -368,3 +368,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 崩溃恢复改为从本地 SessionJournal 核验活 worker，不依赖失去模拟器后可能阻塞的桥接 HTTP；普通重启仍先检查并保存现场。新启动就绪检查会在 launcher 退出时提早报错。shell 语法及 diff 检查通过。
 - 同一完整碰撞回归 a09191ddf8f54807bcfdebabe7cdfdd7 再次失败，但取得权威原生栈：`.runtime/carla.log:60405` Thread 168 RenderThread 1 SIGSEGV，PC=0x0000000400000004；调用方 FScene::UpdateAllPrimitiveSceneInfos（RendererScene.cpp:4139，PrimitiveSceneProxy->SetTransform），随后 FDeferredShadingSceneRenderer::Render_CARLA、RenderViewFamily_RenderThread。紧前日志为销毁 vehicle.lincoln.mkz_2020 actor 124。
 - 这将定位方向转向车辆/语义网格渲染代理生命周期；尚不能仅凭坏虚调用地址认定具体对象或唯一根因。原生服务再次退出，目标崩溃未修复；已有失败数据与日志保留，后续需检查代理释放同步并重跑。
+
+### 2026-09-08 语义骨骼代理先销毁候选方案（仍失败）
+
+- 原生源码确认 FTaggedSkeletalMeshSceneProxy 复用父骨骼 MeshObject，FSkeletalMeshSceneProxy::OnTransformChanged 会调用该对象。新增 tagged-skeletal-destroy-order.patch，在 ActorDispatcher 中注销车辆语义骨骼组件、FlushRenderingCommands 后销毁车辆；销毁失败则重新注册。仅针对 CARLA RPC 销毁，不覆盖切图或外部销毁。
+- 补丁检查及本机 CarlaUE4Editor 编译通过（33.26 秒），144 项 Python 测试通过。同图同参数完整回归 e770a199f4814db7b78b0c82b96805ac **仍失败**：worker 返回 0，但 recovering/world_recovery、原生日志再次 Signal 11、测试车清理 RPC 超时。因此不得把该补丁描述为已解决崩溃，也不能排除其他代理或父资源释放路径。
+- 调试启动追加崩溃调用帧局部变量输出，下一步明确坏指针所属代理；当前原生服务再次退出，未完成稳定性验收。

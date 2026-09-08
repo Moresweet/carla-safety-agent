@@ -40,6 +40,13 @@ make CarlaUE4Editor
 
 ### Collision sensor lifecycle guard
 
+`carla/tagged-skeletal-destroy-order.patch` changes ActorDispatcher destruction:
+registered skeletal annotation components are unregistered and queued render
+work is flushed before the parent actor releases its MeshObject. If actor
+destruction fails, those components are registered again. This guards CARLA RPC
+destruction, not arbitrary external engine destruction or map teardown. Apply
+with `git apply --recount` after checking it, then rebuild CarlaUE4Editor.
+
 `carla/collision-sensor-lifecycle.patch` modifies only CollisionSensor.h/cpp. It
 unbinds the previous owner's hit delegate before reassignment and EndPlay, and
 rejects callbacks during destruction before the base sensor closes its stream.

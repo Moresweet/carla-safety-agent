@@ -31,7 +31,7 @@ from carla_safety_agent.blender_pipeline import BlenderPipeline
 from carla_safety_agent.dataset import list_datasets
 from carla_safety_agent.provenance import ActorProvenance
 from carla_safety_agent.uv_audit import audit_uv
-from carla_safety_agent.replay import replay_index, replay_file
+from carla_safety_agent.replay import replay_index, replay_file, replay_projection
 from carla_safety_agent.natural_language import NaturalLanguageCompiler
 from carla_safety_agent.session import SessionJournal
 from carla_safety_agent.scene_store import SceneStore, validate_scene
@@ -1574,6 +1574,17 @@ class Handler(BaseHTTPRequestHandler):
             result = system_preflight() if request.path == '/system/preflight' else {'ok': True, 'session': SESSION.snapshot()}
             self._headers()
             self.wfile.write(json.dumps(result).encode())
+            return
+        if request.path == '/datasets/projection':
+            try:
+                params = parse_qs(request.query)
+                payload=replay_projection(DATASET_ROOT,params.get('run_id',[''])[0],
+                    params.get('frame',['-1'])[0],params.get('camera',[''])[0])
+                self._headers()
+                self.wfile.write(json.dumps({'ok':True,**payload}).encode())
+            except (ValueError,KeyError,OSError) as exc:
+                self._headers(400)
+                self.wfile.write(json.dumps({'ok':False,'error':str(exc)}).encode())
             return
         if request.path in ('/capture/status', '/capture/media', '/datasets/index', '/datasets/file', '/datasets/frame'):
             try:

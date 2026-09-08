@@ -35,6 +35,21 @@ class SessionJournal:
         with self.lock:
             return json.loads(json.dumps(self.state))
 
+    def read_execution(self, run_id):
+        """Read only a bounded local record; never accept arbitrary file paths."""
+        from .scene_store import identifier
+        run_id = identifier(run_id)
+        root = (self.root/'experiments').resolve()
+        path = (root/run_id/'execution.json').resolve()
+        if path.parent.parent != root or path.parent.name != run_id or path.name != 'execution.json':
+            raise ValueError('Execution record outside experiment directory')
+        if path.stat().st_size > 8*1024*1024:
+            raise ValueError('Oversized execution record')
+        result = json.loads(path.read_text())
+        if not isinstance(result, dict) or result.get('run_id') != run_id:
+            raise ValueError('Execution identity mismatch')
+        return result
+
     def owned_pid(self):
         with self.lock:
             identity = self.state.get('process')

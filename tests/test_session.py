@@ -33,3 +33,22 @@ def test_invalid_transition_and_corruption_fail_closed(tmp_path):
     (tmp_path/'session.json').write_text('{broken')
     with pytest.raises(ValueError): SessionJournal(tmp_path)
     assert process_identity(-1) is None
+
+
+def test_read_execution_identity_and_path_boundary(tmp_path):
+    import json
+    journal = SessionJournal(tmp_path/'project')
+    run = journal.begin('test', {'starting_scene':{'map':'Town04'}})
+    assert journal.read_execution(run)['configuration']['starting_scene']['map'] == 'Town04'
+    for invalid in ('../session', '/tmp/execution', '', None):
+        with pytest.raises(ValueError): journal.read_execution(invalid)
+    path = tmp_path/'project'/'experiments'/run/'execution.json'
+    payload = json.loads(path.read_text())
+    payload['run_id'] = 'another'
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match='identity'): journal.read_execution(run)
+    path.unlink()
+    outside = tmp_path/'execution.json'
+    outside.write_text(json.dumps(payload))
+    path.symlink_to(outside)
+    with pytest.raises(ValueError, match='outside'): journal.read_execution(run)

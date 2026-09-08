@@ -932,6 +932,18 @@ def save_scene(data):
     return {'ok': True, **SCENES.save(document, data.get('name',''), data.get('scene_id'), data.get('expected_version'))}
 
 
+def save_experiment_scene(data):
+    """Promote a recorded pre-run snapshot without changing the live world."""
+    execution = SESSION.read_execution(data.get('run_id'))
+    document = execution.get('configuration', {}).get('starting_scene')
+    if document is None:
+        raise ValueError('This execution has no recorded starting scene')
+    document = validate_scene(document)
+    document['source_execution'] = {'run_id': execution['run_id'], 'scope':'pre_execution_editor'}
+    saved = SCENES.save(document, data.get('name') or 'Before '+execution['run_id'])
+    return {'ok':True, **saved, 'world_modified':False}
+
+
 def capture_scene_document():
     """Caller holds simulation ownership lock; snapshot only managed editor state."""
     world = connect_world()
@@ -1778,7 +1790,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "/blender/create", "/blender/retexture",
                                 "/blender/import", "/blender/spawn",
                                 "/e2e/start", "/e2e/stop", "/collection/control", '/session/recover',
-                                '/scenes/save', '/scenes/restore', '/scenes/history',
+                                '/scenes/save', '/scenes/restore', '/scenes/history', '/scenes/from-experiment',
                                 '/materials/apply', '/materials/restore', '/collection/start', '/collection/stop', '/collection/control'):
             self._headers(404)
             self.wfile.write(b'{"ok":false,"error":"not found"}')
@@ -1804,8 +1816,9 @@ class Handler(BaseHTTPRequestHandler):
                                               for key in ('object_id', 'component', 'slot')}, payload)
             elif request.path == '/materials/restore':
                 result = apply_material_slot(json.loads(payload or b'{}'))
-            elif request.path in ('/scenes/save', '/scenes/restore', '/scenes/history'):
-                operation = {'/scenes/save': save_scene, '/scenes/restore': restore_scene, '/scenes/history': scene_history}[request.path]
+            elif request.path in ('/scenes/save', '/scenes/restore', '/scenes/history', '/scenes/from-experiment'):
+                operation = {'/scenes/save': save_scene, '/scenes/restore': restore_scene,
+                             '/scenes/history': scene_history, '/scenes/from-experiment': save_experiment_scene}[request.path]
                 result = operation(json.loads(payload or b'{}'))
             elif request.path == '/session/recover':
                 result = recover_session()

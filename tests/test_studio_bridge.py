@@ -506,3 +506,21 @@ def test_all_world_executions_capture_editor_scene_before_mutation(action, expec
     first_write = next(n for n in ast.walk(start) if isinstance(n, ast.Assign)
                        and any(isinstance(t, ast.Name) and t.id == 'log_stream' for t in n.targets))
     assert assignment.lineno < first_write.lineno
+
+
+def test_promote_experiment_snapshot_reuses_scene_store_without_world_access(tmp_path):
+    from carla_safety_agent.scene_store import SceneStore, validate_scene
+    original = {'map':'Town04', 'objects':[]}
+    scenes = SceneStore(tmp_path)
+    env = functions('save_experiment_scene', validate_scene=validate_scene, SCENES=scenes,
+        SESSION=SimpleNamespace(read_execution=lambda _: {'run_id':'experiment-1',
+            'configuration':{'starting_scene':original}}))
+    result = env['save_experiment_scene']({'run_id':'experiment-1', 'name':'Recovered snapshot'})
+    assert result['world_modified'] is False
+    saved = scenes.read(result['head']['scene_id'])['document']
+    assert saved['source_execution'] == {'run_id':'experiment-1', 'scope':'pre_execution_editor'}
+    assert saved['map'] == 'Town04'
+    assert 'source_execution' not in original
+    env['SESSION'] = SimpleNamespace(read_execution=lambda _: {'configuration':{}})
+    with pytest.raises(ValueError, match='no recorded starting scene'):
+        env['save_experiment_scene']({'run_id':'legacy'})

@@ -415,3 +415,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 修复模型 run/preset-run 的 starting_scene=null 缺口：所有涉及世界的执行均在清理预览/打开日志之前捕获编辑器管理对象、14 项天气、材质引用、隐藏对象和视角；doctor/model-smoke 不读取场景。沿用 SessionJournal 保存到每次执行记录，不创建虚假的场景版本。
 - 此快照是执行前编辑器状态，不是预设路线随后生成的实际场景；尚未实现自动恢复，已有快照限制（旧式 actor 纹理、外部可见性未纳管）继续明确保留。
 - 增加五种 action 的快照分支与顺序测试，151 项测试通过。实机 runs/validation/lifecycle-starting-scene-20260908/report.json：VAD 帧 4→16，启动与结束快照相同、会话 stopped、preflight.ready=true、世界异步；另行读取 data/experiments/<execution_id>/execution.json 与报告逐值对比一致。此次现场没有纳管用户对象，不能据此声称非空对象的模型前后恢复已验证。
+
+### 2026-09-08 历史实验快照转场景版本
+
+- 新增 POST /scenes/from-experiment（run_id、可选 name），读取已保存执行记录并验证 starting_scene，创建独立场景版本，保留 source_execution.run_id 和 pre_execution_editor 范围；不执行 CARLA 操作，不覆盖已有场景。后续可复用已有 /scenes/restore 同图合并恢复与失败补偿。
+- 执行记录读取限定实验目录、身份一致及 8 MiB 上限，拒绝路径穿越/外部符号链接和没有快照的旧记录。153 项测试通过，覆盖读取边界、缺失快照、来源记录与原始文档不变。
+- 本机 HTTP 实测：执行 d3ba6b3c31aa42d9a7e15bf20f64bc10 保存为场景 0bc18ba3c7034793b3018fedac56cca6、版本 527b08626277461faf4da32071896f4f；经场景读取接口核对来源 ID 与 Town04。此轮仅保存/读取，没有执行世界恢复；前端入口、非空场景恢复和自动恢复仍待实现验收。

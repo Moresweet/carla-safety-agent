@@ -384,7 +384,7 @@ def start_e2e(data: dict) -> dict:
         if action in ("run", "preset-run", "sensor-rig"):
             _hero_lock.clear()
             collection_request({'recording': False})
-            results_path = None if action == 'sensor-rig' else (PROJECT_ROOT / "runs/uniad" / f"{route.stem}.json"
+            results_path = None if action == 'sensor-rig' else (PROJECT_ROOT / "runs/uniad" / f"{route.stem}-{uuid.uuid4().hex}.json"
                             if action == "run" else PROJECT_ROOT / "runs/benchmark" /
                             f"{algorithm}-{route.stem}-{route_id}-{uuid.uuid4().hex[:8]}.json")
             (_evaluation_control_dir / "state.json").unlink(missing_ok=True)

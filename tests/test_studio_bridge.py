@@ -572,3 +572,22 @@ def test_live_scene_bindings_reject_ambiguous_or_changed_actors(failure):
     world = SimpleNamespace(get_snapshot=lambda:SimpleNamespace(find=lambda _:object()),
                             get_actor=lambda _:None if failure=='disappeared' else actor)
     with pytest.raises(RuntimeError): functions('live_scene_bindings')['live_scene_bindings'](world,records)
+
+
+def test_generated_run_results_are_distinct_for_identical_routes(tmp_path):
+    import uuid
+    source=Path(__file__).resolve().parents[1]/'tools/livery_bridge.py'
+    tree=ast.parse(source.read_text())
+    start=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='start_e2e')
+    assignment=next(n for n in ast.walk(start) if isinstance(n,ast.Assign)
+                    and any(isinstance(t,ast.Name) and t.id=='results_path' for t in n.targets))
+    env={'action':'run','PROJECT_ROOT':tmp_path,'route':Path('same-plan.json'),'uuid':uuid}
+    code=compile(ast.Module(body=[assignment],type_ignores=[]),str(source),'exec')
+    exec(code,env)
+    first=env['results_path']
+    first.parent.mkdir(parents=True)
+    first.write_text('previous result')
+    exec(code,env)
+    assert env['results_path']!=first
+    assert env['results_path'].parent==tmp_path/'runs/uniad'
+    assert first.read_text()=='previous result'

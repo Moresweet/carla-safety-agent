@@ -10,6 +10,8 @@ def main():
     assert request('system/preflight')['ready']
     plan=request('scenario/compile', {'description':'Town04 前车急刹，自车 5 m/s', 'max_duration_s':1})
     digest=plan['scenario_sha256']
+    previous={p:hashlib.sha256(p.read_bytes()).hexdigest()
+              for p in (Path(__file__).resolve().parents[1]/'runs/uniad').glob(Path(plan['scenario_path']).stem+'*.json')}
     assert hashlib.sha256(Path(plan['scenario_path']).read_bytes()).hexdigest()==digest
     request('e2e/start',{'action':'run','algorithm':'uniad-tiny','route':plan['scenario_path']})
     session=request('session/status')['session']
@@ -27,6 +29,9 @@ def main():
         assert session['state']=='completed', session
         result=json.loads(Path(session['configuration']['results']).read_text())
         assert result['scenario_sha256']==digest
+        assert result['execution_id']==execution
+        assert Path(session['configuration']['results']) not in previous
+        assert all(hashlib.sha256(p.read_bytes()).hexdigest()==value for p,value in previous.items())
         assert result['trace'], 'Model produced no driving frames'
         assert result['scenario']==plan['scenario']
         preflight=request('system/preflight')

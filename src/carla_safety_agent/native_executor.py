@@ -232,6 +232,7 @@ class NativeScenarioExecutor:
             output.parent.mkdir(parents=True, exist_ok=True)
             payload = {"schema_version": "carla-safety-evaluation/0.1",
                        "scenario_sha256": scenario_digest,
+                       "execution_id": os.environ.get('CSA_EXECUTION_ID'),
                        "scenario": spec.to_dict(), "result": result.to_dict(), "trace": trace}
             output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             print(json.dumps(result.to_dict()), flush=True)

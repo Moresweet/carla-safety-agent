@@ -88,6 +88,19 @@ class DatasetRecorder:
             "files": {"scenario": "scenario.json", "state": "state.jsonl",
                       "trace": "trace.json" if trace_path.is_file() else None},
             "sensors": sensors,
+            "capture_contract": {
+                "id": "legacy-rule-chase/1",
+                "model_input_compatible": False,
+                "camera_layout": "single_chase_view",
+                "depth_encoding": "carla_logarithmic_visualization_png",
+                "semantic_encoding": "cityscapes_palette_png",
+                "synchronization_verified": False,
+                "limitations": [
+                    "Not the six-camera model sensor contract",
+                    "Depth PNG is a visualization, not a metric depth array",
+                    "Independent sensor callbacks; matching frames must be verified before use",
+                ],
+            },
             "provenance": self.scenario.provenance,
             "checksums": {
                 "scenario_sha256": _sha256(scenario_path),

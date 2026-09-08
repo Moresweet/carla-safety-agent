@@ -42,6 +42,10 @@ def test_recorder_writes_portable_manifest_and_state(tmp_path: Path):
     assert manifest["sensors"]["rgb"]["samples"] == 1
     assert manifest["checksums"]["state_sha256"]
     assert manifest["checksums"]["trace_sha256"]
+    contract=manifest['capture_contract']
+    assert contract['model_input_compatible'] is False
+    assert contract['synchronization_verified'] is False
+    assert contract['depth_encoding']=='carla_logarithmic_visualization_png'
     assert list_datasets(tmp_path)[0]["run_id"] == recorder.run_id
 
 

@@ -22,6 +22,26 @@ def replay_index(root, run_id):
     return result
 
 
+def replay_editor_events(root, run_id):
+    from .editor_events import editor_events
+    path = dataset_path(root,run_id)
+    manifest = json.loads((path/'manifest.json').read_text())
+    reference = manifest.get('files',{}).get('editor_events')
+    if reference is None:
+        return {'available':False,'events':[],'message':'此录制没有归档编辑事件'}
+    archive = path/'editor-events.json'
+    if reference != archive.name or archive.is_symlink() or archive.stat().st_size>32*1024*1024:
+        raise ValueError('Invalid editor event archive')
+    document = json.loads(archive.read_text())
+    if document.get('schema_version') != 'carla-editor-events/1' or document.get('execution_id') != manifest.get('execution_id'):
+        raise ValueError('Editor archive identity mismatch')
+    frames = [entry['frame'] for entry in replay_index(root,run_id)['frames']]
+    events = editor_events(document['records'],frames,manifest['execution_id'])
+    if events != document.get('events'):
+        raise ValueError('Editor event index differs from audit records')
+    return {'available':True,'execution_id':manifest['execution_id'],'events':events}
+
+
 def replay_file(root, run_id, frame, name):
     path = dataset_path(root, run_id)
     index = replay_index(root, run_id)

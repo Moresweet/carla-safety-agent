@@ -31,7 +31,7 @@ from carla_safety_agent.blender_pipeline import BlenderPipeline
 from carla_safety_agent.dataset import list_datasets
 from carla_safety_agent.provenance import ActorProvenance
 from carla_safety_agent.uv_audit import audit_uv
-from carla_safety_agent.replay import replay_index, replay_file, replay_projection, replay_trajectory, replay_events
+from carla_safety_agent.replay import replay_index, replay_file, replay_projection, replay_trajectory, replay_events, replay_editor_events
 from carla_safety_agent.natural_language import NaturalLanguageCompiler
 from carla_safety_agent.scenario_archive import archive_scenario, read_verified_scenario
 from carla_safety_agent.build_plan import build_plan
@@ -1720,10 +1720,12 @@ class Handler(BaseHTTPRequestHandler):
             self._headers()
             self.wfile.write(json.dumps(result).encode())
             return
-        if request.path in ('/datasets/projection','/datasets/trajectory','/datasets/events'):
+        if request.path in ('/datasets/projection','/datasets/trajectory','/datasets/events','/datasets/editor-events'):
             try:
                 params = parse_qs(request.query)
-                if request.path == '/datasets/events':
+                if request.path == '/datasets/editor-events':
+                    payload=replay_editor_events(DATASET_ROOT,params.get('run_id',[''])[0])
+                elif request.path == '/datasets/events':
                     payload=replay_events(DATASET_ROOT,params.get('run_id',[''])[0])
                 elif request.path == '/datasets/trajectory':
                     payload=replay_trajectory(DATASET_ROOT,params.get('run_id',[''])[0],

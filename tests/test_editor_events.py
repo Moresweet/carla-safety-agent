@@ -33,7 +33,7 @@ def test_portable_event_archive_and_execution_guard(tmp_path):
     dataset=tmp_path/'dataset'; dataset.mkdir()
     audit=tmp_path/'audit'; audit.mkdir()
     (dataset/'manifest.json').write_text(json.dumps({'execution_id':'run','files':{}}))
-    (dataset/'index.json').write_text(json.dumps({'frames':[{'frame':10},{'frame':15}]}))
+    (dataset/'index.json').write_text(json.dumps({'frames':[{'frame':10,'timestamp':.5},{'frame':15,'timestamp':.75}]}))
     (audit/'command.json').write_text(json.dumps(record()))
     with pytest.raises(ValueError): attach_editor_events(dataset,audit,'other')
     assert not (dataset/'editor-events.json').exists()
@@ -42,3 +42,9 @@ def test_portable_event_archive_and_execution_guard(tmp_path):
     archive=json.loads((dataset/'editor-events.json').read_text())
     assert archive['records']==[record()]
     assert json.loads((dataset/'manifest.json').read_text())['files']['editor_events']=='editor-events.json'
+    from carla_safety_agent.replay import replay_editor_events
+    assert replay_editor_events(tmp_path,'dataset')['events']==events
+    archive['events'][0]['seek_frame']=10
+    (dataset/'editor-events.json').write_text(json.dumps(archive))
+    with pytest.raises(ValueError,match='differs'):
+        replay_editor_events(tmp_path,'dataset')

@@ -854,3 +854,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 空闲后加载桥接 PID 3489873；天气 A/B 队列 batch-queue-f00e36896eb647dba1a404d5ba09e130 完整通过，执行 e9302700e4474fe2bde56cfb9a3f2975 / 10747b72dd5545be8fe455ceb6adb732。两份采集 capture-20260908T175920-acba69f4 / capture-20260908T175936-4be1b2c5 各 20 帧，原始数据和 14/14 外参验证通过。
 - 本轮脚本通过 /session/restore-weather 得到 test_weather_restored=true 后才生成 report.json，世界异步、零残留传感器；过期 run_id 的真实 HTTP 恢复请求返回 400 JSON。
 - 一秒窗口天气配对差值仍为零，不作性能结论。S7 跨模型与纹理矩阵、报告界面仍未完成，其余阶段状态保持不变。
+
+### 2026-09-08 批量 JSON 报告导出
+
+- 新增 tools/export_experiment_report.py，读取队列及可信结果目录生成指标报告，可选 --compare AXIS BASELINE CANDIDATE；按完整报告内容哈希保存 JSON，相同内容复用，已有不同内容拒绝覆盖，不启动仿真。
+- 287 项测试通过，真实天气队列导出到 runs/validation/exported-reports/report-6e38e38f9bd9f9979e628d1b4dbf5021ca50d5f6e922607803d5c48fddafd028.json，包含两项执行、经核验指标及天气配对差异。
+- 此报告仍引用本机结果路径，不是自包含项目迁移包；可视报告界面、数据质量核验证据和跨模型比较仍待接入。

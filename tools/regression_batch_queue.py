@@ -138,6 +138,11 @@ def main():
             summary = summarize_queue(q.read(), ROOT/'runs/rule')
             comparison = compare_variants(summary, 'weather', 'clear', 'rain')
             assert comparison['comparable_count'] == 1, comparison
+            if args.http:
+                observed = request('batches/compare?batch_id='+batch_id+
+                                   '&axis=weather&baseline=clear&candidate=rain')['comparison']
+                assert observed == comparison, (observed, comparison)
+                report['http_comparison_verified'] = True
             report['comparison'] = comparison
             (root/'summary.json').write_text(json.dumps(summary, indent=2))
     finally:

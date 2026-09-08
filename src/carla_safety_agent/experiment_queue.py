@@ -111,7 +111,7 @@ class ExperimentQueue:
         This does not launch work or infer simulator recovery from PID absence.
         The session must already have completed its own recovery lifecycle.
         """
-        from .session import process_identity
+        from .session import observed_process_identity
         with self.locked():
             state = self.read()
             job = next((j for j in state['jobs'] if j['job_id'] == job_id), None)
@@ -127,7 +127,7 @@ class ExperimentQueue:
             if terminal not in ('completed', 'failed', 'stopped'):
                 return {'reconciled': False, 'state': terminal}
             identity = execution.get('process')
-            if identity and process_identity(identity['pid']) == identity:
+            if identity and observed_process_identity(identity['pid']) == identity:
                 return {'reconciled': False, 'state': 'process_still_alive'}
             if execution.get('ended_at') is None:
                 raise ValueError('Terminal execution has no end timestamp')

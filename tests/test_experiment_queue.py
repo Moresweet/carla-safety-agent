@@ -59,7 +59,7 @@ def test_reconcile_requires_terminal_session_and_dead_process(tmp_path, monkeypa
     from types import SimpleNamespace
     from carla_safety_agent import session
     identity = {'pid': 123, 'start_ticks': '456'}
-    monkeypatch.setattr(session, 'process_identity', lambda pid: identity if live else None)
+    monkeypatch.setattr(session, 'observed_process_identity', lambda pid: identity if live else None)
     q = ExperimentQueue(tmp_path); q.create(dimensions()); c = q.claim()
     job, attempt = c['job_id'], c['attempt']['attempt_id']
     q.update_attempt(job, attempt, execution_id='run')
@@ -72,3 +72,19 @@ def test_reconcile_requires_terminal_session_and_dead_process(tmp_path, monkeypa
     assert saved['state'] == (status if expected else 'running')
     if expected:
         assert saved['attempts'][0]['result']['benchmark_passed'] is False
+
+
+def test_reconcile_observation_failure_retains_running_attempt(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from carla_safety_agent import session
+    def denied(pid):
+        raise PermissionError('Cannot inspect process')
+    monkeypatch.setattr(session, 'observed_process_identity', denied)
+    q = ExperimentQueue(tmp_path); q.create(dimensions()); c = q.claim()
+    job, attempt = c['job_id'], c['attempt']['attempt_id']
+    q.update_attempt(job, attempt, execution_id='run')
+    journal = SimpleNamespace(read_execution=lambda _: {'run_id': 'run', 'state': 'completed',
+        'process': {'pid': 123, 'start_ticks': '4'}, 'ended_at': 1, 'returncode': 0})
+    with pytest.raises(PermissionError): q.reconcile(job, attempt, journal)
+    assert q.read()['jobs'][0]['state'] == 'running'
+    with pytest.raises(ValueError): q.claim()

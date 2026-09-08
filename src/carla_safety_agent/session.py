@@ -9,6 +9,27 @@ from pathlib import Path
 ACTIVE = {'preparing', 'running', 'stopping', 'recovering'}
 
 
+def observed_process_identity(pid):
+    """Strict observer: only a missing PID or zombie proves owner absence.
+
+    Permission and malformed-record errors propagate; callers must not interpret
+    observation failure as permission to dispatch another simulation.
+    """
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        raise ValueError('Invalid process ID')
+    try:
+        text = Path(f'/proc/{pid}/stat').read_text()
+    except FileNotFoundError:
+        return None
+    boundary = text.rfind(')')
+    fields = text[boundary+2:].split()
+    if boundary < 0 or len(fields) < 20 or not fields[19].isdigit():
+        raise ValueError('Malformed process stat record')
+    if fields[0] == 'Z':
+        return None
+    return {'pid': pid, 'start_ticks': fields[19]}
+
+
 def process_identity(pid):
     """Linux start ticks prevent a stale PID file from signalling another job."""
     try:

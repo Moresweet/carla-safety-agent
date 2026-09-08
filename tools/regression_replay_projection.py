@@ -1,6 +1,7 @@
 """Read-only HTTP regression against an explicitly selected recorded dataset."""
 import argparse
 import json
+import math
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -21,6 +22,16 @@ def main():
     assert events['collision_detection_available'] == events['collisions']['available']
     assert events['sample_count']==len(index['frames'])
     positions={entry['frame']:offset for offset,entry in enumerate(index['frames'])}
+    collision_frames=set()
+    for event in events['collisions']['events']:
+        nearest=min(index['frames'], key=lambda entry:(abs(entry['frame']-event['frame']),entry['frame']))
+        assert event['replay_frame']==nearest['frame'], 'Collision does not seek to nearest saved frame'
+        assert event['exact_saved_frame']==(nearest['frame']==event['frame'])
+        assert math.isclose(event['replay_time_offset_s'],nearest['timestamp']-event['timestamp'],abs_tol=1e-9)
+        collision_frames.add(nearest['frame'])
+    for collision_frame in sorted(collision_frames):
+        sample=get('/datasets/frame',run_id=args.run_id,frame=collision_frame)
+        assert sample['frame']==collision_frame, 'Collision seek target cannot be loaded'
     previous_end=-1
     for event in events['events']:
         start,end=positions[event['start_frame']],positions[event['end_frame']]
@@ -57,7 +68,9 @@ def main():
         else:
             raise AssertionError('Invalid projection request accepted')
     print(json.dumps({'run_id':args.run_id,'frame':frame,'counts':counts,
-                     'braking_segments':len(events['events']),'invalid_requests_rejected':True}))
+                     'braking_segments':len(events['events']),
+                     'collision_events':len(events['collisions']['events']),
+                     'collision_seek_frames_verified':len(collision_frames),'invalid_requests_rejected':True}))
 
 
 if __name__=='__main__': main()

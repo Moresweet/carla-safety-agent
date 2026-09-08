@@ -902,3 +902,10 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 新增 create_experiment_queue.py，从 matrix-<sha256>.json 校验内容哈希、规范序列化与维度展开一致性后创建 pending 队列，不启动任务；已有相同计划复用，篡改档案在创建目标目录前拒绝。
 - advance_experiment_queue.py 增加 --retry JOB_ID，与暂停/恢复互斥，只将允许重试的任务重新排队，不自动启动或抹去历史尝试。
 - 299 项测试通过，覆盖规范计划创建、全部任务未执行、幂等创建与篡改拒绝。CLI 仍是开发入口，用户界面和完整模型/纹理矩阵未完成。
+
+### 2026-09-08 批次目录与本机 HTTP 入口
+
+- 新增 BatchCatalog，固定保存于 data/experiment-queues，以稳定批次 ID 查询，拒绝越界路径与符号链接；列表支持分页，损坏队列明确显示错误。
+- POST /batches/create 接收五维矩阵，创建 pending 队列但不启动仿真；GET /batches 查询列表，GET /batches/report?batch_id=ID 校验计划与执行归属后读取报告。结果只从固定 runs/rule、runs/uniad 根目录解析，不接受客户端任意目录。
+- 计划编译增加 16 MiB 展开上限，在逐个组合阶段拒绝膨胀配置，避免创建无法正常读取的新队列。
+- 303 项测试通过，包括直接执行实际 HTTP Handler 的创建、列表、报告、非法 ID 和非法创建请求测试；本轮未重启正在使用的桥接服务，未进行浏览器或原生实机验收。前端操作入口、完整模型/纹理矩阵与项目迁移仍待完成。

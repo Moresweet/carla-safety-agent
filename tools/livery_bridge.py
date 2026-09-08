@@ -36,6 +36,8 @@ from carla_safety_agent.natural_language import NaturalLanguageCompiler
 from carla_safety_agent.scenario_archive import archive_scenario, read_verified_scenario
 from carla_safety_agent.build_plan import build_plan
 from carla_safety_agent.session import SessionJournal
+from carla_safety_agent.batch_catalog import BatchCatalog
+from carla_safety_agent.experiment_report import summarize_queue
 from carla_safety_agent.scene_store import SceneStore, validate_scene
 from carla_safety_agent.material_library import MaterialLibrary, MaterialTransaction, exact_environment_target
 from carla_safety_agent.visibility import VisibilityStore, VisibilityTransaction
@@ -95,6 +97,7 @@ UNIAD_PYTHON = Path(os.environ.get(
     "UNIAD_PYTHON", str(E2E_ROOT / "miniconda3/envs/uniad-cu128/bin/python")))
 BLENDER = BlenderPipeline(PROJECT_ROOT)
 SESSION = SessionJournal(PROJECT_ROOT / 'data')
+BATCHES = BatchCatalog(PROJECT_ROOT / 'data/experiment-queues')
 SCENES = SceneStore(PROJECT_ROOT / 'data/scenes')
 VISIBILITY = VisibilityStore(PROJECT_ROOT / 'data')
 MATERIALS = MaterialLibrary(PROJECT_ROOT / 'data')
@@ -1711,6 +1714,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         request = urlparse(self.path)
         params = parse_qs(request.query)
+        if request.path in ('/batches', '/batches/report'):
+            try:
+                result = (BATCHES.list(int(params.get('limit', ['30'])[0]), params.get('after', [None])[0])
+                          if request.path == '/batches' else
+                          {'report': summarize_queue(BATCHES.read(params.get('batch_id', [''])[0]),
+                              {'rule-run': PROJECT_ROOT/'runs/rule', 'run': PROJECT_ROOT/'runs/uniad'})})
+                self._headers()
+                self.wfile.write(json.dumps({'ok': True, **result}).encode())
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                self._headers(400)
+                self.wfile.write(json.dumps({'ok': False, 'error': str(exc)}).encode())
+            return
         if request.path in ('/materials/catalog', '/materials/mesh'):
             try:
                 if request.path == '/materials/catalog':
@@ -1922,6 +1937,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         request = urlparse(self.path)
         if request.path not in ("/apply", "/apply/road", "/apply/building",
+                                '/batches/create',
                                 "/apply/environment",
                                 "/apply/pedestrian", "/focus/actor",
                                 "/focus/static", "/focus/bev",
@@ -1945,7 +1961,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(b'{"ok":false,"error":"Request body exceeds 16 MiB limit"}')
                 return
             payload = self.rfile.read(length)
-            if request.path == '/collection/start':
+            if request.path == '/batches/create':
+                result = {'ok': True, **BATCHES.create(json.loads(payload or b'{}'))}
+            elif request.path == '/collection/start':
                 result = start_e2e({**json.loads(payload or b'{}'), 'action':'sensor-rig'})
             elif request.path == '/collection/control':
                 result = manual_sensor_control(json.loads(payload or b'{}'))

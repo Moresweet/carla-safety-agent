@@ -11,6 +11,7 @@ from pathlib import Path
 
 AXES = ('scenes', 'models', 'weather', 'textures', 'seeds')
 MAX_JOBS = 256
+MAX_PLAN_BYTES = 16*1024*1024
 
 
 def canonical(value):
@@ -52,12 +53,19 @@ def compile_matrix(dimensions):
                 raise ValueError(f'Duplicate variant in {axis}')
             seen.add(identity)
     jobs = []
+    expanded_bytes = len(payload)
     for combination in itertools.product(*(dimensions[axis] for axis in AXES)):
         configuration = dict(zip(AXES, combination))
-        jobs.append({'job_id': hashlib.sha256(canonical(configuration)).hexdigest(),
-                     'configuration': configuration})
+        job = {'job_id': hashlib.sha256(canonical(configuration)).hexdigest(),
+               'configuration': configuration}
+        expanded_bytes += len(canonical(job)) + 1
+        if expanded_bytes > MAX_PLAN_BYTES:
+            raise ValueError('Expanded experiment plan exceeds 16 MiB')
+        jobs.append(job)
     document = {'schema_version': 'carla-experiment-matrix/1', 'dimensions': dimensions,
                 'jobs': jobs, 'job_count': count, 'execution_status': 'not_started'}
+    if len(canonical(document)) > MAX_PLAN_BYTES:
+        raise ValueError('Expanded experiment plan exceeds 16 MiB')
     return document
 
 

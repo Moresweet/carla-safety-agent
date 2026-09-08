@@ -66,9 +66,56 @@ def replay_events(root, run_id):
         else:
             active = None
         previous = entry['frame']
+    collisions = recorded_collisions(path, entries)
     return {'events':events, 'source':'recorded_control', 'brake_threshold':0.5,
-            'sample_count':len(entries), 'collision_detection_available':False,
+            'sample_count':len(entries), 'collision_detection_available':collisions['available'],
+            'collisions':collisions,
             'note':'Braking segments are not collision or danger labels; boundaries use saved samples only.'}
+
+
+def recorded_collisions(dataset, entries):
+    """Keep native event time separate from the closest available replay sample."""
+    import bisect
+    from .scene_store import finite_number
+    file = (dataset / 'collisions.json').resolve()
+    if file.parent != dataset:
+        raise ValueError('Collision file outside dataset')
+    if not file.exists():
+        manifest = json.loads((dataset / 'manifest.json').read_text())
+        if manifest.get('files', {}).get('collisions'):
+            raise ValueError('Declared collision recording is missing')
+        return {'available':False, 'events':[], 'note':'No native collision recording in this dataset'}
+    if file.stat().st_size > 16*1024*1024:
+        raise ValueError('Oversized collision metadata')
+    payload = json.loads(file.read_text())
+    if (not isinstance(payload, dict) or payload.get('schema_version') != 'carla-collision-events/1'
+            or payload.get('source') != 'sensor.other.collision'
+            or not isinstance(payload.get('events'), list) or len(payload['events']) > 10000):
+        raise ValueError('Invalid native collision metadata')
+    for name in ('buffer_dropped_since_sensor_start', 'invalid_observations_since_sensor_start'):
+        value = payload.get(name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError('Invalid collision quality counter')
+    frames = [entry['frame'] for entry in entries]
+    events = []
+    for event in payload['events']:
+        if not isinstance(event, dict): raise ValueError('Invalid collision event')
+        frame, impulse = event.get('frame'), event.get('normal_impulse')
+        actor = event.get('other_actor_id')
+        if (event.get('kind') != 'collision' or isinstance(frame, bool) or not isinstance(frame, int)
+                or frame < 0 or not finite_number(event.get('timestamp'))
+                or isinstance(actor, bool) or not isinstance(actor, int) or actor < 0
+                or not isinstance(event.get('other_actor_type'), str)
+                or not isinstance(impulse, dict) or set(impulse) != {'x','y','z'}
+                or not all(finite_number(value) for value in impulse.values())):
+            raise ValueError('Invalid collision event')
+        position = bisect.bisect_left(frames, frame)
+        candidates = [entries[i] for i in (position-1, position) if 0 <= i < len(entries)]
+        nearest = min(candidates, key=lambda entry:abs(entry['frame']-frame)) if candidates else None
+        events.append({**event, 'replay_frame':nearest['frame'] if nearest else None,
+            'exact_saved_frame':nearest is not None and nearest['frame']==frame,
+            'replay_time_offset_s':nearest['timestamp']-event['timestamp'] if nearest else None})
+    return {**payload, 'available':True, 'events':sorted(events,key=lambda event:(event['frame'],event['timestamp']))}
 
 
 def _indexed_file(path, entry, name):

@@ -39,3 +39,41 @@ def test_event_index_rejects_corrupt_sample(tmp_path, change):
     record.update(change)
     path.write_text(json.dumps(record))
     with pytest.raises(ValueError): replay_events(tmp_path, 'run')
+
+
+def test_collision_lookup_preserves_native_frame_and_reports_nearest_sample(tmp_path):
+    run = recording(tmp_path)
+    event = {'kind':'collision', 'frame':4, 'timestamp':.2, 'other_actor_id':7,
+             'other_actor_type':'static.prop.box01', 'normal_impulse':{'x':1,'y':2,'z':3}}
+    payload = {'schema_version':'carla-collision-events/1', 'source':'sensor.other.collision',
+               'events':[event], 'buffer_dropped_since_sensor_start':2,
+               'invalid_observations_since_sensor_start':0}
+    file = run / 'collisions.json'
+    file.write_text(json.dumps(payload))
+    result = replay_events(tmp_path, 'run')
+    assert result['collision_detection_available']
+    assert result['collisions']['buffer_dropped_since_sensor_start']==2
+    found = result['collisions']['events'][0]
+    assert found['frame']==4 and found['replay_frame']==3
+    assert found['exact_saved_frame'] is False
+    assert found['replay_time_offset_s']==pytest.approx(-.05)
+    payload['events'][0]['frame']=3
+    payload['events'][0]['timestamp']=.15
+    file.write_text(json.dumps(payload))
+    assert replay_events(tmp_path,'run')['collisions']['events'][0]['exact_saved_frame']
+    payload['events'][0]['normal_impulse']['x']=True
+    file.write_text(json.dumps(payload))
+    with pytest.raises(ValueError,match='Invalid collision event'): replay_events(tmp_path,'run')
+
+
+def test_collision_file_cannot_escape_dataset(tmp_path):
+    run = recording(tmp_path)
+    (tmp_path/'outside.json').write_text('{}')
+    (run/'collisions.json').symlink_to(tmp_path/'outside.json')
+    with pytest.raises(ValueError,match='outside dataset'): replay_events(tmp_path,'run')
+
+
+def test_missing_declared_collision_file_is_not_reported_as_legacy(tmp_path):
+    run = recording(tmp_path)
+    (run/'manifest.json').write_text(json.dumps({'files':{'collisions':'collisions.json'}}))
+    with pytest.raises(ValueError,match='recording is missing'): replay_events(tmp_path,'run')

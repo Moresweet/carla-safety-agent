@@ -18,7 +18,7 @@ def main():
     frame=index['frames'][0]['frame']
     events=get('/datasets/events',run_id=args.run_id)
     assert events['ok'] and events['source']=='recorded_control'
-    assert events['collision_detection_available'] is False
+    assert events['collision_detection_available'] == events['collisions']['available']
     assert events['sample_count']==len(index['frames'])
     positions={entry['frame']:offset for offset,entry in enumerate(index['frames'])}
     previous_end=-1

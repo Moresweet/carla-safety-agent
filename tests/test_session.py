@@ -52,3 +52,25 @@ def test_read_execution_identity_and_path_boundary(tmp_path):
     outside.write_text(json.dumps(payload))
     path.symlink_to(outside)
     with pytest.raises(ValueError, match='outside'): journal.read_execution(run)
+
+
+def test_execution_pages_preserve_corrupt_records_and_hide_large_configuration(tmp_path):
+    import json
+    journal = SessionJournal(tmp_path)
+    assert journal.list_executions()['executions'] == []
+    for name in ('a','b','c'):
+        folder = tmp_path/'experiments'/name
+        folder.mkdir(parents=True)
+        (folder/'execution.json').write_text(json.dumps({'run_id':name,'state':'completed',
+            'configuration':{'request':{'algorithm':'vad'},'starting_scene':{'objects':[]}}}))
+    (tmp_path/'experiments'/'b'/'execution.json').write_text('{broken')
+    first = journal.list_executions(limit=2)
+    assert first['next_cursor']=='b'
+    assert first['executions'][0]['has_starting_scene']
+    assert 'configuration' not in first['executions'][0]
+    assert first['executions'][1]['record_error']
+    second = journal.list_executions(limit=2, after=first['next_cursor'])
+    assert [r['run_id'] for r in second['executions']]==['c']
+    assert second['next_cursor'] is None
+    for limit in (True,0,101,1.5):
+        with pytest.raises(ValueError): journal.list_executions(limit=limit)

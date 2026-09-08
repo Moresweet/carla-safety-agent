@@ -1639,6 +1639,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._headers(400)
                 self.wfile.write(json.dumps({'ok': False, 'error': str(exc)}).encode())
             return
+        if request.path in ('/experiments', '/experiments/document'):
+            try:
+                result = (SESSION.list_executions(int(params.get('limit',['50'])[0]), params.get('after',[None])[0])
+                          if request.path == '/experiments' else
+                          {'execution':SESSION.read_execution(params.get('run_id',[''])[0])})
+                self._headers()
+                self.wfile.write(json.dumps({'ok':True, **result}).encode())
+            except (ValueError, OSError) as exc:
+                self._headers(400)
+                self.wfile.write(json.dumps({'ok':False,'error':str(exc)}).encode())
+            return
         if request.path in ('/system/preflight', '/session/status'):
             result = system_preflight() if request.path == '/system/preflight' else {'ok': True, 'session': SESSION.snapshot()}
             self._headers()

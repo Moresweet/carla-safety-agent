@@ -57,6 +57,34 @@ class SessionJournal:
                 return identity['pid']
             return None
 
+    def list_executions(self, limit=50, after=None):
+        """Page by immutable run ID; malformed records remain visible as errors."""
+        from .scene_store import identifier
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError('Execution page limit must be 1..100')
+        if after is not None:
+            identifier(after)
+        root = self.root/'experiments'
+        names = sorted(p.name for p in root.iterdir() if p.is_dir()) if root.exists() else []
+        names = [name for name in names if after is None or name > after]
+        selected = names[:limit]
+        records = []
+        for name in selected:
+            try:
+                item = self.read_execution(name)
+                configuration = item.get('configuration') or {}
+                request = configuration.get('request') or {}
+                if not isinstance(configuration, dict) or not isinstance(request, dict):
+                    raise ValueError('Invalid execution configuration')
+                records.append({key:item.get(key) for key in
+                    ('run_id','kind','state','started_at','ended_at','error','outcome')})
+                records[-1].update(algorithm=request.get('algorithm'),
+                    has_starting_scene=isinstance(configuration.get('starting_scene'),dict))
+            except (ValueError, OSError, AttributeError) as exc:
+                records.append({'run_id':name,'record_error':str(exc)})
+        return {'executions':records,'next_cursor':selected[-1] if len(names)>limit else None,
+                'order':'run_id_ascending'}
+
     def _save(self):
         self.root.mkdir(parents=True, exist_ok=True)
         self.state['updated_at'] = time.time()

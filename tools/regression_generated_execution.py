@@ -2,6 +2,7 @@
 import hashlib
 import json
 import time
+import urllib.error
 from pathlib import Path
 from regression_scene_versions import request
 
@@ -13,11 +14,23 @@ def main():
     previous={p:hashlib.sha256(p.read_bytes()).hexdigest()
               for p in (Path(__file__).resolve().parents[1]/'runs/uniad').glob(Path(plan['scenario_path']).stem+'*.json')}
     assert hashlib.sha256(Path(plan['scenario_path']).read_bytes()).hexdigest()==digest
-    request('e2e/start',{'action':'run','algorithm':'uniad-tiny','route':plan['scenario_path']})
+    before=request('session/status')['session']['run_id']
+    try:
+        request('scenario/execute-plan',{'confirmed':True,'scenario_path':plan['scenario_path'],
+                                         'scenario_sha256':'0'*64})
+    except urllib.error.HTTPError as exc:
+        assert exc.code==400
+        assert 'changed' in json.load(exc)['error']
+    else:
+        raise AssertionError('Mismatched reviewed plan was accepted')
+    assert request('session/status')['session']['run_id']==before
+    request('scenario/execute-plan',{'confirmed':True,'scenario_path':plan['scenario_path'],
+                                     'scenario_sha256':digest})
     session=request('session/status')['session']
     execution=session['run_id']
     try:
         assert session['configuration']['scenario_sha256']==digest
+        assert session['configuration']['request']['confirmed'] is True
         deadline=time.monotonic()+300
         while time.monotonic()<deadline:
             session=request('session/status')['session']

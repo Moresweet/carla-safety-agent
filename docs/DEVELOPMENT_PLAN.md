@@ -503,3 +503,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 新增 POST /scenario/execute-plan，要求 confirmed=true、scenario_path 和合法 scenario_sha256，固定走已有 UniAD tiny run 生命周期；不重新解析描述。run 在目录校验后按调用方期望哈希读取计划，继续将校验值传到 worker。
 - 185 项测试通过，验证精确路径/哈希转交及缺确认、非法哈希/路径在启动前拒绝。本机 HTTP 空请求返回 400 Explicit plan confirmation is required，执行 ID 保持不变。
 - 成功启动新入口、前端审阅确认尚待验收。旧 /scenario/evaluate、/scenario/run 和直接 /e2e/start 保留兼容，故这不是全入口强制确认或权限安全边界，也不证明用户确实看过计划。
+
+### 2026-09-08 已审阅计划真实执行验收
+
+- 回归脚本改经 /scenario/execute-plan，先以错误 SHA-256 请求，确认返回 400 且执行 ID 不变；再提交正确校验值，检查日志中 confirmed=true。
+- 实机执行 bd8bb6785d344cd0ac68994b133c0cbe 完成，20 帧，计划/结果 SHA-256 0f349784fdf383639575da24110b15dfdb0880f2af890fb20a5768e56b452d2a 一致，结果执行 ID 对应，旧结果未覆盖，世界恢复异步。此次整数时长按原输入归档，和此前强转浮点时长的归档哈希不同，未覆盖旧计划。
+- 仅验收后端确认计划入口与 1 秒真实模型运行；专用前端审阅确认、全入口流程统一、Blender 事务等仍未完成。

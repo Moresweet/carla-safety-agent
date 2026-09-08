@@ -26,6 +26,17 @@ def finite_number(value):
     return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
 
 
+def validate_transform_patch(transform):
+    if not isinstance(transform,dict) or set(transform)-{'location','rotation'}:
+        raise ValueError('Transform patch must contain location or rotation')
+    for group, keys in [('location',{'x','y','z'}),('rotation',{'pitch','yaw','roll'})]:
+        values=transform.get(group,{})
+        if not isinstance(values,dict) or set(values)-keys:
+            raise ValueError('Unknown transform component')
+        if not all(finite_number(value) for value in values.values()):
+            raise ValueError('Transforms must contain finite numbers')
+
+
 def validate_transform(transform):
     if not isinstance(transform, dict): raise ValueError('Transform must be an object')
     for group, keys in [('location', ('x','y','z')), ('rotation', ('pitch','yaw','roll'))]:

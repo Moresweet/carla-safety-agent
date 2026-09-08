@@ -311,6 +311,8 @@ class EvaluationControl:
         if action == "update":
             current = actor.get_transform()
             spec = data.get("transform", {})
+            from .scene_store import validate_transform_patch
+            validate_transform_patch(spec)
             loc, rot = spec.get("location", {}), spec.get("rotation", {})
             actor.set_transform(carla.Transform(carla.Location(
                 x=float(loc.get("x", current.location.x)),
@@ -319,7 +321,8 @@ class EvaluationControl:
                 pitch=float(rot.get("pitch", current.rotation.pitch)),
                 yaw=float(rot.get("yaw", current.rotation.yaw)),
                 roll=float(rot.get("roll", current.rotation.roll)))))
-            return {"object": _actor_record(actor, "user" if actor.id in self.user_actor_ids else "evaluation")}
+            origin = self.provenance.records(world.id).get(str(actor.id),{}).get('origin','unknown')
+            return {"object": _actor_record(actor, origin)}
         if action == "delete":
             for sensor in world.get_actors().filter('sensor.*'):
                 parent = sensor.parent

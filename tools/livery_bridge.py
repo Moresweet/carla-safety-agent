@@ -1187,6 +1187,8 @@ def scene_history(data):
 
 @simulation_operation
 def update_actor(actor_id: int, transform_data: dict) -> dict:
+    from carla_safety_agent.scene_store import validate_transform_patch
+    validate_transform_patch(transform_data)
     if evaluation_active():
         return evaluation_command("update", {"actor_id": actor_id,
                                               "transform": transform_data})

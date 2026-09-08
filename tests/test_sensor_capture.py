@@ -30,6 +30,16 @@ def test_calibration_focal():
     assert c['K'][1][2] == 180
 
 
+def test_sensor_extrinsics_and_optical_basis():
+    spec=dict(type='sensor.camera.rgb',width=640,height=360,fov=90,x=2,y=3,z=4,yaw=90)
+    c=calibration(spec)
+    transform=np.asarray(c['sensor_to_ego'])
+    assert transform @ [1,0,0,1] == pytest.approx([2,4,4,1])
+    assert transform @ np.asarray(c['ego_to_sensor']) == pytest.approx(np.eye(4))
+    assert np.asarray(c['sensor_to_optical']) @ [10,2,3,1] == pytest.approx([2,-3,10,1])
+    assert 'sensor_to_ego' not in calibration(dict(type='sensor.speedometer'))
+
+
 def test_provenance_survives_restart_not_episode_change(tmp_path):
     actor = SimpleNamespace(id=12, type_id='vehicle.test')
     path = tmp_path/'origins.json'

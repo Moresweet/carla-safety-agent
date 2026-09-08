@@ -10,6 +10,7 @@ manifest = json.loads((root/'manifest.json').read_text())
 archive = manifest.get('input_archive', 'model_input.npz')
 assert archive in ('model_input.npz', 'sensor_input.npz'), 'Unknown input archive'
 index = json.loads((root/'index.json').read_text())['frames']
+calibration = json.loads((root/'calibration.json').read_text())
 assert index, 'No recorded samples'
 previous = -1
 for entry in index:
@@ -36,7 +37,11 @@ for entry in index:
             depth = np.load(folder/('DEPTH_'+name+'.npy'), allow_pickle=False)
             # Early captures used NumPy 1.x promotion to float64; retain them.
             assert depth.dtype in (np.dtype('float32'), np.dtype('float64')) and depth.ndim == 2
-            assert depth.shape == rgb.shape[:2], 'RGB/depth dimensions disagree'
+            # Auxiliary depth can intentionally use lower resolution than model RGB.
+            for sensor, shape in ((name,rgb.shape[:2]),('DEPTH_'+name,depth.shape)):
+                spec = calibration[sensor]
+                if 'height' in spec and 'width' in spec:
+                    assert shape == (spec['height'],spec['width']), 'Calibration/image dimensions disagree'
             assert np.isfinite(depth).all() and 0 <= depth.min() <= depth.max() <= 1000.01
     lidar = np.load(folder/'LIDAR.npy', allow_pickle=False)
     assert lidar.ndim == 2 and lidar.shape[1] == 4 and np.isfinite(lidar).all()

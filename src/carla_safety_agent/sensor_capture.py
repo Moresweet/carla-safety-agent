@@ -58,10 +58,24 @@ def bev_preview(points, size=640, extent=60):
 
 def calibration(spec):
     result = dict(spec)
+    if all(key in spec for key in ('x','y','z')):
+        # Same convention as LibCarla geom/Rotation.h, including pitch/roll signs.
+        p,y,r = (math.radians(float(spec.get(key,0))) for key in ('pitch','yaw','roll'))
+        cp,sp,cy,sy,cr,sr = math.cos(p),math.sin(p),math.cos(y),math.sin(y),math.cos(r),math.sin(r)
+        pose = np.eye(4)
+        pose[:3,:3] = [[cp*cy,cy*sp*sr-sy*cr,-cy*sp*cr-sy*sr],
+                       [cp*sy,sy*sp*sr+cy*cr,-sy*sp*cr+cy*sr],
+                       [sp,-cp*sr,cp*cr]]
+        pose[:3,3] = [float(spec[key]) for key in ('x','y','z')]
+        if not np.isfinite(pose).all(): raise ValueError('Non-finite sensor pose')
+        result['sensor_to_ego'] = pose.tolist()
+        result['ego_to_sensor'] = np.linalg.inv(pose).tolist()
+        result['transform_convention'] = 'column homogeneous vectors; metres; ego CARLA x forward/y right/z up'
     if spec['type'].startswith('sensor.camera'):
         w, h = int(spec['width']), int(spec['height'])
         f = w/(2*math.tan(math.radians(float(spec['fov']))/2))
         result['K'] = [[f, 0, w/2], [0, f, h/2], [0, 0, 1]]
+        result['sensor_to_optical'] = [[0,1,0,0],[0,0,-1,0],[1,0,0,0],[0,0,0,1]]
     result['coordinates'] = 'CARLA sensor frame: x forward, y right, z up; camera pixels: x right, y down'
     return result
 

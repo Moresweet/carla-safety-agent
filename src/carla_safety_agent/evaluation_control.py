@@ -321,8 +321,13 @@ class EvaluationControl:
                 roll=float(rot.get("roll", current.rotation.roll)))))
             return {"object": _actor_record(actor, "user" if actor.id in self.user_actor_ids else "evaluation")}
         if action == "delete":
+            for sensor in world.get_actors().filter('sensor.*'):
+                parent = sensor.parent
+                if parent is not None and parent.id == actor_id:
+                    raise RuntimeError('Cannot delete an actor with attached sensors during execution; stop the task first')
             type_id = actor.type_id
-            actor.destroy()
+            if actor.destroy() is False:
+                raise RuntimeError('Actor destruction was rejected')
             self.user_actor_ids.discard(actor_id)
             return {"actor_id": actor_id, "type_id": type_id}
         if action == "duplicate":

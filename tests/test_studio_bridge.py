@@ -162,6 +162,31 @@ def test_natural_language_evaluation_uses_supported_model():
     assert calls[0]['algorithm'] == 'uniad-tiny'
 
 
+@pytest.mark.parametrize('state,code', [('running', 0), ('stopping', 130)])
+def test_world_recovery_failure_never_reports_execution_success(tmp_path, state, code):
+    import threading
+    import time
+    process = SimpleNamespace(pid=123, wait=lambda: code)
+    pid = tmp_path/'pid'
+    pid.write_text('123')
+    job = {'state': state, 'kind': 'preset-run', 'results': None}
+    transitions = []
+    def restore():
+        raise RuntimeError('CARLA RPC unavailable')
+    env = functions('_finish_e2e', _e2e_pid=pid, _e2e_process=process,
+                    _e2e_lock=threading.Lock(), _e2e_job=job, Path=Path, time=time,
+                    restore_editor_world=restore,
+                    SESSION=SimpleNamespace(transition=lambda *args, **kwargs: transitions.append((args, kwargs))))
+    env['_finish_e2e'](process)
+    assert job['state'] == 'failed'
+    assert job['cleanup_error'] == 'CARLA RPC unavailable'
+    args, result = transitions[-1]
+    assert args == ('recovering',)
+    assert result['outcome']['execution'] == 'failed'
+    assert result['outcome']['failure_category'] == 'world_recovery'
+    assert not pid.exists()
+
+
 def test_simulation_handoff_waits_for_editor_operation():
     import threading
     from functools import wraps

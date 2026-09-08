@@ -82,6 +82,15 @@ def main():
                 report['cameras'][camera] = len(raw)
             request('e2e/stop', {})
             report['stop'] = wait_idle()
+            assert report['stop']['state'] == 'stopped', report['stop']
+            assert not report['stop'].get('cleanup_error'), report['stop']
+            report['session'] = request('session/status')['session']
+            assert report['session']['state'] == 'stopped', report['session']
+            assert not report['session'].get('error'), report['session']
+            report['preflight'] = request('system/preflight')
+            assert report['preflight']['ready'], report['preflight']
+            native = next(check for check in report['preflight']['checks'] if check['id'] == 'carla')
+            assert native['synchronous'] is False, native
             assert request('scene/state')['ok']
             assert request('e2e/telemetry')['telemetry'] is None
             report['passed'] = True

@@ -401,3 +401,11 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 在已加载父资源修复的同一 Town04 原生服务运行材质实机脚本：加油站、教堂、道路 slot 0 应用/恢复、场景版本撤销重做均通过；第一对象应用后重启桥接仍可恢复版本。结束恢复原材质与观察视角，无原生崩溃。
 - 检查 runs/validation/material-slots-20260908 下三组 applied/restored 截图：目标表面可见青紫格纹，恢复后格纹消失；道路远处格纹较密，仅证明纹理应用可见，不据此证明全类别 UV 精确一致，也不证明骨骼材质重建安全。
 - 144 项 Python 测试通过；仍需骨骼对象、全部模型及前端交互验收，后续阶段保持未完成。
+
+### 2026-09-08 原生父资源修复后的模型矩阵
+
+- runs/validation/lifecycle-parent-refresh-20260908/report.json：同一 Town04 原生进程按 VAD、TCP、ADMLP、UniAD tiny、UniAD base、VAD 顺序完成真实推理、重复启动拒绝、摄像头输出与停止。帧分别为 4→16、5→17、32→46、5→17、5→17、5→19；全部 stop.state=stopped、cleanup_error=null。已查看第一轮 VAD 前视截图。
+- 六轮结束后独立原生检查：会话 stopped，Town04 帧 314258，世界异步、sensor_count=0。本轮仅验证同图短程模型生命周期，不表示路线驾驶通过、换图/异常进程退出或所有骨骼材质场景通过。
+- 修复 _finish_e2e 的状态矛盾：世界恢复失败时 outcome.execution 必须 failed，不能沿用进程正常结束的 succeeded/stopped；会话仍保持 recovering 以阻止并发仿真。新增正常退出与主动停止两种故障注入测试，146 项测试通过。
+- 收紧生命周期脚本：停止后检查 job、持久化 session、preflight 和异步设置。上面六轮使用启动时的旧脚本定义，不能声称覆盖新增断言；已在矩阵停止后重启桥接加载报告修正，开始独立加强版 VAD 验证。
+- 加强版实际通过：runs/validation/lifecycle-strict-parent-refresh-20260908/report.json，VAD 帧 4→16，job/session 均 stopped，无错误，preflight.ready=true，原生异步。此轮已运行新增断言并加载报告修正；没有故意让原生崩溃验证分类，分类失败路径证据来自故障注入单测。

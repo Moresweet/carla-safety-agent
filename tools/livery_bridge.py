@@ -246,7 +246,7 @@ def _finish_e2e(process):
             SESSION.transition('recovering' if cleanup_error else 'failed' if state == 'failed' else
                                'stopped' if state == 'stopped' else 'completed',
                                returncode=returncode, error=cleanup_error or _e2e_job.get('startup_error'),
-                               outcome={'execution': state, 'benchmark_failed': benchmark_failed,
+                               outcome={'execution': 'failed' if cleanup_error else state, 'benchmark_failed': benchmark_failed,
                                         'failure_category': 'world_recovery' if cleanup_error else
                                             'startup' if _e2e_job.get('startup_error') else
                                             'process_exit' if returncode not in (0, 130) and state != 'stopped' else

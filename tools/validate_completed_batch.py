@@ -5,6 +5,8 @@ import subprocess
 import sys
 from carla_safety_agent.batch_catalog import BatchCatalog
 from carla_safety_agent.experiment_report import summarize_queue
+from carla_safety_agent.capture_identity import verify_capture_identity
+from carla_safety_agent.session import SessionJournal
 from regression_scene_versions import ROOT
 
 
@@ -25,6 +27,7 @@ def validate(batch_id):
         if not datasets:
             raise ValueError('Missing execution capture: '+row['execution_id'])
         for dataset in datasets:
+            verify_capture_identity(dataset, SessionJournal(ROOT/'data').read_execution(row['execution_id']))
             subprocess.run([sys.executable, str(ROOT/'tools/validate_capture_dataset.py'), str(dataset)], check=True)
         verified.append({'execution_id': row['execution_id'], 'attempt_count': row['attempt_count'],
                          'datasets': [str(p) for p in datasets]})

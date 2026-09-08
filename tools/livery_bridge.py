@@ -561,6 +561,8 @@ def compile_scenario(data: dict, execute: bool = False) -> dict:
     if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= 2**32-1:
         raise ValueError('seed must be an integer from 0 to 4294967295')
     duration = data.get('max_duration_s')
+    if not isinstance(data.get('unified_capture', False), bool):
+        raise ValueError('unified_capture must be boolean')
     if duration is not None and (isinstance(duration, bool) or not isinstance(duration, (int, float))
                                 or not math.isfinite(duration) or duration < .05):
         raise ValueError('max_duration_s must be a finite number of at least 0.05 seconds')
@@ -590,8 +592,16 @@ def compile_scenario(data: dict, execute: bool = False) -> dict:
     }
     if execute:
         output = PROJECT_ROOT / ".runtime" / "generated-scenarios"
+        capture_options = {}
+        if data.get('unified_capture'):
+            runtime = PROJECT_ROOT/'.runtime'/'rule-capture'/uuid.uuid4().hex
+            runtime.mkdir(parents=True, exist_ok=False)
+            (runtime/'collection-request.json').write_text(json.dumps(
+                {'id':uuid.uuid4().hex,'recording':True,'every':1,'max_frames':2000}))
+            capture_options['capture_runtime'] = runtime
+            response['capture_runtime'] = str(runtime)
         result = CarlaAdapter(HOST, CARLA_PORT, 120.0).run(
-            scenario, output, render=True)
+            scenario, output, render=True, **capture_options)
         response["result"] = result.to_dict()
         response["output_dir"] = str(output)
         if result.trace_path:

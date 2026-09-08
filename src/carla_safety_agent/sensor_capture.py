@@ -94,13 +94,14 @@ def sample_storage_reserve(arrays, rgb, auxiliary):
 
 
 class SensorCapture:
-    def __init__(self, world, ego, specs, runtime, source='model-input'):
+    def __init__(self, world, ego, specs, runtime, source='model-input', dataset_root=None):
         import carla
         if source not in ('model-input', 'sensor-rig'):
             raise ValueError('Unknown capture source')
         if source == 'sensor-rig' and specs:
             raise ValueError('Standalone rig owns its complete sensor configuration')
         self.source = source
+        self.dataset_root = Path(dataset_root) if dataset_root is not None else None
         self.world, self.ego = world, ego
         self.map_name = world.get_map().name
         self.root = Path(runtime)
@@ -175,7 +176,7 @@ class SensorCapture:
             return {'recording': False}
 
     def begin(self, request):
-        base = Path(os.environ.get('CSA_DATASET_ROOT', str(self.root.parent.parent/'runs/datasets')))
+        base = getattr(self,'dataset_root',None) or Path(os.environ.get('CSA_DATASET_ROOT', str(self.root.parent.parent/'runs/datasets')))
         self.run_id = 'capture-'+time.strftime('%Y%m%dT%H%M%S')+'-'+uuid.uuid4().hex[:8]
         self.run = base/self.run_id
         self.run.mkdir(parents=True, exist_ok=False)

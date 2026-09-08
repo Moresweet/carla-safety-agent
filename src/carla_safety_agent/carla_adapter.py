@@ -38,7 +38,8 @@ class CarlaAdapter:
             ) from exc
         return carla
 
-    def run(self, spec: ScenarioSpec, output_dir: Path, render: bool = False) -> ScenarioResult:
+    def run(self, spec: ScenarioSpec, output_dir: Path, render: bool = False,
+            capture_runtime: Path | None = None) -> ScenarioResult:
         carla = self._module()
         client = carla.Client(self.host, self.port)
         client.set_timeout(self.timeout_s)
@@ -69,6 +70,7 @@ class CarlaAdapter:
         min_ttc: float | None = None
         elapsed = 0.0
         recorder: DatasetRecorder | None = None
+        unified_capture = None
         result: ScenarioResult | None = None
         try:
             settings = world.get_settings()
@@ -140,6 +142,10 @@ class CarlaAdapter:
                     str(lidar_dir / f"{cloud.frame:08d}.ply")
                 ) if cloud.frame % 5 == 0 else None)
                 actors.append(lidar)
+            if capture_runtime is not None:
+                from .sensor_capture import SensorCapture
+                unified_capture = SensorCapture(world, ego, [], capture_runtime,
+                                                source='sensor-rig', dataset_root=output_dir)
             ego.set_autopilot(spec.family != "road_hazard")
             for adv, adv_spec in zip(adversaries, spec.adversaries):
                 if adv_spec.behavior == "autopilot":
@@ -151,7 +157,11 @@ class CarlaAdapter:
                     ego.apply_control(carla.VehicleControl(throttle=0.55, steer=0.0))
                 if render:
                     self._follow_spectator(carla, world, ego)
-                world.tick()
+                native_frame = world.tick()
+                if unified_capture:
+                    unified_capture.process_frame(native_frame, ego.get_control())
+                    if unified_capture.error:
+                        raise RuntimeError(unified_capture.error)
                 if render:
                     time.sleep(settings.fixed_delta_seconds)
                 elapsed = (frame + 1) * settings.fixed_delta_seconds
@@ -191,6 +201,12 @@ class CarlaAdapter:
                               min_distance, elapsed, str(trace_path))
             return result
         finally:
+            capture_errors = []
+            if unified_capture:
+                try:
+                    capture_errors = unified_capture.close()
+                except Exception as exc:
+                    capture_errors = [str(exc)]
             # Sensor callbacks run on streaming threads. Stop every sensor first,
             # then advance one synchronous frame so callbacks drain before any
             # attached actor is destroyed.
@@ -218,6 +234,8 @@ class CarlaAdapter:
             if actor_ids:
                 client.apply_batch([carla.command.DestroyActor(actor_id) for actor_id in actor_ids])
             world.apply_settings(original)
+            if capture_errors:
+                raise RuntimeError('Unified rule capture cleanup failed: '+ '; '.join(capture_errors))
 
     @staticmethod
     def _frame_record(frame: int, elapsed: float, ego: Any, adversaries: list[Any],

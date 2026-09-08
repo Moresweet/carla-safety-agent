@@ -70,7 +70,7 @@ def test_pause_preserves_recovery_of_current_attempt(tmp_path):
     assert q.read()['paused'] is True
 
 
-@pytest.mark.parametrize('algorithm', ['uniad-tiny', 'vad', 'tcp'])
+@pytest.mark.parametrize('algorithm', ['uniad-tiny', 'vad', 'tcp', 'admlp'])
 def test_model_dispatch_preserves_model_and_capture_request(tmp_path, monkeypatch, algorithm):
     from carla_safety_agent import experiment_dispatch
     model = {'action': 'run', 'algorithm': algorithm}

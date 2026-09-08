@@ -986,8 +986,7 @@ def restore_scene(data):
         if blueprint not in registry:
             world.get_blueprint_library().find(blueprint)
     provenance = _provenance.records(world.id)
-    live = {r.get('stable_id'): world.get_actor(int(actor_id)) for actor_id, r in provenance.items()
-            if r.get('origin') == 'user' and world.get_snapshot().find(int(actor_id)) is not None}
+    live = live_scene_bindings(world, provenance)
     created, moved = [], []
     previous_weather, previous_view = world.get_weather(), world.get_spectator().get_transform()
     # Validate native properties before the first spawn, move or material edit.
@@ -1050,6 +1049,27 @@ def restore_scene(data):
     return {'ok': True, **saved, 'restored': len(document['objects']), 'spawned': len(created),
             'bindings': {obj['stable_id']: live[obj['stable_id']].id for obj in document['objects']},
             'mode': 'merge', 'note': 'Unrelated actors preserved; managed environment materials and visibility restored; legacy actor textures not restored'}
+
+
+def live_scene_bindings(world, provenance):
+    """Use one snapshot and reject ambiguous live identities before mutation."""
+    snapshot = world.get_snapshot()
+    live = {}
+    for actor_id, record in provenance.items():
+        if record.get('origin') != 'user' or snapshot.find(int(actor_id)) is None:
+            continue
+        actor = world.get_actor(int(actor_id))
+        if actor is None:
+            raise RuntimeError('Scene actor disappeared during restore preflight')
+        stable = record.get('stable_id')
+        if not isinstance(stable, str) or not stable:
+            raise RuntimeError('Live scene actor has no stable identity')
+        if stable in live:
+            raise RuntimeError(f'Ambiguous live scene identity: {stable}')
+        if record.get('type_id') != actor.type_id:
+            raise RuntimeError('Scene actor type differs from its provenance')
+        live[stable] = actor
+    return live
 
 
 def prepare_scene_visibility(world, document):

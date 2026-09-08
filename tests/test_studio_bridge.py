@@ -305,7 +305,7 @@ def test_restore_unknown_weather_is_rejected_before_any_world_mutation():
     document = {'map':'Town04','objects':[{'stable_id':'new','blueprint_id':'static.prop.box01',
         'transform':{'location':{'x':1,'y':1,'z':1},'rotation':{'yaw':0,'pitch':0,'roll':0}}}],
         'weather':{'unsupported_weather':1}}
-    env = functions('restore_scene', connect_world=lambda:world,
+    env = functions('restore_scene', connect_world=lambda:world, live_scene_bindings=lambda *_:{},
         SCENES=SimpleNamespace(read=lambda *args:{'document':document}), validate_scene=validate_scene,
         BLENDER=SimpleNamespace(registry=lambda:{}), _provenance=SimpleNamespace(records=lambda _:{}),
         prepare_scene_materials=lambda *args:None, prepare_scene_visibility=lambda *args:None,
@@ -341,7 +341,7 @@ def test_scene_restore_weather_round_trip_and_transaction_rollback(fail_after_we
         get_weather=lambda:SimpleNamespace(**state['weather']), set_weather=set_weather,
         get_spectator=lambda:spectator)
     document = {'map':'Town04', 'objects':[], 'weather':desired}
-    env = functions('restore_scene', connect_world=lambda:world,
+    env = functions('restore_scene', connect_world=lambda:world, live_scene_bindings=lambda *_:{},
         SCENES=SimpleNamespace(read=lambda *args:{'document':document}), validate_scene=validate_scene,
         BLENDER=SimpleNamespace(registry=lambda:{}), _provenance=SimpleNamespace(records=lambda _:{}),
         prepare_scene_materials=lambda *args:None,
@@ -546,3 +546,29 @@ def test_delete_requires_native_acceptance_and_fresh_snapshot(accepted, residual
         with pytest.raises(RuntimeError): env['delete_actor'](7)
         assert names == {7:'test'}
         assert calls == (['fresh'] if accepted else [])
+
+
+def test_live_scene_bindings_ignore_dead_history_and_use_one_snapshot():
+    calls = []
+    actor = SimpleNamespace(id=8, type_id='static.prop.test')
+    def snapshot():
+        calls.append('snapshot')
+        return SimpleNamespace(find=lambda n:object() if n==8 else None)
+    world = SimpleNamespace(get_snapshot=snapshot,get_actor=lambda n:actor)
+    record = {'origin':'user','stable_id':'stable','type_id':actor.type_id}
+    env = functions('live_scene_bindings')
+    assert env['live_scene_bindings'](world, {'7':record,'8':record}) == {'stable':actor}
+    assert calls == ['snapshot']
+
+
+@pytest.mark.parametrize('failure', ['duplicate','missing','wrong-type','disappeared'])
+def test_live_scene_bindings_reject_ambiguous_or_changed_actors(failure):
+    actor = SimpleNamespace(id=8,type_id='static.prop.test')
+    record = {'origin':'user','stable_id':'stable','type_id':actor.type_id}
+    records = {'8':record}
+    if failure=='duplicate': records['9']=dict(record)
+    if failure=='missing': record.pop('stable_id')
+    if failure=='wrong-type': record['type_id']='vehicle.other'
+    world = SimpleNamespace(get_snapshot=lambda:SimpleNamespace(find=lambda _:object()),
+                            get_actor=lambda _:None if failure=='disappeared' else actor)
+    with pytest.raises(RuntimeError): functions('live_scene_bindings')['live_scene_bindings'](world,records)

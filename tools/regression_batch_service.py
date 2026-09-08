@@ -11,6 +11,44 @@ from regression_rule_move import ACTIVE, wait_terminal
 from validate_completed_batch import validate
 
 
+def cancel_and_resume(batch_id, scheduler_id, catalog):
+    """Cancel only scheduling while the first native execution remains owned/live."""
+    from carla_safety_agent.session import observed_process_identity
+    deadline = time.monotonic()+120
+    while time.monotonic() < deadline:
+        jobs = catalog.read(batch_id)['jobs']
+        session = request('session/status')['session']
+        if (jobs[0]['state'] == 'running' and session['state'] in ACTIVE
+                and session.get('process') and observed_process_identity(session['process']['pid']) == session['process']):
+            break
+        time.sleep(.2)
+    else:
+        raise AssertionError('No live first execution observed before cancellation')
+    execution = session['run_id']
+    assert session['configuration']['request']['batch_attempt_id'] == jobs[0]['attempts'][-1]['attempt_id']
+    request('batches/scheduler', {'batch_id': batch_id, 'action': 'cancel', 'scheduler_id': scheduler_id})
+    deadline = time.monotonic()+40
+    while time.monotonic() < deadline:
+        status = request('batches/scheduler')['scheduler']
+        assert status['scheduler_id'] == scheduler_id
+        if status['state'] != 'running':
+            break
+        time.sleep(.2)
+    assert status['state'] == 'cancelled', status
+    current = request('session/status')['session']
+    assert current['run_id'] == execution and current['state'] in ACTIVE
+    assert observed_process_identity(current['process']['pid']) == current['process']
+    assert all(not job['attempts'] for job in catalog.read(batch_id)['jobs'][1:])
+    terminal = wait_terminal(execution)
+    assert terminal['state'] == 'completed', terminal
+    assert all(not job['attempts'] for job in catalog.read(batch_id)['jobs'][1:])
+    resumed = request('batches/scheduler', {'batch_id': batch_id, 'action': 'start'})['scheduler']
+    assert resumed['scheduler_id'] != scheduler_id
+    return {'cancelled_scheduler_id': scheduler_id, 'resumed_scheduler_id': resumed['scheduler_id'],
+            'preserved_execution_id': execution, 'current_execution_survived_cancel': True,
+            'remaining_jobs_not_started_before_resume': True}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     choices = ('rule-run', 'uniad-tiny', 'uniad-base', 'vad', 'tcp', 'admlp')
@@ -18,10 +56,13 @@ def main():
     selection.add_argument('--model', choices=choices)
     selection.add_argument('--models', choices=choices, nargs='+')
     parser.add_argument('--seeds', type=int, nargs='+', default=[31, 32])
+    parser.add_argument('--cancel-resume', action='store_true')
     args = parser.parse_args()
     models = args.models or [args.model or 'rule-run']
     if len(set(models)) != len(models):
         parser.error('Duplicate model variants')
+    if args.cancel_resume and (models != ['rule-run'] or len(args.seeds) < 2):
+        parser.error('Cancellation regression requires rule-run and at least two seeds')
     assert request('system/preflight')['ready']
     assert request('batches/scheduler')['scheduler']['state'] != 'running'
     plan = request('scenario/compile', {'description': 'Town04 前车急刹', 'max_duration_s': 1})
@@ -45,6 +86,7 @@ def main():
                 assert exc.code == 400
             else:
                 raise AssertionError('Unsafe scheduler control accepted')
+        cancellation = cancel_and_resume(batch_id, started['scheduler']['scheduler_id'], catalog) if args.cancel_resume else {}
         deadline = time.monotonic()+600*len(args.seeds)*len(models)
         while time.monotonic() < deadline:
             status = request('batches/scheduler')['scheduler']
@@ -54,6 +96,9 @@ def main():
             time.sleep(.5)
         assert status['state'] == 'completed', status
         result = validate(batch_id)
+        result.update(cancellation)
+        if cancellation:
+            assert result['verified'][0]['execution_id'] == cancellation['preserved_execution_id']
         assert all(row['attempt_count'] == 1 for row in result['verified'])
         from carla_safety_agent.session import SessionJournal
         journal = SessionJournal(ROOT/'data')

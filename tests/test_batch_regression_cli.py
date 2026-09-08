@@ -9,6 +9,8 @@ import pytest
     ['--models', 'vad', 'vad'],
     ['--model', 'tcp', '--models', 'admlp'],
     ['--models', 'not-installed'],
+    ['--model', 'vad', '--cancel-resume'],
+    ['--seeds', '31', '--cancel-resume'],
 ])
 def test_invalid_model_matrix_rejected_before_network(arguments):
     root = Path(__file__).resolve().parents[1]

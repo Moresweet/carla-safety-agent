@@ -1086,3 +1086,10 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 报告每两秒只读刷新，无变化保留既有对象；切换批次、手动操作及旧请求代次隔离，刷新失败明确标记旧报告。新增场景/模型/天气/纹理维度选择、基准/对照项与配对指标表；取消过期比较请求，显示缺失配对与不可比较原因，不把未知填成零。
 - 浏览器 tab 2 选择真实天气批次 e0bb7041c7cc45898aa67ed478418a3a、clear → rain，显示可比较 1/1，三项差值均 0.0000、碰撞无→无，与此前一秒实测记录一致；这不证明天气没有驾驶影响。读取未启动新仿真。
 - 按 sites-building 延续本机暗色工作台，补齐按钮边界、焦点、14px 标签与16px正文。TypeScript 检查和现有338项 Python 测试通过；新增前端尚缺自动交互测试、活跃调度与异常网络实测，不能视为八阶段整体完成。
+
+### 2026-09-08 活跃后台调度取消与恢复实机验证
+
+- regression_batch_service.py 新增 --cancel-resume：仅允许规则驾驶与至少两个种子；观察首项已绑定且原生进程 PID/start_ticks 存活后取消调度，确认调度 cancelled 时当前执行仍存活，其余任务零尝试；等待当前任务完成后重新启动同一批次，并确认新的 scheduler_id、原首项执行 ID 保留、所有任务仅尝试一次。
+- 本机批次 f6d0f8175b3d41a8ae9611499b87f718 通过；首项 d56af4ba6b874c2ea2802c603763af86，次项 dff2ee1fcb744c628d42165253a85905。两个数据集 capture-20260908T195455-3d3f360b、capture-20260908T195511-f4d54ab3 各20同帧样本、14/14外参验证，RGB/米制深度/XYZI/BEV 校验通过；结束后世界异步、无遗留传感器。
+- 报告 runs/validation/batch-service-f6d0f8175b3d41a8ae9611499b87f718.json，current_execution_survived_cancel / remaining_jobs_not_started_before_resume / native_cleanup_verified 均 true。340项单元测试通过。
+- 本轮是实际 HTTP 调度取消/恢复，不是浏览器按钮自动化验收，也不覆盖所有模型、切图或任意取消时序；完整计划仍在进行。

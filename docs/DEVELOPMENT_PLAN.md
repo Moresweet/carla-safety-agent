@@ -261,3 +261,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 
 - 检查确认 saved_limit 后 run=None，普通 close 不会覆盖上限清单；实际问题是独立采集把上限提示当作异常抛出。新增 stop_reason（frame_limit/storage_limit/disk_reserve），worker 达到明确边界后正常退出并保留原因，真实处理错误仍异常退出。
 - 120 项测试通过，新增同一录制达到一帧上限后的断言：只保留一个样本、状态 saved_limit、原因 frame_limit，不续写第二帧。保留既有提示字段以兼容页面；正常限额退出实机验证仍待完成。
+
+### 2026-09-08 正常帧上限实机验收
+
+- 新增 `tools/regression_capture_limit.py`；真实静止采集配置 max_frames=3、仿真上限 100 帧，数据集 `capture-20260908T132710-4165999a` 恰好保存 3 样本后正常 completed。清单状态 saved_limit、stop_reason=frame_limit，执行 ID 对应一致。
+- 完整数据文件与 14/14 外参校验通过；原生检查异步世界、0 传感器、无采集车辆。120 项 Python 测试通过。
+- 仅验证帧数上限，不代表磁盘保留阈值、总容量限制或故障清理全部通过；阶段整体仍未完成。

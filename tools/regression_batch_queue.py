@@ -1,5 +1,6 @@
 """Opt-in native two-seed queue regression with unified capture validation."""
 import hashlib
+import argparse
 import json
 import subprocess
 import sys
@@ -15,6 +16,9 @@ from regression_rule_move import ACTIVE, wait_terminal
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--weather-ab', action='store_true')
+    args = parser.parse_args()
     assert request('system/preflight')['ready']
     plan = request('scenario/compile', {'description': 'Town04 前车急刹', 'max_duration_s': 1})
     variant = lambda config: {'id': 'baseline', 'configuration': config}
@@ -22,6 +26,10 @@ def main():
         'scenario_sha256': hashlib.sha256(canonical(plan['scenario'])).hexdigest()})],
         'models': [variant({'action': 'rule-run'})], 'weather': [variant({})],
         'textures': [variant({})], 'seeds': [31, 32]}
+    if args.weather_ab:
+        dimensions['seeds'] = [31]
+        dimensions['weather'] = [{'id': 'clear', 'configuration': {'precipitation': 0}},
+                                 {'id': 'rain', 'configuration': {'precipitation': 75}}]
     root = ROOT/'runs/validation'/('batch-queue-'+uuid.uuid4().hex)
     q = ExperimentQueue(root); q.create(dimensions)
     journal = SessionJournal(ROOT/'data')
@@ -58,10 +66,12 @@ def main():
         executions = [j['attempts'][0]['execution_id'] for j in jobs]
         assert len(set(executions)) == 2
         datasets = []
-        for seed, execution in zip([31, 32], executions):
+        for index, (seed, execution) in enumerate(zip([31, 31] if args.weather_ab else [31, 32], executions)):
             record = journal.read_execution(execution)
             outcome = json.loads(Path(record['configuration']['results']).read_text())
             assert outcome['scenario']['seed'] == seed
+            if args.weather_ab:
+                assert outcome['scenario']['environment']['precipitation'] == [0, 75][index]
             captures = [p.parent for p in (ROOT/'.runtime/generated-scenarios').glob('capture-*/manifest.json')
                         if json.loads(p.read_text()).get('execution_id') == execution]
             assert len(captures) == 1
@@ -74,6 +84,13 @@ def main():
         assert not list(world.get_actors().filter('sensor.*'))
         report = {'executions': executions, 'datasets': datasets, 'queue': str(root), 'passed': True,
                   'paused_after_first_start': paused_once, 'resumed_after_first_completed': resumed_once}
+        if args.weather_ab:
+            from carla_safety_agent.experiment_report import summarize_queue, compare_variants
+            summary = summarize_queue(q.read(), ROOT/'runs/rule')
+            comparison = compare_variants(summary, 'weather', 'clear', 'rain')
+            assert comparison['comparable_count'] == 1, comparison
+            report['comparison'] = comparison
+            (root/'summary.json').write_text(json.dumps(summary, indent=2))
         (root/'report.json').write_text(json.dumps(report, indent=2))
         print(json.dumps(report), flush=True)
     finally:

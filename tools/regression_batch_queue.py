@@ -43,6 +43,7 @@ def restore_test_weather(queue_state, session, journal, world):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--weather-ab', action='store_true')
+    parser.add_argument('--http', action='store_true', help='Create and control the queue through the live bridge')
     args = parser.parse_args()
     assert request('system/preflight')['ready']
     plan = request('scenario/compile', {'description': 'Town04 前车急刹', 'max_duration_s': 1})
@@ -55,18 +56,36 @@ def main():
         dimensions['seeds'] = [31]
         dimensions['weather'] = [{'id': 'clear', 'configuration': {'precipitation': 0}},
                                  {'id': 'rain', 'configuration': {'precipitation': 75}}]
-    root = ROOT/'runs/validation'/('batch-queue-'+uuid.uuid4().hex)
-    q = ExperimentQueue(root); q.create(dimensions)
+    batch_id = None
+    if args.http:
+        created = request('batches/create', dimensions)
+        assert created['dispatched'] is False
+        batch_id = created['batch_id']
+        from carla_safety_agent.scene_store import identifier
+        identifier(batch_id)
+        root = ROOT/'data/experiment-queues'/batch_id
+    else:
+        root = ROOT/'runs/validation'/('batch-queue-'+uuid.uuid4().hex)
+    q = ExperimentQueue(root)
+    if not args.http:
+        q.create(dimensions)
     journal = SessionJournal(ROOT/'data')
+    def step():
+        if args.http:
+            return request('batches/control', {'batch_id': batch_id, 'action': 'advance'})
+        return advance_queue(ExperimentQueue(root), journal, ROOT/'.runtime/generated-scenarios', request)
+    def pause(value):
+        if args.http:
+            return request('batches/control', {'batch_id': batch_id, 'action': 'pause' if value else 'resume'})
+        return q.set_paused(value)
     paused_once = resumed_once = False
     try:
         deadline = time.monotonic()+180
         while time.monotonic() < deadline:
             # Reconstruct clients each step to test persisted state, not memory.
-            result = advance_queue(ExperimentQueue(root), journal,
-                                   ROOT/'.runtime/generated-scenarios', request)
+            result = step()
             if result['action'] == 'started' and not paused_once:
-                q.set_paused(True)
+                pause(True)
                 paused_once = True
             if result['action'] == 'paused' and not resumed_once:
                 snapshot = q.read()
@@ -75,10 +94,9 @@ def main():
                 assert snapshot['jobs'][1]['attempts'] == []
                 session = request('session/status')['session']
                 for _ in range(3):
-                    assert advance_queue(ExperimentQueue(root), journal,
-                        ROOT/'.runtime/generated-scenarios', request)['action'] == 'paused'
+                    assert step()['action'] == 'paused'
                     assert request('session/status')['session']['run_id'] == session['run_id']
-                q.set_paused(False)
+                pause(False)
                 resumed_once = True
             if result['action'] == 'no_pending_jobs':
                 break
@@ -108,7 +126,13 @@ def main():
         assert not world.get_settings().synchronous_mode
         assert not list(world.get_actors().filter('sensor.*'))
         report = {'executions': executions, 'datasets': datasets, 'queue': str(root), 'passed': True,
+                  'http': args.http, 'batch_id': batch_id,
                   'paused_after_first_start': paused_once, 'resumed_after_first_completed': resumed_once}
+        if args.http:
+            summary = request('batches/report?batch_id='+batch_id)['report']
+            assert summary['all_executions_completed']
+            assert all(row.get('metrics') and not row.get('metrics_error') for row in summary['rows'])
+            report['http_metrics_verified'] = True
         if args.weather_ab:
             from carla_safety_agent.experiment_report import summarize_queue, compare_variants
             summary = summarize_queue(q.read(), ROOT/'runs/rule')

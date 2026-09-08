@@ -1,6 +1,7 @@
 """Session-owned rule executor; never launch without a verified studio session."""
 import os
 import math
+import json
 import signal
 import time
 from pathlib import Path
@@ -55,6 +56,11 @@ def main():
         report = {'scenario_id':spec.scenario_id, 'status':'stopped', 'elapsed_s':0}
     report.update(execution_id=execution, scenario_sha256=digest, scenario=document,
                   editor_commands=str(audit_dir))
+    if os.environ.get('CSA_RULE_CAPTURE') == '1':
+        from carla_safety_agent.editor_events import attach_editor_events
+        for path in Path(os.environ['CSA_DATASET_ROOT']).glob('capture-*/manifest.json'):
+            if json.loads(path.read_text()).get('execution_id') == execution:
+                attach_editor_events(path.parent,audit_dir,execution)
     atomic_json(destination, report)
 
 

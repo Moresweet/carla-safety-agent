@@ -1,5 +1,6 @@
 import pytest
 from carla_safety_agent.editor_events import editor_events
+import json
 
 
 def record(boundary=10, **values):
@@ -25,3 +26,19 @@ def test_reject_mixed_execution_duplicate_commands_and_invalid_frames():
     for records, frames in [([record(execution_id='other')],[10]),([record(),record()],[10]),
                             ([record()],[10,10]),([record()],[True])]:
         with pytest.raises(ValueError): editor_events(records,frames,'run')
+
+
+def test_portable_event_archive_and_execution_guard(tmp_path):
+    from carla_safety_agent.editor_events import attach_editor_events
+    dataset=tmp_path/'dataset'; dataset.mkdir()
+    audit=tmp_path/'audit'; audit.mkdir()
+    (dataset/'manifest.json').write_text(json.dumps({'execution_id':'run','files':{}}))
+    (dataset/'index.json').write_text(json.dumps({'frames':[{'frame':10},{'frame':15}]}))
+    (audit/'command.json').write_text(json.dumps(record()))
+    with pytest.raises(ValueError): attach_editor_events(dataset,audit,'other')
+    assert not (dataset/'editor-events.json').exists()
+    events=attach_editor_events(dataset,audit,'run')
+    assert events[0]['seek_frame']==15
+    archive=json.loads((dataset/'editor-events.json').read_text())
+    assert archive['records']==[record()]
+    assert json.loads((dataset/'manifest.json').read_text())['files']['editor_events']=='editor-events.json'

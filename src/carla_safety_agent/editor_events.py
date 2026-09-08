@@ -1,5 +1,35 @@
 """Map rule command attempts to the first recorded frame after their boundary."""
 from bisect import bisect_right
+import json
+from pathlib import Path
+
+
+def attach_editor_events(dataset, audit_dir, execution_id):
+    """Finalize a portable copy; never trust result-provided arbitrary paths."""
+    from .sensor_capture import atomic_json
+    dataset, audit_dir = Path(dataset), Path(audit_dir)
+    if not audit_dir.is_dir() or audit_dir.is_symlink():
+        raise ValueError('Missing or invalid editor audit directory')
+    manifest = json.loads((dataset/'manifest.json').read_text())
+    if manifest.get('execution_id') != execution_id:
+        raise ValueError('Dataset belongs to another execution')
+    records = []
+    paths = sorted(audit_dir.glob('*.json'))
+    if len(paths)>10000:
+        raise ValueError('Too many editor audit records')
+    total = 0
+    for path in paths:
+        total += path.stat().st_size
+        if path.is_symlink() or total>16*1024*1024:
+            raise ValueError('Invalid or oversized editor audit archive')
+        records.append(json.loads(path.read_text()))
+    frames = [entry['frame'] for entry in json.loads((dataset/'index.json').read_text())['frames']]
+    events = editor_events(records,frames,execution_id)
+    atomic_json(dataset/'editor-events.json', {'schema_version':'carla-editor-events/1',
+        'execution_id':execution_id,'records':records,'events':events})
+    manifest.setdefault('files',{})['editor_events'] = 'editor-events.json'
+    atomic_json(dataset/'manifest.json',manifest)
+    return events
 
 
 def editor_events(records, frames, execution_id):

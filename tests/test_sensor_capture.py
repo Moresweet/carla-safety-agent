@@ -106,3 +106,9 @@ def test_standalone_capture_records_real_rig_arrays_without_model_claim(tmp_path
     from pathlib import Path
     checker = Path(__file__).resolve().parents[1]/'tools/validate_capture_dataset.py'
     subprocess.run([sys.executable,str(checker),str(capture.run)],check=True)
+    # The validator must reject a raw archive missing a camera, even if its PNG exists.
+    with np.load(folder/'sensor_input.npz') as archive:
+        arrays = {name:archive[name] for name in archive.files if name != 'CAM_FRONT'}
+    np.savez(folder/'sensor_input.npz',**arrays)
+    result = subprocess.run([sys.executable,str(checker),str(capture.run)],capture_output=True,text=True)
+    assert result.returncode != 0 and 'Missing raw input arrays' in result.stderr

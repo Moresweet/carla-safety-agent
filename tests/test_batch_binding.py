@@ -22,3 +22,16 @@ def test_lost_response_binding_and_ambiguity(tmp_path):
     record('run2')
     with pytest.raises(ValueError, match='Multiple'): journal.find_batch_attempt(attempt, job)
     with pytest.raises(ValueError, match='another job'): journal.find_batch_attempt(attempt, 'wrong')
+
+
+def test_batch_request_deduplication_requires_identical_request(tmp_path):
+    journal = SessionJournal(tmp_path)
+    assert journal.existing_batch_request({'action': 'rule-run'}) is None
+    with pytest.raises(ValueError): journal.existing_batch_request({'batch_attempt_id': 'a'})
+    request = {'batch_attempt_id': 'a', 'batch_job_id': 'j', 'action': 'rule-run', 'unified_capture': True}
+    folder = tmp_path/'experiments/run'; folder.mkdir(parents=True)
+    (folder/'execution.json').write_text(json.dumps({'run_id': 'run', 'state': 'completed',
+                                                    'configuration': {'request': request}}))
+    assert journal.existing_batch_request(request)['run_id'] == 'run'
+    with pytest.raises(ValueError, match='changed'):
+        journal.existing_batch_request({**request, 'unified_capture': 1})

@@ -311,6 +311,10 @@ def e2e_status() -> dict:
 @simulation_operation
 def start_e2e(data: dict) -> dict:
     global _e2e_process
+    existing = SESSION.existing_batch_request(data)
+    if existing is not None:
+        return {'ok': True, 'replayed': True, 'execution_id': existing['run_id'],
+                'session': existing, 'job': {'state': existing['state'], 'kind': existing['kind']}}
     action = str(data.get("action", "doctor"))
     if action not in ("doctor", "model-smoke", "run", "preset-run", "sensor-rig", "rule-run"):
         raise RuntimeError(f"Unknown UniAD action: {action}")
@@ -453,7 +457,7 @@ def start_e2e(data: dict) -> dict:
         finally:
             log_stream.close()
         threading.Thread(target=_finish_e2e, args=(_e2e_process,), daemon=True).start()
-        return {"ok": True, "job": dict(_e2e_job)}
+        return {"ok": True, "job": dict(_e2e_job), 'execution_id': execution_id, 'replayed': False}
 
 
 def stop_sensor_rig(data):

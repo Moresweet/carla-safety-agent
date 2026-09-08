@@ -25,6 +25,16 @@ def test_invalid_actor_update_does_not_query_or_mutate_world():
         env['update_actor'](0,{'location':{'x':float('nan')}})
 
 
+def test_repeated_batch_start_returns_before_native_access():
+    def forbidden(*args, **kwargs):
+        pytest.fail('Repeated dispatch must not touch simulation')
+    existing = {'run_id': 'original', 'state': 'completed', 'kind': 'rule-run'}
+    env = functions('start_e2e', SESSION=SimpleNamespace(existing_batch_request=lambda _: existing),
+                    evaluation_active=forbidden, connect_world=forbidden)
+    result = env['start_e2e']({'action': 'rule-run', 'batch_attempt_id': 'a', 'batch_job_id': 'j'})
+    assert result['replayed'] is True and result['execution_id'] == 'original'
+
+
 def test_texture_identity_rejects_same_model_ambiguity():
     env = functions('runtime_name_for_actor', _actor_object_names={})
     world = SimpleNamespace(get_names_of_all_objects=lambda:['BP_TeslaM3_C_1','BP_TeslaM3_C_2'])

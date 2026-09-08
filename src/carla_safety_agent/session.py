@@ -101,6 +101,18 @@ class SessionJournal:
             raise ValueError('Multiple executions match one batch attempt')
         return matches[0] if matches else None
 
+    def existing_batch_request(self, request):
+        """Read-only deduplication, to be called under the launcher's lock."""
+        from .experiment_matrix import canonical
+        if 'batch_attempt_id' not in request and 'batch_job_id' not in request:
+            return None
+        if 'batch_attempt_id' not in request or 'batch_job_id' not in request:
+            raise ValueError('Both batch identities are required')
+        existing = self.find_batch_attempt(request['batch_attempt_id'], request['batch_job_id'])
+        if existing is not None and canonical(existing['configuration']['request']) != canonical(request):
+            raise ValueError('Batch attempt request changed after dispatch')
+        return existing
+
     def list_executions(self, limit=50, after=None):
         """Page by immutable run ID; malformed records remain visible as errors."""
         from .scene_store import identifier

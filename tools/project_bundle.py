@@ -21,6 +21,9 @@ def main():
     doctor.add_argument('--project', type=Path, required=True)
     doctor.add_argument('--host', default='127.0.0.1')
     doctor.add_argument('--port', type=int, default=2000)
+    stage = commands.add_parser('stage')
+    stage.add_argument('archive', type=Path)
+    stage.add_argument('--project', type=Path, required=True)
     load = commands.add_parser('import')
     load.add_argument('archive', type=Path)
     load.add_argument('--destination-parent', type=Path, required=True)
@@ -32,6 +35,17 @@ def main():
     elif args.action == 'inspect':
         manifest, _ = read_bundle(args.archive)
         result = {'manifest': manifest, 'dependency_availability': 'not_checked'}
+    elif args.action == 'stage':
+        import uuid
+        import shutil
+        read_bundle(args.archive)
+        folder = args.project/'data/project-bundles'; folder.mkdir(parents=True, exist_ok=True)
+        bundle_id = uuid.uuid4().hex
+        output = folder/(bundle_id+'.zip')
+        with args.archive.open('rb') as source, output.open('xb') as destination:
+            shutil.copyfileobj(source, destination)
+        read_bundle(output)
+        result = {'bundle_id': bundle_id, 'archive': str(output.resolve()), 'live_world_modified': False}
     elif args.action == 'doctor':
         from carla_safety_agent.bundle_diagnostics import diagnose
         import carla

@@ -1117,8 +1117,43 @@ def capture_scene_document():
 
 @simulation_operation
 def restore_scene(data):
-    world = connect_world()
     saved = SCENES.read(str(data['scene_id']), data.get('version'))
+    return restore_scene_document(saved)
+
+
+@simulation_operation
+def restore_bundle_scene(data):
+    """Explicit world mutation using a validated, locally staged archive."""
+    from carla_safety_agent.project_bundle import read_bundle
+    from carla_safety_agent.scene_store import identifier
+    if set(data) != {'bundle_id', 'scene_id', 'version'}:
+        raise ValueError('Bundle restore requires bundle_id, scene_id and explicit version')
+    connect_world()  # Refuse conflicting execution before installing any texture.
+    bundle_id = identifier(data['bundle_id'])
+    root = PROJECT_ROOT/'data/project-bundles'
+    path = root/(bundle_id+'.zip')
+    if path.is_symlink() or path.resolve().parent != root.resolve():
+        raise ValueError('Invalid staged bundle path')
+    manifest, files = read_bundle(path)
+    scene_id, version = identifier(data['scene_id']), identifier(data['version'])
+    prefix = 'scenes/'+scene_id+'/'
+    if prefix+'head.json' not in files or prefix+version+'.json' not in files:
+        raise ValueError('Scene version is absent from bundle')
+    saved = {'head': json.loads(files[prefix+'head.json']),
+             'document': json.loads(files[prefix+version+'.json'])}
+    # Immutable content-addressed copies remain available for later scene saves.
+    from carla_safety_agent.material_library import material_edits
+    for digest in set(material_edits(saved['document'].get('environment_materials', [])).values()):
+        MATERIALS.put_texture(files['textures/'+digest+'.png'])
+        MATERIALS.texture(digest)  # Reject a pre-existing corrupted destination.
+    result = restore_scene_document(saved)
+    return {**result, 'bundle_id': bundle_id, 'scene_history_installed': False,
+            'note': 'World restored from bundle; save a scene to retain it in the current project catalog'}
+
+
+def restore_scene_document(saved):
+    """Caller holds simulation lock; shared preflight and compensation path."""
+    world = connect_world()
     document = validate_scene(saved['document'])
     if world.get_map().name != document['map']:
         raise RuntimeError('Scene belongs to another map; explicit map handoff is not implemented yet')
@@ -2009,7 +2044,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "/blender/create", "/blender/retexture",
                                 "/blender/import", "/blender/spawn",
                                 "/e2e/start", "/e2e/stop", "/scenario/stop", "/collection/control", '/session/recover', '/session/restore-weather',
-                                '/scenes/save', '/scenes/restore', '/scenes/history', '/scenes/from-experiment',
+                                '/scenes/save', '/scenes/restore', '/scenes/restore-bundle', '/scenes/history', '/scenes/from-experiment',
                                 '/materials/apply', '/materials/restore', '/collection/start', '/collection/stop', '/collection/control'):
             self._headers(404)
             self.wfile.write(b'{"ok":false,"error":"not found"}')
@@ -2041,6 +2076,8 @@ class Handler(BaseHTTPRequestHandler):
                                               for key in ('object_id', 'component', 'slot')}, payload)
             elif request.path == '/materials/restore':
                 result = apply_material_slot(json.loads(payload or b'{}'))
+            elif request.path == '/scenes/restore-bundle':
+                result = restore_bundle_scene(json.loads(payload or b'{}'))
             elif request.path in ('/scenes/save', '/scenes/restore', '/scenes/history', '/scenes/from-experiment'):
                 operation = {'/scenes/save': save_scene, '/scenes/restore': restore_scene,
                              '/scenes/history': scene_history, '/scenes/from-experiment': save_experiment_scene}[request.path]

@@ -8,6 +8,8 @@ import pytest
 
 
 def functions(*names, **environment):
+    if 'restore_scene' in names:
+        names = (*names, 'restore_scene_document')
     source = Path(__file__).resolve().parents[1] / 'tools/livery_bridge.py'
     tree = ast.parse(source.read_text())
     selected = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]

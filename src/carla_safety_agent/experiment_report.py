@@ -7,6 +7,48 @@ from pathlib import Path
 from .experiment_matrix import canonical, compile_matrix
 
 
+def compare_variants(report, axis, baseline, candidate):
+    """Paired descriptive differences; no statistical or causal conclusion."""
+    axes = ('scenes', 'models', 'weather', 'textures')
+    if axis not in axes or baseline == candidate:
+        raise ValueError('Choose one axis and two distinct variants')
+    groups = {}
+    for row in report['rows']:
+        variant = row['variants'][axis]
+        if variant not in (baseline, candidate):
+            continue
+        key = (row['seed'], *(row['variants'][a] for a in axes if a != axis))
+        group = groups.setdefault(key, {})
+        if variant in group:
+            raise ValueError('Ambiguous duplicate comparison condition')
+        group[variant] = row
+    if not groups:
+        raise ValueError('No matching variants in report')
+    pairs = []
+    for key, group in groups.items():
+        a, b = group.get(baseline), group.get(candidate)
+        pair = {'seed': key[0], 'fixed_variants': dict(zip((x for x in axes if x != axis), key[1:])),
+                'baseline_job_id': a['job_id'] if a else None,
+                'candidate_job_id': b['job_id'] if b else None, 'comparable': False}
+        if a is None or b is None:
+            pair['reason'] = 'Missing paired variant'
+        elif any(r['execution_state'] != 'completed' or not r.get('metrics') or r.get('metrics_error') for r in (a, b)):
+            pair['reason'] = 'Both executions need verified completed metrics'
+        elif a['metrics']['elapsed_s'] != b['metrics']['elapsed_s']:
+            pair['reason'] = 'Different observed durations'
+        else:
+            deltas = {}
+            for metric in ('min_ttc_s', 'min_distance_m', 'risk_score'):
+                av, bv = a['metrics'][metric], b['metrics'][metric]
+                deltas[metric] = None if av is None or bv is None else bv-av
+            pair.update(comparable=True, candidate_minus_baseline=deltas,
+                        baseline_collision=a['metrics']['collision'], candidate_collision=b['metrics']['collision'])
+        pairs.append(pair)
+    return {'axis': axis, 'baseline': baseline, 'candidate': candidate,
+            'pairs': pairs, 'comparable_count': sum(p['comparable'] for p in pairs),
+            'conclusion': 'Descriptive matched differences only; no statistical significance or causal claim'}
+
+
 def verified_rule_metrics(execution, results_root):
     if execution.get('kind') != 'rule-run' or execution.get('state') != 'completed':
         raise ValueError('Metrics require a completed rule execution')

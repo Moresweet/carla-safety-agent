@@ -171,9 +171,11 @@ class CarlaAdapter:
                     ego.apply_control(carla.VehicleControl(throttle=0.55, steer=0.0))
                 if render:
                     self._follow_spectator(carla, world, ego)
-                native_frame = world.tick()
+                # Apply editor commands before producing the next sensor frame.
+                # Mutating poses after tick would mix old images with new state.
                 if on_frame is not None:
                     on_frame(world)
+                native_frame = world.tick()
                 if unified_capture:
                     unified_capture.process_frame(native_frame, ego.get_control())
                     if unified_capture.error:

@@ -47,6 +47,7 @@ def test_batch_http_create_list_report_and_invalid_id(tmp_path):
     from pathlib import Path
     from urllib.parse import urlparse, parse_qs
     from carla_safety_agent.experiment_report import summarize_queue
+    from carla_safety_agent.batch_control import control_batch
     source = Path(__file__).resolve().parents[1]/'tools/livery_bridge.py'
     node = next(n for n in ast.parse(source.read_text()).body
                 if isinstance(n, ast.ClassDef) and n.name == 'Handler')
@@ -54,6 +55,9 @@ def test_batch_http_create_list_report_and_invalid_id(tmp_path):
     env = {'BaseHTTPRequestHandler': object, 'urlparse': urlparse, 'parse_qs': parse_qs,
            'json': json, 'BATCHES': catalog, 'PROJECT_ROOT': tmp_path,
            'summarize_queue': summarize_queue}
+    env['batch_control'] = lambda data: control_batch(
+        catalog, data, None, tmp_path/'scenarios',
+        lambda *args: pytest.fail('Pause/resume must not dispatch'))
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), env)
     handler = env['Handler']()
     statuses = []
@@ -75,6 +79,9 @@ def test_batch_http_create_list_report_and_invalid_id(tmp_path):
     assert request('/batches')['batches'][0]['batch_id'] == batch_id
     report = request('/batches/report?batch_id='+batch_id)['report']
     assert report['state_counts'] == {'pending': 1}
+    paused = request('/batches/control', {'batch_id': batch_id, 'action': 'pause'})
+    assert paused['paused'] and paused['dispatched'] is False
+    assert request('/batches/report?batch_id='+batch_id)['report']['paused'] is True
     assert request('/batches/report?batch_id=../outside')['ok'] is False
     assert statuses[-1] == 400
     assert request('/batches/create', [])['ok'] is False

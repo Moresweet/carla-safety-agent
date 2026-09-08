@@ -37,6 +37,7 @@ from carla_safety_agent.scenario_archive import archive_scenario, read_verified_
 from carla_safety_agent.build_plan import build_plan
 from carla_safety_agent.session import SessionJournal
 from carla_safety_agent.batch_catalog import BatchCatalog
+from carla_safety_agent.batch_control import control_batch
 from carla_safety_agent.experiment_report import summarize_queue
 from carla_safety_agent.scene_store import SceneStore, validate_scene
 from carla_safety_agent.material_library import MaterialLibrary, MaterialTransaction, exact_environment_target
@@ -461,6 +462,18 @@ def start_e2e(data: dict) -> dict:
             log_stream.close()
         threading.Thread(target=_finish_e2e, args=(_e2e_process,), daemon=True).start()
         return {"ok": True, "job": dict(_e2e_job), 'execution_id': execution_id, 'replayed': False}
+
+
+@simulation_operation
+def batch_control(data):
+    def dispatch(path, payload=None):
+        if path == 'system/preflight':
+            return system_preflight()
+        if path == 'e2e/start':
+            return start_e2e(payload)
+        raise ValueError('Unsupported batch dispatch operation')
+    return control_batch(BATCHES, data, SESSION,
+                         PROJECT_ROOT/'.runtime/generated-scenarios', dispatch)
 
 
 @simulation_operation
@@ -1938,6 +1951,7 @@ class Handler(BaseHTTPRequestHandler):
         request = urlparse(self.path)
         if request.path not in ("/apply", "/apply/road", "/apply/building",
                                 '/batches/create',
+                                '/batches/control',
                                 "/apply/environment",
                                 "/apply/pedestrian", "/focus/actor",
                                 "/focus/static", "/focus/bev",
@@ -1963,6 +1977,8 @@ class Handler(BaseHTTPRequestHandler):
             payload = self.rfile.read(length)
             if request.path == '/batches/create':
                 result = {'ok': True, **BATCHES.create(json.loads(payload or b'{}'))}
+            elif request.path == '/batches/control':
+                result = batch_control(json.loads(payload or b'{}'))
             elif request.path == '/collection/start':
                 result = start_e2e({**json.loads(payload or b'{}'), 'action':'sensor-rig'})
             elif request.path == '/collection/control':

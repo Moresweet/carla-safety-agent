@@ -1,5 +1,6 @@
 "use client";
 import {useEffect, useState} from 'react';
+import EditorReplayEvents from './EditorReplayEvents';
 
 type Event = {kind:string;start_frame:number;end_frame:number;start_timestamp:number;sample_count:number;peak_brake:number};
 type Collision={frame:number;timestamp:number;other_actor_id:number;other_actor_type:string;
@@ -64,5 +65,6 @@ export default function ReplayEvents({runId,onSeek}:{runId:string;onSeek:(frame:
     </p>}
    </>}
   </div>}
+ <EditorReplayEvents key={runId} runId={runId} onSeek={onSeek}/>
  </section>;
 }

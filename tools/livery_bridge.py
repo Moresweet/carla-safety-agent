@@ -31,7 +31,7 @@ from carla_safety_agent.blender_pipeline import BlenderPipeline
 from carla_safety_agent.dataset import list_datasets
 from carla_safety_agent.provenance import ActorProvenance
 from carla_safety_agent.uv_audit import audit_uv
-from carla_safety_agent.replay import replay_index, replay_file, replay_projection
+from carla_safety_agent.replay import replay_index, replay_file, replay_projection, replay_trajectory
 from carla_safety_agent.natural_language import NaturalLanguageCompiler
 from carla_safety_agent.session import SessionJournal
 from carla_safety_agent.scene_store import SceneStore, validate_scene
@@ -1575,11 +1575,15 @@ class Handler(BaseHTTPRequestHandler):
             self._headers()
             self.wfile.write(json.dumps(result).encode())
             return
-        if request.path == '/datasets/projection':
+        if request.path in ('/datasets/projection','/datasets/trajectory'):
             try:
                 params = parse_qs(request.query)
-                payload=replay_projection(DATASET_ROOT,params.get('run_id',[''])[0],
-                    params.get('frame',['-1'])[0],params.get('camera',[''])[0])
+                if request.path == '/datasets/trajectory':
+                    payload=replay_trajectory(DATASET_ROOT,params.get('run_id',[''])[0],
+                        params.get('frame',['-1'])[0],float(params.get('horizon_s',['5'])[0]))
+                else:
+                    payload=replay_projection(DATASET_ROOT,params.get('run_id',[''])[0],
+                        params.get('frame',['-1'])[0],params.get('camera',[''])[0])
                 self._headers()
                 self.wfile.write(json.dumps({'ok':True,**payload}).encode())
             except (ValueError,KeyError,OSError) as exc:

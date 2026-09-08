@@ -17,6 +17,13 @@ def main():
     index=get('/datasets/index',run_id=args.run_id)
     frame=index['frames'][0]['frame']
     counts={}
+    for entry in (index['frames'][0],index['frames'][-1]):
+        trajectory=get('/datasets/trajectory',run_id=args.run_id,frame=entry['frame'])
+        assert trajectory['ok'] and trajectory['source']=='recorded_ego_pose'
+        assert not trajectory['interpolated']
+        assert all(p['dt_s']<=0 for p in trajectory['history'])
+        assert all(p['dt_s']>0 for p in trajectory['future'])
+    assert trajectory['future']==[], 'Last recorded frame cannot have future observations'
     for camera in ('CAM_FRONT','CAM_FRONT_LEFT','CAM_FRONT_RIGHT','CAM_BACK','CAM_BACK_LEFT','CAM_BACK_RIGHT'):
         result=get('/datasets/projection',run_id=args.run_id,frame=frame,camera=camera)
         assert result['ok'] and result['frame']==frame and result['camera']==camera

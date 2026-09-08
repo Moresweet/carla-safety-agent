@@ -555,11 +555,18 @@ def system_preflight():
 def compile_scenario(data: dict, execute: bool = False) -> dict:
     if execute and evaluation_active():
         raise RuntimeError("Stop the closed-loop evaluation before running a generated scene")
-    compilation = NaturalLanguageCompiler().compile(
-        str(data.get("description", "")), int(data.get("seed", 7)))
+    description, seed = data.get('description', ''), data.get('seed', 7)
+    if not isinstance(description, str) or not description.strip() or len(description) > 10000:
+        raise ValueError('description must be nonempty text of at most 10000 characters')
+    if isinstance(seed, bool) or not isinstance(seed, int) or not 0 <= seed <= 2**32-1:
+        raise ValueError('seed must be an integer from 0 to 4294967295')
+    duration = data.get('max_duration_s')
+    if duration is not None and (isinstance(duration, bool) or not isinstance(duration, (int, float))
+                                or not math.isfinite(duration) or duration < .05):
+        raise ValueError('max_duration_s must be a finite number of at least 0.05 seconds')
+    compilation = NaturalLanguageCompiler().compile(description, seed)
     scenario = compilation.scenario
     if data.get("max_duration_s") is not None:
-        duration = max(0.05, float(data["max_duration_s"]))
         scenario = replace(scenario, oracle=replace(scenario.oracle, max_duration_s=duration))
     response = {"ok": True, "scenario": scenario.to_dict(),
                 "warnings": list(compilation.warnings),

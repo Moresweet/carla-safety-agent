@@ -598,7 +598,8 @@ def test_compile_exposes_review_of_exact_archived_configuration(tmp_path):
     from carla_safety_agent.natural_language import NaturalLanguageCompiler
     from carla_safety_agent.scenario_archive import archive_scenario, read_verified_scenario
     from carla_safety_agent.build_plan import build_plan
-    env=functions('compile_scenario',NaturalLanguageCompiler=NaturalLanguageCompiler,
+    import math
+    env=functions('compile_scenario',NaturalLanguageCompiler=NaturalLanguageCompiler, math=math,
                   replace=replace,PROJECT_ROOT=tmp_path,archive_scenario=archive_scenario,build_plan=build_plan)
     result=env['compile_scenario']({'description':'Town04 前车急刹，自车 5 m/s','max_duration_s':2})
     document,digest=read_verified_scenario(result['scenario_path'])
@@ -609,3 +610,16 @@ def test_compile_exposes_review_of_exact_archived_configuration(tmp_path):
     assert result['build_plan']['map_name']==document['map_name']
     assert result['build_plan']['trigger']['action']=='hard_brake'
     assert result['plan_review']['limitations']
+
+
+@pytest.mark.parametrize('invalid', [
+    {'description':None}, {'description':' '}, {'description':'x'*10001},
+    {'seed':True}, {'seed':1.5}, {'seed':'7'}, {'seed':-1}, {'seed':2**32},
+    {'max_duration_s':False}, {'max_duration_s':-1}, {'max_duration_s':0},
+    {'max_duration_s':'2'}, {'max_duration_s':float('nan')}, {'max_duration_s':float('inf')},
+])
+def test_compile_invalid_options_fail_before_compiler_or_archive(invalid):
+    import math
+    env=functions('compile_scenario',math=math)
+    with pytest.raises(ValueError):
+        env['compile_scenario']({'description':'Town04 前车急刹',**invalid})

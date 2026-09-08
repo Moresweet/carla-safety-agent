@@ -1175,3 +1175,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 新独立资产CSA_MigratedBarrier_16367e2f69，任务af1dd7010b5d45f6a29fda2646d96821，日志unreal-log-d9bbcdccd7ba4375a2291243814ef8c8.json捕获returncode=-11、stderr为Pure virtual function called! / Signal 6 caught。stdout仍显示Success - 0 error(s), 6 warning(s)并正常关闭部分模块；证明单看UE文件日志不足以排除退出崩溃。
 - 保存资产可生成，原生尺寸2.4×0.35×0.8米、Actor1633已清理；运行报告runs/validation/blender-package-af1dd7010b5d45f6a29fda2646d96821-93bd2043/report.json的passed仅覆盖原生生成清理，明确不代表导入进程正常退出。362项测试通过。
 - 此次只读最小脚本退出0而资产导入退出-11，将排查范围缩小到资产操作/相关模块清理，尚无调用栈证明具体根因。之前“没有崩溃证据”结论仅限当时所查文件；新stderr证据已补齐。整体计划仍未完成。
+
+### 2026-09-08 已有网格只读加载的GDB对照
+
+- 扩展probe_commandlet.py支持CSA_PROBE_ASSET指定已有网格，只加载不保存。GDB设置__cxa_pure_virtual断点，加载CSA_MigratedBarrier_16367e2f69，UE子进程3811719正常退出，未触发断点。CarlaUE4_2.log第632/633行记录资产加载和探针完成。
+- GDB工具最终返回1来自退出后bt显示No stack，不是UE子进程失败。未向正在运行的CARLA附加调试器、未新增或覆盖资产。
+- 本次单次对照未复现仅加载触发退出崩溃；问题仍需在FBX导入/材质构建/保存操作中抓栈，不能排除时序相关。无根因修复声明，完整目标继续进行。

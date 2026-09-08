@@ -10,6 +10,7 @@ import carla
 from carla_safety_agent.evaluation_control import EvaluationControl
 from carla_safety_agent.sensor_capture import SensorCapture, atomic_json
 from carla_safety_agent.session import SessionJournal
+from carla_safety_agent.manual_control import current_control
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -18,7 +19,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=2000)
     parser.add_argument('--frames', type=int, default=200)
-    parser.add_argument('--mode', choices=('stationary','autopilot'), default='stationary')
+    parser.add_argument('--mode', choices=('stationary','autopilot','manual'), default='stationary')
     args = parser.parse_args()
     if not 10 <= args.frames <= 100000: raise ValueError('frames must be 10..100000')
     # Popen returns before the bridge durably attaches the child's identity.
@@ -63,6 +64,11 @@ def main():
         control = EvaluationControl(runtime)
         for _ in range(args.frames):
             if stopped: break
+            if args.mode=='manual':
+                try: command=json.loads((runtime/'manual-control.json').read_text())
+                except (OSError,ValueError): command=None
+                values=current_control(command,os.environ.get('CSA_EXECUTION_ID'),time.monotonic())
+                ego.apply_control(carla.VehicleControl(**values))
             frame = world.tick(15)
             capture.process_frame(frame,ego.get_control())
             control.on_frame(world)

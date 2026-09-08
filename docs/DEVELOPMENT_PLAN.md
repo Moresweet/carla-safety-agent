@@ -991,3 +991,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 批次 1d888b3c75194f259c293929751f7411，执行 d0629917402141e8bb49fdb6b97f6ed7、0a01ed00d37047fd9602dc3e000671de 各一次尝试。capture-20260908T184940-593c91ec 与 capture-20260908T184956-417e880b 各 20 帧、14/14 外参验证通过。
 - 原生结束异步零传感器；报告 runs/validation/batch-service-1d888b3c75194f259c293929751f7411.json 保存 background_completed、duplicate_start_rejected、wrong_owner_cancel_rejected 和 native_cleanup_verified 均 true。
 - 全套 318 项测试通过。前端后台控制、后台取消恢复、模型/纹理全面矩阵及其他阶段仍未完成。
+
+### 2026-09-08 桥接重启前后台调度检查
+
+- restart_studio_bridge.sh 在核验原进程命令/工作目录后、发送 TERM 前调用 check_bridge_restart.py；必须同时看到调度器非运行、会话终态及已记录工作进程不再存活。未知状态或读取失败拒绝重启，避免仅观察评测空档就中断活跃批次调度。
+- 新增 restart_guard 的 4 项测试：运行/缺失调度状态、活跃会话、终态但原进程仍存活、PID 复用和观察权限失败；全套 322 项测试通过。本机只读检查通过，没有执行重启。
+- 这是预检查而非原子化停机：检查完成后另一个客户端新启动任务的竞态尚未通过停机屏障解决，不能宣称任意并发下重启安全。旧版缺少调度状态接口时需人工核查，不静默放行。

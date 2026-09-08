@@ -8,6 +8,7 @@ if [[ -f .runtime/bridge.pid ]]; then
   if kill -0 "$BRIDGE_PID" 2>/dev/null; then
     [[ "$(readlink "/proc/$BRIDGE_PID/cwd")" == "$STUDIO_ROOT" ]] || { echo 'Bridge working directory mismatch' >&2; exit 1; }
     tr '\0' ' ' < "/proc/$BRIDGE_PID/cmdline" | rg -q 'tools/livery_bridge.py' || exit 1
+    PYTHONPATH="$STUDIO_ROOT/src" python3 tools/check_bridge_restart.py
     kill -TERM "$BRIDGE_PID"
     for attempt in {1..30}; do
       kill -0 "$BRIDGE_PID" 2>/dev/null || break

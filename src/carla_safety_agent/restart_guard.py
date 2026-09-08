@@ -1,0 +1,16 @@
+"""Fail closed before a caller intentionally terminates the local bridge."""
+from .session import observed_process_identity
+
+
+def verify_idle(session, scheduler, observe=observed_process_identity):
+    if not isinstance(scheduler, dict) or scheduler.get('state') not in (
+            'idle', 'completed', 'cancelled', 'paused', 'needs_attention'):
+        raise ValueError('Batch scheduler active or unknown; cancel scheduling before restart')
+    if not isinstance(session, dict) or session.get('state') not in ('idle', 'completed', 'failed', 'stopped'):
+        raise ValueError('Simulation active or unknown; stop it before bridge restart')
+    identity = session.get('process')
+    if identity is not None:
+        if not isinstance(identity, dict) or set(identity) != {'pid', 'start_ticks'}:
+            raise ValueError('Invalid process identity; refusing restart')
+        if observe(identity['pid']) == identity:
+            raise ValueError('Recorded execution process is still alive')

@@ -151,8 +151,15 @@ def _indexed_file(path, entry, name):
 
 def replay_boxes(root, run_id, frame, camera):
     """Project saved native boxes, never invent missing legacy box offsets."""
+    try:
+        return _replay_boxes(root, run_id, frame, camera)
+    except (TypeError, AttributeError, OverflowError) as exc:
+        raise ValueError('Invalid recorded box data') from exc
+
+
+def _replay_boxes(root, run_id, frame, camera):
     import numpy as np
-    from .projection import project_box
+    from .projection import project_box, project_points
     from .sensor_capture import CAMERAS
     if camera not in CAMERAS:
         raise ValueError('Unknown camera')
@@ -171,18 +178,30 @@ def replay_boxes(root, run_id, frame, camera):
         inverse = np.linalg.inv(pose)
     except np.linalg.LinAlgError as exc:
         raise ValueError('Invalid ego pose') from exc
+    # Validate even when all actors are legacy or outside the camera.
+    project_points(np.empty((0, 3)), {'sensor_to_ego': inverse}, calibration)
     actors = record['actors']
     if not isinstance(actors, list) or len(actors) > 10000:
         raise ValueError('Invalid or oversized actor list')
     boxes, missing = [], 0
+    seen = set()
     for actor in actors:
+        if (not isinstance(actor, dict) or isinstance(actor.get('id'), bool)
+                or not isinstance(actor.get('id'), int) or actor['id'] in seen
+                or not isinstance(actor.get('type'), str)):
+            raise ValueError('Invalid or duplicate recorded actor')
+        seen.add(actor['id'])
         if actor['id'] == record['ego']['id']:
             continue
         box = actor.get('bounding_box')
         if box is None:
             missing += 1
             continue
+        if not isinstance(box, dict) or not isinstance(box.get('world_vertices'), list) or len(box['world_vertices']) != 8:
+            raise ValueError('Invalid recorded box vertices')
         vertices = [[v[k] for k in ('x', 'y', 'z')] for v in box['world_vertices']]
+        if any(isinstance(n, bool) or not isinstance(n, (int, float)) for vertex in vertices for n in vertex):
+            raise ValueError('Non-numeric recorded box vertices')
         segments = project_box(vertices, inverse, calibration)
         if segments:
             boxes.append({'actor_id': actor['id'], 'type': actor['type'], 'segments': segments})

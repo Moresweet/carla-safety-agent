@@ -45,7 +45,8 @@ class CarlaAdapter:
 
     def run(self, spec: ScenarioSpec, output_dir: Path, render: bool = False,
             capture_runtime: Path | None = None,
-            should_stop: Callable[[], bool] | None = None) -> ScenarioResult:
+            should_stop: Callable[[], bool] | None = None,
+            on_frame: Callable[[Any], None] | None = None) -> ScenarioResult:
         if should_stop is not None and should_stop():
             raise RuleRunCancelled('Rule run cancelled before startup')
         carla = self._module()
@@ -171,6 +172,8 @@ class CarlaAdapter:
                 if render:
                     self._follow_spectator(carla, world, ego)
                 native_frame = world.tick()
+                if on_frame is not None:
+                    on_frame(world)
                 if unified_capture:
                     unified_capture.process_frame(native_frame, ego.get_control())
                     if unified_capture.error:

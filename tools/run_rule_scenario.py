@@ -34,11 +34,18 @@ def main():
     spec = scenario_from_dict(document)
     runtime = Path(os.environ['CSA_EVALUATION_CONTROL_DIR'])
     destination = Path(os.environ['RESULTS'])
+    editor = None
+    def on_frame(world):
+        nonlocal editor
+        if editor is None:
+            from carla_safety_agent.evaluation_control import EvaluationControl
+            editor = EvaluationControl(runtime)
+        editor.on_frame(world)
     try:
         result = CarlaAdapter(port=int(os.environ.get('CARLA_PORT','2000')), timeout_s=30).run(
             spec, Path(os.environ['CSA_DATASET_ROOT']), render=True,
             capture_runtime=runtime if os.environ.get('CSA_RULE_CAPTURE') == '1' else None,
-            should_stop=lambda: stopped)
+            should_stop=lambda: stopped, on_frame=on_frame)
         report = result.to_dict()
         # No actor-distance observation exists when cancelled before frame one.
         if not math.isfinite(report['min_distance_m']):

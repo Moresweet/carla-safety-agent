@@ -20,6 +20,7 @@ def test_owned_worker_prestart_stop_writes_stopped_result(tmp_path, monkeypatch)
     monkeypatch.setattr(worker, 'scenario_from_dict', lambda doc: SimpleNamespace(**doc))
     def run(*args, **kwargs):
         assert callable(kwargs['should_stop'])
+        assert callable(kwargs['on_frame'])
         raise RuleRunCancelled()
     monkeypatch.setattr(worker, 'CarlaAdapter', lambda **kwargs: SimpleNamespace(run=run))
     destination = tmp_path/'results'/'result.json'

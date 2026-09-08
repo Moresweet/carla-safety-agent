@@ -37,6 +37,9 @@ def main():
             for path in (ROOT/'.runtime/generated-scenarios').glob('capture-*/manifest.json'):
                 manifest = json.loads(path.read_text())
                 if manifest.get('execution_id') == execution and manifest['frame_count'] >= 5:
+                    catalog = request('catalog/objects?category=buildings&limit=2')
+                    assert catalog['total'] > 0 and len(catalog['objects']) == 2
+                    assert all(item['origin'] == 'existing' for item in catalog['objects'])
                     try:
                         request('scenario/stop', {'run_id':'stale-regression-id'})
                     except urllib.error.HTTPError as exc:

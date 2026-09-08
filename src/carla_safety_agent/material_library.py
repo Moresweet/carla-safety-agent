@@ -17,6 +17,50 @@ def exact_environment_target(name, available):
     return matches.pop()
 
 
+def material_edits(records):
+    """Validate persisted references before touching the simulator."""
+    if not isinstance(records, list) or len(records) > 2000:
+        raise ValueError('At most 2000 material overrides are supported')
+    result = {}
+    for record in records:
+        if not isinstance(record, dict): raise ValueError('Invalid material override')
+        target, component, slot, texture = (record.get(k) for k in ('target','component','slot','texture'))
+        if any(not isinstance(v, str) or not v or '|' in v for v in (target, component)):
+            raise ValueError('Invalid material identity')
+        if isinstance(slot, bool) or not isinstance(slot, int) or slot < 0:
+            raise ValueError('Invalid material slot')
+        if not isinstance(texture, str) or not re.fullmatch(r'[a-f0-9]{64}', texture):
+            raise ValueError('Invalid texture digest')
+        key = (target, component, slot)
+        if key in result: raise ValueError('Duplicate material override')
+        result[key] = texture
+    return result
+
+
+class MaterialTransaction:
+    """Caller preflights every reference and compensates on any later failure."""
+    def __init__(self, before, desired, apply):
+        self.before = material_edits(before)
+        self.desired = material_edits(desired)
+        self.apply_one = apply
+        self.changed = [k for k in sorted(self.before.keys() | self.desired.keys())
+                        if self.before.get(k) != self.desired.get(k)]
+        self.attempted = []
+
+    def apply(self):
+        for key in self.changed:
+            self.attempted.append(key)
+            self.apply_one(key, self.desired.get(key))
+
+    def rollback(self):
+        failures = []
+        for key in reversed(self.attempted):
+            try: self.apply_one(key, self.before.get(key))
+            except Exception as exc: failures.append(f'{key}: {exc}')
+        if failures: raise RuntimeError('Material rollback incomplete: ' + '; '.join(failures))
+        self.attempted.clear()
+
+
 class MaterialLibrary:
     def __init__(self, root):
         self.root = Path(root)

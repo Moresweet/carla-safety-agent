@@ -15,6 +15,7 @@ import RoadSurfaceEditor from "./RoadSurfaceEditor";
 import ScenarioGeneratorPage from "./ScenarioGeneratorPage";
 import Surface3DPreview from "./Surface3DPreview";
 import ProjectPanel from "./ProjectPanel";
+import MaterialSlotEditor from "./MaterialSlotEditor";
 
 type Studio="vehicle"|"pedestrian"|"buildings"|"bridges"|"walls"|"fences"|"roads"|"road_lines"|"sidewalks"|"ground"|"terrain"|"vegetation"|"water"|"poles"|"guard_rails"|"traffic_signs"|"traffic_lights"|"parked_cars"|"dynamic_props"|"static_props"|"spawned_props";
 type Page="edit"|"create"|"blender"|"generate"|"data"|"e2e";
@@ -46,6 +47,7 @@ export default function Home(){
  // A target change invalidates the previously composed texture by design.
  // eslint-disable-next-line react-hooks/set-state-in-effect
  useEffect(()=>{setImage(null);setFileName("No image selected");const canvas=output.current;canvas?.getContext("2d")?.clearRect(0,0,canvas.width,canvas.height)},[activeTarget?.key]);
+ if(page==="edit"&&catalogTarget?.source==="environment")return <main><button onClick={()=>setCatalogTarget(null)}>← 返回场景工作台</button><MaterialSlotEditor key={catalogTarget.key} objectId={catalogTarget.id} name={catalogTarget.name}/><ObjectManager onChanged={()=>setRefresh(v=>v+1)} onTextureTarget={editCatalogTexture}/></main>;
  return <main>
   <ProjectPanel/>
   <header><div><span className="eyebrow">CARLA SAFETY AGENT</span><h1>Scene Control Studio</h1></div><nav className="page-nav"><button className={page==="edit"?"active":""} onClick={()=>setPage("edit")}>Edit World</button><button className={page==="create"?"active":""} onClick={()=>setPage("create")}>Create Objects</button><button className={page==="blender"?"active":""} onClick={()=>setPage("blender")}>Asset Workshop</button><button className={page==="generate"?"active":""} onClick={()=>setPage("generate")}>Generate Scene</button><button className={page==="data"?"active":""} onClick={()=>setPage("data")}>Collect Data</button><button className={page==="e2e"?"active":""} onClick={()=>setPage("e2e")}>End-to-End Test</button></nav><div className="status"><i/>{scene?`${scene.runtime_mode==="docker"?"DOCKER":"NATIVE"} · ${scene.map.split("/").pop()} · ${scene.objects.length} dynamic objects`:"Connecting to CARLA…"}</div></header>

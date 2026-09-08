@@ -24,6 +24,59 @@ def test_texture_identity_rejects_same_model_ambiguity():
         env['runtime_name_for_actor'](world, actor)
 
 
+@pytest.mark.parametrize('slot', [True, -1, 1.5, '1.5', '', '0|apply'])
+def test_material_slot_rejects_non_integral_index(slot):
+    env = functions('apply_material_slot', material_catalog=lambda _: {'target': 'house'})
+    with pytest.raises(ValueError, match='non-negative integer'):
+        env['apply_material_slot']({'object_id': 1, 'component': 'mesh', 'slot': slot})
+
+
+def test_material_restore_targets_only_verified_component_slot():
+    calls = []
+    world = SimpleNamespace(id=7, apply_color_texture_to_object=lambda *args: calls.append(args))
+    env = functions('apply_material_slot',
+        material_catalog=lambda _: {'target': 'house', 'components': [
+            {'component': 'mesh', 'slots': [{'slot': 2, 'status': 'uv0_ready'}]}]},
+        connect_world=lambda: world,
+        carla=SimpleNamespace(TextureColor=lambda *args: 'empty',
+                              MaterialParameter=SimpleNamespace(Diffuse='diffuse')),
+        MATERIALS=SimpleNamespace(record=lambda *args: calls.append(args)))
+    result = env['apply_material_slot']({'object_id': 1, 'component': 'mesh', 'slot': '2'})
+    assert calls == [('house|csa|mesh|2|restore', 'diffuse', 'empty'),
+                     (7, 'house', 'mesh', 2, None)]
+    assert result['operation'] == 'restore'
+    with pytest.raises(ValueError, match='verified UV0'):
+        env['apply_material_slot']({'object_id': 1, 'component': 'other', 'slot': 2})
+    assert len(calls) == 2
+
+
+def test_material_http_routes_and_body_limit():
+    import io
+    from urllib.parse import urlparse, parse_qs
+    source = Path(__file__).resolve().parents[1] / 'tools/livery_bridge.py'
+    node = next(n for n in ast.parse(source.read_text()).body
+                if isinstance(n, ast.ClassDef) and n.name == 'Handler')
+    calls = []
+    env = {'BaseHTTPRequestHandler': object, 'urlparse': urlparse, 'parse_qs': parse_qs,
+           'json': json, 'apply_material_slot': lambda data, payload=None:
+           calls.append((data, payload)) or {'ok': True}}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), env)
+    handler = env['Handler']()
+    statuses = []
+    handler._headers = lambda status=200: statuses.append(status)
+    handler.path = '/materials/apply?object_id=1&component=mesh&slot=2'
+    handler.headers = {'Content-Length': '3'}
+    handler.rfile, handler.wfile = io.BytesIO(b'png'), io.BytesIO()
+    handler.do_POST()
+    assert statuses == [200]
+    assert calls == [({'object_id': '1', 'component': 'mesh', 'slot': '2'}, b'png')]
+    handler.headers = {'Content-Length': str(17 * 1024 * 1024)}
+    handler.rfile = io.BytesIO(b'unread')
+    handler.do_POST()
+    assert statuses[-1] == 413 and handler.rfile.tell() == 0
+    assert len(calls) == 1
+
+
 def test_registered_texture_identity_is_exact():
     env = functions('runtime_name_for_actor', _actor_object_names={7:'BP_TeslaM3_C_1'})
     world = SimpleNamespace(get_names_of_all_objects=lambda:['BP_TeslaM3_C_1','BP_TeslaM3_C_2'])

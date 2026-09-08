@@ -13,8 +13,13 @@ if [[ -f .runtime/bridge.pid ]]; then
       kill -0 "$BRIDGE_PID" 2>/dev/null || break
       sleep .1
     done
+    if kill -0 "$BRIDGE_PID" 2>/dev/null; then
+      echo 'Old bridge has not exited; refusing a duplicate process' >&2
+      exit 1
+    fi
   fi
 fi
+if [[ "${1:-}" == '--stop' ]]; then exit 0; fi
 mkdir -p .runtime
 setsid env PYTHONPATH="${CARLA_PYTHONPATH:-/home/moresweet/carla/.venv/lib/python3.14/site-packages}" \
   python3 tools/livery_bridge.py >> .runtime/bridge.log 2>&1 < /dev/null &

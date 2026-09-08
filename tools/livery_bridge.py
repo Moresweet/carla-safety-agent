@@ -35,7 +35,7 @@ from carla_safety_agent.replay import replay_index, replay_file
 from carla_safety_agent.natural_language import NaturalLanguageCompiler
 from carla_safety_agent.session import SessionJournal
 from carla_safety_agent.scene_store import SceneStore, validate_scene
-from carla_safety_agent.material_library import MaterialLibrary, exact_environment_target
+from carla_safety_agent.material_library import MaterialLibrary, MaterialTransaction, exact_environment_target
 
 
 HOST = "127.0.0.1"
@@ -860,9 +860,10 @@ def save_scene(data):
     weather_keys = ('cloudiness','precipitation','precipitation_deposits','wind_intensity',
                     'sun_azimuth_angle','sun_altitude_angle','fog_density','fog_distance','wetness')
     document = {'map': world.get_map().name, 'objects': objects,
+                'environment_materials': list(MATERIALS.overrides(world.id).values()),
                 'weather': {k: float(getattr(weather,k)) for k in weather_keys},
                 'spectator': transform_record(world.get_spectator().get_transform()),
-                'limitations': ['Managed user actors only; material/visibility history not included yet']}
+                'limitations': ['Managed user actors and exact environment material slots; legacy actor textures and visibility not included yet']}
     return {'ok': True, **SCENES.save(document, data.get('name',''), data.get('scene_id'), data.get('expected_version'))}
 
 
@@ -874,6 +875,7 @@ def restore_scene(data):
     if world.get_map().name != document['map']:
         raise RuntimeError('Scene belongs to another map; explicit map handoff is not implemented yet')
     registry = BLENDER.registry()
+    material_transaction = prepare_scene_materials(world, document)
     for obj in document['objects']:
         blueprint = obj['blueprint_id']
         if blueprint not in registry:
@@ -905,20 +907,60 @@ def restore_scene(data):
                 raise ValueError('Invalid weather property')
             setattr(weather, key, value)
         world.set_weather(weather)
+        if material_transaction:
+            material_transaction.apply()
         view = document.get('spectator')
         if view:
             world.get_spectator().set_transform(carla.Transform(carla.Location(**view['location']), carla.Rotation(**view['rotation'])))
-    except Exception:
+    except Exception as original:
+        recovery_errors = []
+        if material_transaction:
+            try: material_transaction.rollback()
+            except Exception as exc: recovery_errors.append(str(exc))
         for actor, transform in reversed(moved):
-            actor.set_transform(transform)
+            try: actor.set_transform(transform)
+            except Exception as exc: recovery_errors.append(str(exc))
         for actor in created:
-            delete_actor(actor.id)
-        world.set_weather(previous_weather)
-        world.get_spectator().set_transform(previous_view)
+            try: delete_actor(actor.id)
+            except Exception as exc: recovery_errors.append(str(exc))
+        try: world.set_weather(previous_weather)
+        except Exception as exc: recovery_errors.append(str(exc))
+        try: world.get_spectator().set_transform(previous_view)
+        except Exception as exc: recovery_errors.append(str(exc))
+        if recovery_errors:
+            raise RuntimeError(f'Scene restore failed: {original}; recovery incomplete: {recovery_errors}') from original
         raise
     return {'ok': True, **saved, 'restored': len(document['objects']), 'spawned': len(created),
             'bindings': {obj['stable_id']: live[obj['stable_id']].id for obj in document['objects']},
-            'mode': 'merge', 'note': 'Unrelated objects preserved; textures and visibility are not restored yet'}
+            'mode': 'merge', 'note': 'Unrelated actors preserved; managed environment material slots restored; legacy textures and visibility not restored'}
+
+
+def prepare_scene_materials(world, document):
+    if 'environment_materials' not in document:
+        return None  # Older scenes must not erase edits they never recorded.
+    previous = list(MATERIALS.overrides(world.id).values())
+    payloads = {}
+    def apply(key, digest):
+        target, component, slot = key
+        if digest is None:
+            texture, operation = carla.TextureColor(1, 1), 'restore'
+        else:
+            _, texture = decode_texture(payloads[digest], (1024, 1024))
+            operation = 'apply'
+        world.apply_color_texture_to_object(f'{target}|csa|{component}|{slot}|{operation}',
+                                           carla.MaterialParameter.Diffuse, texture)
+        MATERIALS.record(world.id, target, component, slot, digest)
+    transaction = MaterialTransaction(previous, document['environment_materials'], apply)
+    catalog = MATERIALS.catalog(world.get_map().name)['actors']
+    available = set(world.get_names_of_all_objects())
+    for target, component, slot in transaction.changed:
+        if target not in available: raise ValueError(f'Material target missing: {target}')
+        entry = next((c for c in catalog.get(target, []) if c['component'] == component), None)
+        if not entry or not any(s['slot'] == slot and s.get('status') == 'uv0_ready' for s in entry['slots']):
+            raise ValueError(f'Material slot has no verified UV export: {target}/{component}/{slot}')
+    for digest in set(transaction.before.values()) | set(transaction.desired.values()):
+        payloads[digest] = MATERIALS.texture(digest)
+    return transaction
 
 
 @simulation_operation
@@ -1350,14 +1392,18 @@ def material_catalog(object_id):
     catalog = MATERIALS.catalog(world.get_map().name)
     return {'ok':True, 'target':target, 'map':world.get_map().name.split('/')[-1],
             'category':category, 'components':catalog['actors'].get(target,[]),
-            'overrides':list(MATERIALS.overrides(world.id).values())}
+            'overrides':[edit for edit in MATERIALS.overrides(world.id).values()
+                         if edit['target'] == target]}
 
 
 @simulation_operation
 def apply_material_slot(data, payload=None):
     info = material_catalog(data['object_id'])
     component = str(data['component'])
-    slot = int(data['slot'])
+    raw_slot = data['slot']
+    if isinstance(raw_slot, bool) or not str(raw_slot).isdigit():
+        raise ValueError('Material slot must be a non-negative integer')
+    slot = int(raw_slot)
     if '|' in component or '|' in info['target']: raise ValueError('Invalid material target')
     entry = next((c for c in info['components'] if c['component'] == component), None)
     selected = next((s for s in entry['slots'] if s['slot']==slot), None) if entry else None
@@ -1415,6 +1461,23 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         request = urlparse(self.path)
         params = parse_qs(request.query)
+        if request.path in ('/materials/catalog', '/materials/mesh'):
+            try:
+                if request.path == '/materials/catalog':
+                    result = material_catalog(params.get('object_id', [''])[0])
+                else:
+                    path = MATERIALS.mesh(params.get('map', [''])[0],
+                                          params.get('file', [''])[0])
+                    result = json.loads(path.read_text())
+                self._headers()
+                self.wfile.write(json.dumps(result).encode())
+            except (ValueError, KeyError, OSError) as exc:
+                self._headers(400)
+                self.wfile.write(json.dumps({'ok': False, 'error': str(exc)}).encode())
+            except RuntimeError as exc:
+                self._headers(409)
+                self.wfile.write(json.dumps({'ok': False, 'error': str(exc)}).encode())
+            return
         if request.path in ('/scenes', '/scenes/document'):
             try:
                 result = {'scenes': SCENES.list()} if request.path == '/scenes' else SCENES.read(params.get('scene_id',[''])[0], params.get('version',[None])[0])
@@ -1584,14 +1647,27 @@ class Handler(BaseHTTPRequestHandler):
                                 "/blender/create", "/blender/retexture",
                                 "/blender/import", "/blender/spawn",
                                 "/e2e/start", "/e2e/stop", "/collection/control", '/session/recover',
-                                '/scenes/save', '/scenes/restore', '/scenes/history'):
+                                '/scenes/save', '/scenes/restore', '/scenes/history',
+                                '/materials/apply', '/materials/restore'):
             self._headers(404)
             self.wfile.write(b'{"ok":false,"error":"not found"}')
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
+            if length < 0 or length > 16 * 1024 * 1024:
+                self._headers(413)
+                self.wfile.write(b'{"ok":false,"error":"Request body exceeds 16 MiB limit"}')
+                return
             payload = self.rfile.read(length)
-            if request.path in ('/scenes/save', '/scenes/restore', '/scenes/history'):
+            if request.path == '/materials/apply':
+                params = parse_qs(request.query)
+                if not payload:
+                    raise ValueError('Texture image is required')
+                result = apply_material_slot({key: params.get(key, [''])[0]
+                                              for key in ('object_id', 'component', 'slot')}, payload)
+            elif request.path == '/materials/restore':
+                result = apply_material_slot(json.loads(payload or b'{}'))
+            elif request.path in ('/scenes/save', '/scenes/restore', '/scenes/history'):
                 operation = {'/scenes/save': save_scene, '/scenes/restore': restore_scene, '/scenes/history': scene_history}[request.path]
                 result = operation(json.loads(payload or b'{}'))
             elif request.path == '/session/recover':
@@ -1667,6 +1743,9 @@ class Handler(BaseHTTPRequestHandler):
                 result = apply_livery(payload, int(actor_id) if actor_id else None)
             self._headers()
             self.wfile.write(json.dumps(result).encode())
+        except (ValueError, KeyError) as exc:
+            self._headers(400)
+            self.wfile.write(json.dumps({"ok": False, "error": str(exc)}).encode())
         except Exception as exc:
             self._headers(500)
             self.wfile.write(json.dumps({"ok": False, "error": str(exc)}).encode())

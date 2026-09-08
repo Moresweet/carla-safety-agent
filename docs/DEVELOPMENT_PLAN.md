@@ -878,3 +878,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 核对 native_executor 的 carla-safety-evaluation/0.1 结果格式后，报告支持 kind=run 的嵌套 result，先校验外层执行/场景哈希，再要求内层 scenario_id 一致；未知 schema 拒绝。规则结果保持原路径。
 - 汇总可按 kind 指定可信结果目录，导出 CLI 增加 --model-results-root，避免混合队列为兼容目录而放宽任意路径访问。
 - 291 项测试通过，新增原生模型嵌套结果和内外场景错配拒绝。此轮仍未启动真实 UniAD 批量测试，报告支持不等于模型执行已经验收。
+
+### 2026-09-08 UniAD 队列实机发现结构化输入遗漏
+
+- 加载桥接 PID 3507047，真实 UniAD-Tiny 队列 batch-uniad-7f7f469e00fd4b42bc5e9257c913dbd0 启动执行 5748a275add4471389f9797ac12a37d4，日志确认加载 uniad_tiny_b2d.pth 并推理。1 秒场景结束后保留预览 60 秒，期间原进程身份仍存活，队列未提前结算；退出后 completed、异步、零传感器。
+- 整体验收失败：capture-20260908T180757-8349f1b3 原始输入校验 Missing raw input arrays。actual_model_inputs 含 SPEED，但 model_input.npz 无 SPEED；SensorCapture 排除了 dict 输入，而该模型 SPEED 是字典。IMU/GPS/六相机/bev 数组存在，不得据此冒充全部模型输入保存成功。
+- 291 项单测通过未覆盖这一原生结构化输入情形。保留失败数据，不回填伪造 SPEED；下一步需要增加结构化模型输入档案及完整性验证并重新实跑，模型队列采集验收保持未通过。

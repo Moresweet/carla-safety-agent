@@ -25,13 +25,18 @@ def main():
         assert manifest['status']=='saved_limit' and manifest['stop_reason']=='frame_limit'
         assert manifest['frame_count']==len(entries)==3
         assert manifest['execution_id']==execution
+        journal=json.loads((ROOT/'data/experiments'/execution/'execution.json').read_text())
+        scene=journal['configuration']['starting_scene']
+        assert scene['map']==manifest['map']
+        assert all(key in scene for key in ('objects','environment_materials','hidden_environment','weather','spectator','limitations'))
         import carla
         client=carla.Client('127.0.0.1',2000);client.set_timeout(5)
         world=client.get_world()
         assert not world.get_settings().synchronous_mode
         assert not list(world.get_actors().filter('sensor.*'))
         assert not [a for a in world.get_actors().filter('vehicle.*') if a.attributes.get('role_name')=='sensor_rig']
-        print(json.dumps({'execution_id':execution,'dataset':report['run_id'],'samples':3,'state':session['state'],'stop_reason':manifest['stop_reason']}),flush=True)
+        print(json.dumps({'execution_id':execution,'dataset':report['run_id'],'samples':3,'state':session['state'],'stop_reason':manifest['stop_reason'],
+                          'starting_scene_map':scene['map'],'managed_objects':len(scene['objects'])}),flush=True)
     finally:
         current=request('/session/status')['session']
         if current['run_id']==execution and current['state'] in ('preparing','running','stopping'):

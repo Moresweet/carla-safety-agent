@@ -4,6 +4,27 @@ import json
 import math
 
 
+def verify_saved_split(saved, dataset_root):
+    """Recompute assignment and metadata evidence without mutating the manifest."""
+    if (not isinstance(saved, dict) or saved.get('schema_version') != 'carla-safety-split/0.1'
+            or saved.get('verification') != 'finalized_manifest_and_temporal_index'
+            or not isinstance(saved.get('datasets'), dict)):
+        raise ValueError('Expected a metadata-verified split manifest')
+    runs = []
+    for run_id, evidence in saved['datasets'].items():
+        if not isinstance(evidence, dict):
+            raise ValueError('Invalid saved dataset evidence')
+        runs.append({'run_id': run_id, 'scene_group': evidence.get('scene_group')})
+    if 'ratios' not in saved or 'seed' not in saved:
+        raise ValueError('Missing split configuration')
+    current = verified_split(runs, dataset_root, saved['ratios'], saved['seed'])
+    for key in ('assignments', 'scene_groups', 'run_count', 'group_count', 'datasets'):
+        if current[key] != saved.get(key):
+            raise ValueError(f'Split verification failed: {key} changed or inconsistent')
+    return {'ok': True, 'run_count': current['run_count'],
+            'verification': current['verification'], 'raw_sensor_files_verified': False}
+
+
 def verified_split(runs, dataset_root, ratios=(0.8, 0.1, 0.1), seed=7):
     """Bind explicit grouping to finalized index metadata, not full sample validation."""
     from .replay import dataset_path

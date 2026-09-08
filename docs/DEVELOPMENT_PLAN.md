@@ -304,3 +304,8 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - `tools/split_capture_datasets.py groups.json split.json --dataset-root .runtime/generated-scenarios` 新增核验模式：仅接受身份一致、已正常保存且非空的录制，校验清单/索引数量和时间顺序，拒绝元数据路径逃逸；划分结果保存 execution_id、地图、帧数、时间质量及两个元数据文件 SHA-256，不移动原始数据。
 - 相关场景仍需显式 scene_group；启动快照不被误认为能自动证明场景独立性。此核验不代替逐传感器文件校验，时间间隔异常保留报告而非隐瞒。未指定 dataset-root 的原有纯分组模式保持兼容。
 - 133 项测试通过，涵盖录制中、数量不符、身份不符、倒序时间、外部符号链接拒绝。真实数据 capture-20260908T133208-05e8bc71 只读核验通过：3 帧、execution_id 对应、时间顺序正常。未执行多场景训练验收，不标记 S4 完成。
+
+### 2026-09-08 已保存划分的复核入口
+
+- `PYTHONPATH=src python3 tools/verify_dataset_split.py split.json --dataset-root .runtime/generated-scenarios` 只读重新核验源录制元数据与确定性分组，检查划分成员、分组、计数及已有校验值；不覆盖用户批准的划分文件。原始传感器文件未在此命令验证，返回值明确标注。
+- 134 项测试通过，包含分组成员篡改、执行 ID 改变，以及命令行成功/源索引改变后失败且划分文件字节不变。此功能不提供防恶意同步篡改的签名，也不锁定外部训练进程读取期间的数据。

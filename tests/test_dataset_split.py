@@ -31,6 +31,16 @@ def test_verified_split_binds_only_finalized_consistent_metadata(tmp_path, fault
         assert record['frame_count'] == 2
         assert record['sha256']['index.json'] == hashlib.sha256((folder / 'index.json').read_bytes()).hexdigest()
         assert result['assignments'] == split_runs(runs)['assignments']
+        from carla_safety_agent.dataset_split import verify_saved_split
+        assert verify_saved_split(result, tmp_path)['ok']
+        changed = json.loads(json.dumps(result))
+        changed['assignments']['test'].append('run')
+        with pytest.raises(ValueError, match='assignments'):
+            verify_saved_split(changed, tmp_path)
+        manifest['execution_id'] = 'different-execution'
+        (folder / 'manifest.json').write_text(json.dumps(manifest))
+        with pytest.raises(ValueError, match='datasets'):
+            verify_saved_split(result, tmp_path)
 
 
 def test_related_runs_never_cross_splits_and_order_does_not_matter():
@@ -72,3 +82,29 @@ def test_cli_creates_manifest_without_overwriting(tmp_path):
     assert json.loads(before)['run_count']==1
     assert subprocess.run(command,env=env,capture_output=True).returncode!=0
     assert target.read_bytes()==before
+
+
+def test_verify_cli_is_read_only_and_detects_changed_source(tmp_path):
+    import json
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    from carla_safety_agent.dataset_split import verified_split
+    folder = tmp_path / 'run'
+    folder.mkdir()
+    (folder / 'manifest.json').write_text(json.dumps(
+        {'run_id':'run', 'status':'saved', 'frame_count':1}))
+    (folder / 'index.json').write_text(json.dumps({'frames':[{'frame':1, 'timestamp':0.05}]}))
+    saved = tmp_path / 'split.json'
+    saved.write_text(json.dumps(verified_split([{'run_id':'run', 'scene_group':'scene'}], tmp_path)))
+    before = saved.read_bytes()
+    root = Path(__file__).resolve().parents[1]
+    command = [sys.executable, str(root/'tools/verify_dataset_split.py'), str(saved),
+               '--dataset-root', str(tmp_path)]
+    env = {**os.environ, 'PYTHONPATH':str(root/'src')}
+    result = subprocess.run(command, env=env, capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout)['raw_sensor_files_verified'] is False
+    (folder / 'index.json').write_text(json.dumps({'frames':[{'frame':2, 'timestamp':0.1}]}))
+    assert subprocess.run(command, env=env, capture_output=True).returncode != 0
+    assert saved.read_bytes() == before

@@ -12,7 +12,10 @@ from regression_scene_versions import ROOT, request
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--stop',action='store_true')
+    parser.add_argument('--protect-delete',action='store_true')
     args = parser.parse_args()
+    if args.protect_delete and not args.stop:
+        parser.error('--protect-delete requires --stop')
     assert request('system/preflight')['ready']
     plan = request('scenario/compile', {'description':'Town04 前车急刹，自车5 m/s','max_duration_s':20 if args.stop else 1})
     options = {'action':'rule-run','route':plan['scenario_path'],
@@ -40,6 +43,18 @@ def main():
                     catalog = request('catalog/objects?category=buildings&limit=2')
                     assert catalog['total'] > 0 and len(catalog['objects']) == 2
                     assert all(item['origin'] == 'existing' for item in catalog['objects'])
+                    if args.protect_delete:
+                        index=json.loads((path.parent/'index.json').read_text())['frames']
+                        first=json.loads((path.parent/index[0]['path']/'frame.json').read_text())
+                        ego_id=first['ego']['id']
+                        try:
+                            request('objects/delete',{'actor_id':ego_id})
+                        except urllib.error.HTTPError as exc:
+                            assert 'attached sensors' in exc.read().decode()
+                        else:
+                            raise AssertionError('Sensor parent deletion was accepted')
+                        after=json.loads((path.parent/'index.json').read_text())['frames']
+                        assert after[-1]['frame']>index[-1]['frame'], 'Capture did not advance during refused deletion'
                     try:
                         request('scenario/stop', {'run_id':'stale-regression-id'})
                     except urllib.error.HTTPError as exc:
@@ -63,6 +78,9 @@ def main():
         assert catalogs and any(item['response']['ok'] for item in catalogs)
         assert all(item['execution_id'] == execution for item in records)
         assert all(item['observed_frame_before'] == item['observed_frame_after'] for item in records)
+        if args.protect_delete:
+            rejected=[item for item in records if (item.get('command') or {}).get('action')=='delete']
+            assert len(rejected)==1 and rejected[0]['response']['ok'] is False
     datasets = []
     for path in (ROOT/'.runtime/generated-scenarios').glob('capture-*/manifest.json'):
         manifest = json.loads(path.read_text())

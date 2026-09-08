@@ -872,3 +872,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 调度器允许 models.configuration={action:run,algorithm:uniad-tiny}，沿用真实 run_uniad_target/native_executor，而非规则驾驶代理；未支持模型继续拒绝。桥接 run 与 rule-run 均校验 unified_capture 布尔并在启动后写入采集请求。
 - native_executor 的 SensorCapture 传入完整 ScenarioSpec，模型采集也归档对应场景。天气由既有原生执行器设置；此改动不声明跨硬件种子确定性或其他模型输入等价。
 - 290 项测试通过，新增调度请求保留真实模型、统一采集和绑定身份测试。本轮尚未重载桥接或实跑 UniAD 队列；模型结果格式报告适配仍待完成，不能视为跨模型验收通过。
+
+### 2026-09-08 原生模型结果报告适配
+
+- 核对 native_executor 的 carla-safety-evaluation/0.1 结果格式后，报告支持 kind=run 的嵌套 result，先校验外层执行/场景哈希，再要求内层 scenario_id 一致；未知 schema 拒绝。规则结果保持原路径。
+- 汇总可按 kind 指定可信结果目录，导出 CLI 增加 --model-results-root，避免混合队列为兼容目录而放宽任意路径访问。
+- 291 项测试通过，新增原生模型嵌套结果和内外场景错配拒绝。此轮仍未启动真实 UniAD 批量测试，报告支持不等于模型执行已经验收。

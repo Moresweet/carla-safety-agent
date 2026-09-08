@@ -65,3 +65,24 @@ def test_verified_metrics_identity_and_values(tmp_path, defect):
     else:
         metrics = verified_rule_metrics(execution, root)
         assert metrics['benchmark_passed'] is True and metrics['min_ttc_s'] is None
+
+
+def test_native_model_nested_results_require_matching_scenario(tmp_path):
+    import json
+    import hashlib
+    from carla_safety_agent.experiment_matrix import canonical
+    from carla_safety_agent.experiment_report import verified_rule_metrics
+    scenario = {'scenario_id': 'scenario'}
+    digest = hashlib.sha256(canonical(scenario)).hexdigest()
+    path = tmp_path/'model.json'
+    payload = {'schema_version': 'carla-safety-evaluation/0.1', 'execution_id': 'run',
+        'scenario_sha256': digest, 'scenario': scenario, 'result': {'scenario_id': 'scenario',
+        'status': 'passed', 'collision': False, 'min_ttc_s': None, 'min_distance_m': 20,
+        'elapsed_s': 1, 'risk_score': 0, 'failure_reasons': []}}
+    execution = {'run_id': 'run', 'kind': 'run', 'state': 'completed',
+        'configuration': {'results': str(path), 'scenario_sha256': digest}}
+    path.write_text(json.dumps(payload))
+    assert verified_rule_metrics(execution, tmp_path)['benchmark_passed'] is True
+    payload['result']['scenario_id'] = 'other'
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match='Nested'): verified_rule_metrics(execution, tmp_path)

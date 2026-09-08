@@ -50,8 +50,8 @@ def compare_variants(report, axis, baseline, candidate):
 
 
 def verified_rule_metrics(execution, results_root):
-    if execution.get('kind') != 'rule-run' or execution.get('state') != 'completed':
-        raise ValueError('Metrics require a completed rule execution')
+    if execution.get('kind') not in ('rule-run', 'run') or execution.get('state') != 'completed':
+        raise ValueError('Metrics require a completed native scenario execution')
     config = execution['configuration']
     root = Path(results_root).resolve()
     raw = Path(config['results'])
@@ -63,6 +63,13 @@ def verified_rule_metrics(execution, results_root):
         raise ValueError('Rule result execution/scenario identity mismatch')
     if hashlib.sha256(canonical(result['scenario'])).hexdigest() != config['scenario_sha256']:
         raise ValueError('Rule result scenario contents changed')
+    if execution['kind'] == 'run':
+        if result.get('schema_version') != 'carla-safety-evaluation/0.1':
+            raise ValueError('Unsupported native evaluation result schema')
+        scenario_id = result['scenario']['scenario_id']
+        result = result['result']
+        if result.get('scenario_id') != scenario_id:
+            raise ValueError('Nested result scenario identity mismatch')
     if result.get('status') not in ('passed', 'failed') or not isinstance(result.get('collision'), bool):
         raise ValueError('Invalid driving outcome')
     metrics = {}
@@ -118,9 +125,10 @@ def summarize_queue(state, results_root=None):
             'error': execution.get('error') or result.get('error'),
             'result_reference': (execution.get('configuration') or {}).get('results'),
             'attempt_ids': [a['attempt_id'] for a in attempts]})
-        if results_root is not None and execution.get('kind') == 'rule-run' and status == 'completed':
+        if results_root is not None and execution.get('kind') in ('rule-run', 'run') and status == 'completed':
             try:
-                metrics = verified_rule_metrics(execution, results_root)
+                selected_root = results_root[execution['kind']] if isinstance(results_root, dict) else results_root
+                metrics = verified_rule_metrics(execution, selected_root)
                 rows[-1].update(metrics=metrics, benchmark_passed=metrics['benchmark_passed'])
             except (ValueError, KeyError, TypeError, OSError) as exc:
                 rows[-1].update(metrics_error=str(exc), benchmark_passed=None)

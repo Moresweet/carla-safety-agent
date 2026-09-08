@@ -27,10 +27,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('queue', type=Path)
     parser.add_argument('--results-root', type=Path, required=True)
+    parser.add_argument('--model-results-root', type=Path, help='Native model result directory for mixed rule/model queues')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--compare', nargs=3, metavar=('AXIS', 'BASELINE', 'CANDIDATE'))
     args = parser.parse_args()
-    print(export_report(args.queue, args.results_root, args.output, args.compare).resolve())
+    roots = {'rule-run': args.results_root, 'run': args.model_results_root} if args.model_results_root else args.results_root
+    print(export_report(args.queue, roots, args.output, args.compare).resolve())
 
 
 if __name__ == '__main__': main()

@@ -143,3 +143,21 @@ class ExperimentQueue:
             job['state'] = terminal
             self.write(state)
             return {'reconciled': True, 'state': terminal}
+
+    def recover_binding(self, job_id, attempt_id, journal):
+        """Resolve an already dispatched reservation; absence never restarts it."""
+        with self.locked():
+            state = self.read()
+            job = next((j for j in state['jobs'] if j['job_id'] == job_id), None)
+            if not job or not job['attempts'] or job['attempts'][-1]['attempt_id'] != attempt_id:
+                raise ValueError('Stale or unknown queue attempt')
+            if job['state'] != 'reserved':
+                raise ValueError('Only reserved attempts can recover a binding')
+            execution = journal.find_batch_attempt(attempt_id, job_id)
+            if execution is None:
+                return {'bound': False, 'reason': 'No matching execution; reservation retained'}
+            attempt = job['attempts'][-1]
+            attempt['execution_id'] = execution['run_id']
+            attempt['state'] = job['state'] = 'running'
+            self.write(state)
+            return {'bound': True, 'execution_id': execution['run_id']}

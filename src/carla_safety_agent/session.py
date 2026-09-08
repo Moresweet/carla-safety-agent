@@ -78,6 +78,29 @@ class SessionJournal:
                 return identity['pid']
             return None
 
+    def find_batch_attempt(self, attempt_id, job_id):
+        """Recover dispatch identity after a lost response; ambiguity fails closed."""
+        from .scene_store import identifier
+        identifier(attempt_id)
+        identifier(job_id)
+        root = self.root/'experiments'
+        matches = []
+        if not root.exists():
+            return None
+        for folder in root.iterdir():
+            if not folder.is_dir():
+                continue
+            # Corrupt records prevent an absence conclusion; never hide them.
+            record = self.read_execution(folder.name)
+            request = (record.get('configuration') or {}).get('request') or {}
+            if request.get('batch_attempt_id') == attempt_id:
+                if request.get('batch_job_id') != job_id:
+                    raise ValueError('Batch attempt belongs to another job')
+                matches.append(record)
+        if len(matches) > 1:
+            raise ValueError('Multiple executions match one batch attempt')
+        return matches[0] if matches else None
+
     def list_executions(self, limit=50, after=None):
         """Page by immutable run ID; malformed records remain visible as errors."""
         from .scene_store import identifier

@@ -6,9 +6,9 @@ import math
 import random
 import sys
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .metrics import KinematicState, distance, evaluate, ttc
 from .dataset import DatasetRecorder
@@ -18,6 +18,10 @@ from .opendrive import build_opendrive
 
 class CarlaUnavailable(RuntimeError):
     pass
+
+
+class RuleRunCancelled(RuntimeError):
+    """Cancellation observed before any connection or world mutation."""
 
 
 class CarlaAdapter:
@@ -40,7 +44,10 @@ class CarlaAdapter:
         return carla
 
     def run(self, spec: ScenarioSpec, output_dir: Path, render: bool = False,
-            capture_runtime: Path | None = None) -> ScenarioResult:
+            capture_runtime: Path | None = None,
+            should_stop: Callable[[], bool] | None = None) -> ScenarioResult:
+        if should_stop is not None and should_stop():
+            raise RuleRunCancelled('Rule run cancelled before startup')
         carla = self._module()
         client = carla.Client(self.host, self.port)
         client.set_timeout(self.timeout_s)
@@ -154,7 +161,11 @@ class CarlaAdapter:
                     adv.set_autopilot(True)
             steps = int(spec.oracle.max_duration_s / settings.fixed_delta_seconds)
             triggered: set[int] = set()
+            stopped = False
             for frame in range(steps):
+                if should_stop is not None and should_stop():
+                    stopped = True
+                    break
                 if spec.family == "road_hazard":
                     ego.apply_control(carla.VehicleControl(throttle=0.55, steer=0.0))
                 if render:
@@ -201,6 +212,8 @@ class CarlaAdapter:
             trace_path.write_text(json.dumps(trace, indent=2), encoding="utf-8")
             result = evaluate(spec.scenario_id, spec.oracle, collision["hit"], min_ttc,
                               min_distance, elapsed, str(trace_path))
+            if stopped:
+                result = replace(result, status='stopped')
             return result
         finally:
             capture_errors = []

@@ -14,7 +14,8 @@ def test_dependency_observations_do_not_switch_maps(tmp_path, listed_map):
                              get_available_maps=lambda: [listed_map, '/Game/Carla/Maps/Town05'])
     folder = tmp_path/'material-exports/Town04'; folder.mkdir(parents=True)
     (folder/'preview-catalog.json').write_text(json.dumps({'actors': {'building': [
-        {'component': 'mesh', 'slots': [{'slot': 0, 'status': 'uv0_ready'}]}]}}))
+        {'component': 'mesh', 'slots': [{'slot': 0, 'status': 'uv0_ready', 'mesh_file': 'mesh.json'}]}]}}))
+    (folder/'mesh.json').write_text(json.dumps({'triangleCount': 1, 'vertices': [0.0]*15}))
     manifest = {'dependencies': {'maps': ['Carla/Maps/Town04', 'Carla/Maps/Town99'],
         'blueprints': ['static.prop.box', 'missing'], 'material_slots': [
             ['Carla/Maps/Town04', 'building', 'mesh', 0],
@@ -25,3 +26,5 @@ def test_dependency_observations_do_not_switch_maps(tmp_path, listed_map):
                                                     'available', 'missing', 'not_checked']
     assert not result['all_declared_dependencies_available']
     assert not result['live_world_modified'] and not result['restore_verified']
+    (folder/'mesh.json').unlink()
+    assert diagnose(manifest, client, tmp_path)['checks'][4]['state'] == 'missing'

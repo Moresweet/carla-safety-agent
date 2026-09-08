@@ -47,7 +47,7 @@ def test_referenced_material_preview_roundtrip(tmp_path):
         {'slot': 0, 'status': 'uv0_ready', 'mesh_file': 'mesh.json'},
         {'slot': 1, 'status': 'uv0_ready', 'mesh_file': 'unused.json'}]}]}}
     (folder/'preview-catalog.json').write_text(json.dumps(catalog))
-    (folder/'mesh.json').write_text('{"vertices": []}')
+    (folder/'mesh.json').write_text(json.dumps({'triangleCount': 1, 'vertices': [0.0]*15}))
     archive = tmp_path/'previews.zip'
     export_bundle(tmp_path/'source/scenes', tmp_path/'source', [scene_id], archive,
                   include_material_previews=True)

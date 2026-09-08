@@ -1,5 +1,6 @@
 """Read-only dependency observations, never a claim of successful world restore."""
 from .material_library import MaterialLibrary
+from .material_mesh import validate_preview
 
 
 def diagnose(manifest, client, material_root):
@@ -31,6 +32,14 @@ def diagnose(manifest, client, material_root):
                        for s in entry['slots'] if s['slot'] == slot and s.get('status') == 'uv0_ready']
             check.update(state='available' if target in names and len(matches) == 1 else 'missing',
                          reason='Requires live target and one verified UV0 catalog slot')
+            if check['state'] == 'available':
+                try:
+                    path = library.mesh(map_name.split('/')[-1], matches[0].get('mesh_file'))
+                    if path.stat().st_size > 32*1024*1024: raise ValueError('Preview too large')
+                    validate_preview(path.read_bytes())
+                    check['reason'] = 'Live target, unique UV0 slot and valid XYZ/UV preview file'
+                except (OSError, ValueError, TypeError, KeyError) as exc:
+                    check.update(state='missing', reason=f'Preview unavailable: {exc}')
         checks.append(check)
     return {'checks': checks, 'all_declared_dependencies_available': all(c['state'] == 'available' for c in checks),
             'current_map': current_map, 'live_world_modified': False, 'restore_verified': False,

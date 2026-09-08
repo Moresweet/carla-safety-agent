@@ -9,6 +9,7 @@ import zipfile
 
 from .experiment_matrix import canonical
 from .material_library import material_edits
+from .material_mesh import validate_preview
 from .scene_store import SceneStore, identifier, validate_scene
 
 LIMIT = 256 * 1024 * 1024
@@ -66,7 +67,7 @@ def _validate(files):
             if not isinstance(mesh, str) or Path(mesh).name != mesh: raise ValueError('Invalid mesh filename')
             mesh_name = f'material-exports/{town}/{mesh}'
             if mesh_name not in files: raise ValueError('Missing preview mesh')
-            json.loads(files[mesh_name])
+            validate_preview(files[mesh_name])
             expected.update((catalog_name, mesh_name))
         if preview_files != expected: raise ValueError('Unexpected preview files')
     return {'maps': sorted(maps), 'blueprints': sorted(blueprints),

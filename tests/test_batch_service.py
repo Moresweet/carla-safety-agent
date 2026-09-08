@@ -1,0 +1,36 @@
+import threading
+import pytest
+from carla_safety_agent.batch_service import BatchService
+
+
+def test_service_single_owner_cancel_and_detached_status():
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    def step(batch):
+        calls.append(batch); entered.set()
+        assert release.wait(3)
+        return {'action': 'started', 'execution_id': 'execution'}
+    service = BatchService(step, interval=.001)
+    service.start('batch1')
+    assert entered.wait(3)
+    with pytest.raises(ValueError): service.start('batch2')
+    with pytest.raises(ValueError): service.cancel('batch2')
+    snapshot = service.status(); snapshot['state'] = 'forged'
+    assert service.status()['state'] == 'running'
+    service.cancel('batch1'); release.set(); service.worker.join(3)
+    assert not service.worker.is_alive()
+    assert service.status()['state'] == 'cancelled'
+    assert service.status()['current_simulation_stopped'] is False
+    assert calls == ['batch1']
+
+
+def test_service_error_is_visible_and_new_start_is_explicit():
+    def step(batch):
+        raise OSError('lost response')
+    service = BatchService(step)
+    service.start('batch1'); service.worker.join(3)
+    assert service.status()['state'] == 'needs_attention'
+    assert service.status()['error'] == 'lost response'
+    service.step = lambda batch: {'action': 'no_pending_jobs', 'states': ['completed']}
+    service.start('batch1'); service.worker.join(3)
+    assert service.status()['state'] == 'completed'

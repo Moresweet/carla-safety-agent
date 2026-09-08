@@ -38,6 +38,7 @@ from carla_safety_agent.build_plan import build_plan
 from carla_safety_agent.session import SessionJournal
 from carla_safety_agent.batch_catalog import BatchCatalog
 from carla_safety_agent.batch_control import control_batch
+from carla_safety_agent.batch_service import BatchService
 from carla_safety_agent.experiment_report import summarize_queue, compare_variants
 from carla_safety_agent.scene_store import SceneStore, validate_scene
 from carla_safety_agent.material_library import MaterialLibrary, MaterialTransaction, exact_environment_target
@@ -474,6 +475,20 @@ def batch_control(data):
         raise ValueError('Unsupported batch dispatch operation')
     return control_batch(BATCHES, data, SESSION,
                          PROJECT_ROOT/'.runtime/generated-scenarios', dispatch)
+
+
+BATCH_SERVICE = BatchService(lambda batch_id: batch_control({'batch_id': batch_id, 'action': 'advance'}))
+
+
+def batch_scheduler_control(data):
+    if not isinstance(data, dict) or set(data) != {'batch_id', 'action'}:
+        raise ValueError('Scheduler control requires batch_id and action')
+    if data['action'] == 'cancel':
+        return {'ok': True, 'scheduler': BATCH_SERVICE.cancel(data['batch_id'])}
+    if data['action'] != 'start':
+        raise ValueError('Unknown scheduler action')
+    BATCHES.read(data['batch_id'])
+    return {'ok': True, 'scheduler': BATCH_SERVICE.start(data['batch_id'])}
 
 
 @simulation_operation
@@ -1727,6 +1742,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         request = urlparse(self.path)
         params = parse_qs(request.query)
+        if request.path == '/batches/scheduler':
+            self._headers()
+            self.wfile.write(json.dumps({'ok': True, 'scheduler': BATCH_SERVICE.status()}).encode())
+            return
         if request.path in ('/batches', '/batches/report', '/batches/compare'):
             try:
                 result = (BATCHES.list(int(params.get('limit', ['30'])[0]), params.get('after', [None])[0])
@@ -1956,6 +1975,7 @@ class Handler(BaseHTTPRequestHandler):
         if request.path not in ("/apply", "/apply/road", "/apply/building",
                                 '/batches/create',
                                 '/batches/control',
+                                '/batches/scheduler',
                                 "/apply/environment",
                                 "/apply/pedestrian", "/focus/actor",
                                 "/focus/static", "/focus/bev",
@@ -1983,6 +2003,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = {'ok': True, **BATCHES.create(json.loads(payload or b'{}'))}
             elif request.path == '/batches/control':
                 result = batch_control(json.loads(payload or b'{}'))
+            elif request.path == '/batches/scheduler':
+                result = batch_scheduler_control(json.loads(payload or b'{}'))
             elif request.path == '/collection/start':
                 result = start_e2e({**json.loads(payload or b'{}'), 'action':'sensor-rig'})
             elif request.path == '/collection/control':

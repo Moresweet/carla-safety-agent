@@ -7,6 +7,14 @@ from PIL import Image
 
 root = Path(sys.argv[1]).resolve()
 manifest = json.loads((root/'manifest.json').read_text())
+reference = manifest.get('scenario')
+if reference is not None:
+    from carla_safety_agent.scenario_archive import read_verified_scenario
+    scenario_path = reference['path']
+    assert Path(scenario_path).name == scenario_path, 'Scenario path must stay within dataset'
+    scenario, digest = read_verified_scenario(root/scenario_path, reference['sha256'])
+    assert scenario['scenario_id'] == reference['scenario_id'] == manifest['scenario_id']
+    assert manifest['files']['scenario'] == scenario_path
 archive = manifest.get('input_archive', 'model_input.npz')
 assert archive in ('model_input.npz', 'sensor_input.npz'), 'Unknown input archive'
 index = json.loads((root/'index.json').read_text())['frames']

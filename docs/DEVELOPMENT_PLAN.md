@@ -656,3 +656,8 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 新增 replay_editor_events 和 GET /datasets/editor-events，读取数据内固定相对归档、限制大小/符号链接、核验任务 ID，并根据原始审计与录制帧重新计算映射，拒绝不一致的保存索引；旧数据明确 available=false。
 - 202 项测试通过，增加回放读取与篡改 seek_frame 拒绝检查。实机 8d241c63276c4a87ad753b487c4f1b1b 生成 capture-20260908T164803-528a18a5，7 同步样本/14 外参通过、停止清理通过。直接使用真实回放函数读取数据内归档，得到 3 条 catalog_environment 命令及后续帧定位，不依赖外部审计目录。
 - 新 HTTP 分支尚未重启加载验收，前端未展示；本次命令为目录读取而非场景修改，不能将其称为修改效果验证。
+
+### 2026-09-08 编辑事件 HTTP 兼容验收
+
+- 空闲时加载桥接，通过真实 /datasets/editor-events 读取 capture-20260908T164803-528a18a5，available=true、返回 3 条目录命令及后续帧定位；读取旧 capture-20260908T161417-253a8410 返回 available=false 和无归档提示；run_id=.. 返回 HTTP 400 Unknown dataset。
+- 补充审计顶层/记录/命令/响应类型校验，畸形结构转为明确 ValueError。207 项测试通过；该类型加强尚未重启 HTTP 验收，前端事件展示仍待接入。本轮只读已有数据，没有启动或修改仿真。

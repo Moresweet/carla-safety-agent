@@ -28,6 +28,11 @@ def test_reject_mixed_execution_duplicate_commands_and_invalid_frames():
         with pytest.raises(ValueError): editor_events(records,frames,'run')
 
 
+@pytest.mark.parametrize('records',[None,{},[None],[record(command='bad')],[record(response=['bad'])]])
+def test_invalid_audit_structure_rejected(records):
+    with pytest.raises(ValueError): editor_events(records,[10,15],'run')
+
+
 def test_portable_event_archive_and_execution_guard(tmp_path):
     from carla_safety_agent.editor_events import attach_editor_events
     dataset=tmp_path/'dataset'; dataset.mkdir()

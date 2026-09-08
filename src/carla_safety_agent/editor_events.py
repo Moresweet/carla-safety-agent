@@ -33,6 +33,8 @@ def attach_editor_events(dataset, audit_dir, execution_id):
 
 
 def editor_events(records, frames, execution_id):
+    if not isinstance(records,list) or not isinstance(frames,list):
+        raise ValueError('Editor records and frames must be arrays')
     if not isinstance(execution_id,str) or not execution_id:
         raise ValueError('Execution identity required')
     if len(records)>10000 or len(frames)>10000:
@@ -43,6 +45,8 @@ def editor_events(records, frames, execution_id):
         raise ValueError('Frames must be strictly ordered')
     events, seen = [], set()
     for record in records:
+        if not isinstance(record,dict):
+            raise ValueError('Editor record must be an object')
         if record.get('execution_id') != execution_id:
             raise ValueError('Editor command belongs to another execution')
         identity = record.get('command_id')
@@ -56,10 +60,12 @@ def editor_events(records, frames, execution_id):
         if state not in ('attempting','responded'):
             raise ValueError('Unknown command audit state')
         response = record.get('response') or {}
+        command = record.get('command') or {}
+        if not isinstance(response,dict) or not isinstance(command,dict):
+            raise ValueError('Invalid editor command or response')
         certain = state=='responded' and record.get('observed_frame_after')==before and response.get('ok') is True
         position = bisect_right(frames,before)
         target = frames[position] if certain and position<len(frames) else None
-        command = record.get('command') or {}
         events.append({'command_id':identity,'action':command.get('action'),
             'boundary_frame':before,'seek_frame':target,
             'outcome':'acknowledged' if certain else 'uncertain',

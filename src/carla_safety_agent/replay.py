@@ -33,7 +33,7 @@ def replay_editor_events(root, run_id):
     if reference != archive.name or archive.is_symlink() or archive.stat().st_size>32*1024*1024:
         raise ValueError('Invalid editor event archive')
     document = json.loads(archive.read_text())
-    if document.get('schema_version') != 'carla-editor-events/1' or document.get('execution_id') != manifest.get('execution_id'):
+    if not isinstance(document,dict) or document.get('schema_version') != 'carla-editor-events/1' or document.get('execution_id') != manifest.get('execution_id'):
         raise ValueError('Editor archive identity mismatch')
     frames = [entry['frame'] for entry in replay_index(root,run_id)['frames']]
     events = editor_events(document['records'],frames,manifest['execution_id'])

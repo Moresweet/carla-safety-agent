@@ -1,0 +1,66 @@
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Sensor/CollisionSensor.h b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Sensor/CollisionSensor.h
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Sensor/CollisionSensor.h
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Sensor/CollisionSensor.h
+@@ -29,2 +29,3 @@
+   void SetOwner(AActor *NewOwner) override;
++  void EndPlay(EEndPlayReason::Type EndPlayReason) override;
+ 
+@@ -54,2 +55,4 @@
+ private:
++  void UnbindCollisionOwner();
++  bool bCollisionEndingPlay = false;
+   /// Registry that saves all collisions. Used to avoid sending the same collision more than once per frame,
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Sensor/CollisionSensor.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Sensor/CollisionSensor.cpp
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Sensor/CollisionSensor.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Sensor/CollisionSensor.cpp
+@@ -34,7 +34,9 @@
+ void ACollisionSensor::SetOwner(AActor *NewOwner)
+ {
++  UnbindCollisionOwner();
+   Super::SetOwner(NewOwner);
+ 
+-  /// @todo Deregister previous owner if there was one.
+-  if (IsValid(NewOwner))
++  if (!bCollisionEndingPlay && IsValid(NewOwner))
+   {
+@@ -64,2 +66,31 @@
+ 
++void ACollisionSensor::UnbindCollisionOwner()
++{
++  AActor *PreviousOwner = GetOwner();
++  if (auto *Vehicle = Cast<ACarlaWheeledVehicle>(PreviousOwner))
++  {
++    if (IsValid(Vehicle->GetMesh()))
++      Vehicle->GetMesh()->OnComponentHit.RemoveDynamic(this, &ACollisionSensor::OnComponentCollisionEvent);
++  }
++  else if (auto *Walker = Cast<AWalkerBase>(PreviousOwner))
++  {
++    if (IsValid(Walker->GetMesh()))
++      Walker->GetMesh()->OnComponentHit.RemoveDynamic(this, &ACollisionSensor::OnComponentCollisionEvent);
++  }
++  OnActorHit.RemoveDynamic(this, &ACollisionSensor::OnActorCollisionEvent);
++}
++
++void ACollisionSensor::EndPlay(EEndPlayReason::Type EndPlayReason)
++{
++  // Stop physics delegates before ASensor closes its stream and deregisters.
++  bCollisionEndingPlay = true;
++  UnbindCollisionOwner();
++  CollisionRegistry.clear();
++  Super::EndPlay(EndPlayReason);
++}
++
+ void ACollisionSensor::PrePhysTick(float DeltaSeconds) {
+@@ -85,3 +116,6 @@
+     const FHitResult &Hit)
+ {
++  if (bCollisionEndingPlay || IsActorBeingDestroyed() || !IsValid(Actor))
++    return;
++
+   if (!IsValid(OtherActor))
+@@ -174,3 +208,5 @@
+       const FHitResult& Hit)
+ {
++  if (bCollisionEndingPlay || IsActorBeingDestroyed() || !IsValid(HitComp))
++    return;
+   AActor* Actor = HitComp->GetOwner();

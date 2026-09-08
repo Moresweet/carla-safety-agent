@@ -355,3 +355,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 新增 tools/regression_collision_capture.py，经正式独立采集入口运行 stationary/120 帧/every=2，由 worker 独占 tick；临时接触车辆只由测试脚本管理。执行 359f3335223f4d00a19fbb335ce37440，数据集 capture-20260908T140307-84bc487e 保存 60 样本、97 条原生碰撞观察。首条帧 3312430 对方 actor 423，与保存图像同帧、偏差 0。
 - **完整验收失败**：worker 报 cleanup_errors=[] 且进程返回 0，但会话进入 recovering/world_recovery，CARLA RPC 超时。原生日志 .runtime/carla.log 尾部 Signal 11 caught，UE4Editor 进程消失；引擎日志最后涉及销毁传感器/CollisionSensor_4。全程 Town04、未切图，因此这次崩溃不能归因于切图。具体 native 根因尚未确认，不将单测通过或数据保存解释为运行成功。
 - 测试车销毁 RPC 因服务器退出失败，无法以 RPC 验证清理；原生进程退出已结束该内存世界。脚本补充恢复错误提前识别及清理 RPC 失败仍执行 worker 停止检查，144 项单测通过。当前原生服务尚未重启，需保留崩溃证据并修复/回归销毁生命周期，再做完整验收。
+
+### 2026-09-08 生命周期候选修复与反证
+
+- 检查原生 CollisionSensor 源码发现 SetOwner 留有未解绑旧 owner 的 TODO，EndPlay 无派生处理。新增 integration/carla/collision-sensor-lifecycle.patch：主动解绑 hit delegate、EndPlay 前关闭回调入口、无效组件/销毁期回调拒绝。只修改两个原生文件，补丁检查和 CarlaUE4Editor 完整编译通过（105.86 秒）；144 项 Python 测试通过。
+- 新增 restart_carla_native.sh --after-crash：仅在宿主 UE4Editor 不存在时允许跳过现场保存；保留已有场景/数据，不能恢复已丢失的内存世界。已启动 Town04 并重启桥接，旧失败执行保留失败状态。
+- **修复不足，仍未通过**：加载补丁后完整碰撞采集执行 908a0bab80634b06a23f3dfabf59c2cd 再次进入 recovering/world_recovery（worker 返回 0，服务器超时），测试车辆 140 清理 RPC 失败。该反证说明不能把解绑缺口直接认定为本次崩溃的充分根因；后续需原生调试栈进一步定位。不得称本补丁已修复退出崩溃。

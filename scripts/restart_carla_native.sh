@@ -2,8 +2,18 @@
 set -eo pipefail
 STUDIO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$STUDIO_ROOT"
+if [[ "${1:-}" != '' && "${1:-}" != '--after-crash' ]]; then
+  echo 'Usage: restart_carla_native.sh [--after-crash]' >&2; exit 1
+fi
 python3 -c 'import json,urllib.request; s=json.load(urllib.request.urlopen("http://127.0.0.1:8765/e2e/status")); assert s["job"]["state"] not in ("running","stopping"), "Stop evaluation first"'
-curl --fail -s -X POST http://127.0.0.1:8765/scenes/save -H 'Content-Type: application/json' -d '{"name":"原生服务升级前快照"}' > /dev/null
+if [[ "${1:-}" == '--after-crash' ]]; then
+  if pgrep -x UE4Editor > /dev/null; then
+    echo 'A native editor is still alive; refusing crash-recovery mode' >&2; exit 1
+  fi
+  echo 'Native process absent: current in-memory scene cannot be saved; retaining existing scene versions and datasets.'
+else
+  curl --fail -s -X POST http://127.0.0.1:8765/scenes/save -H 'Content-Type: application/json' -d '{"name":"原生服务升级前快照"}' > /dev/null
+fi
 # Release the native client before its server goes away. Browser polling against
 # a stale CARLA client can otherwise terminate Python inside the C++ extension.
 bash scripts/restart_studio_bridge.sh --stop

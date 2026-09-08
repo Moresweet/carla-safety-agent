@@ -38,6 +38,20 @@ make CarlaUE4Editor
 
 ## Generated Unreal assets
 
+### Collision sensor lifecycle guard
+
+`carla/collision-sensor-lifecycle.patch` modifies only CollisionSensor.h/cpp. It
+unbinds the previous owner's hit delegate before reassignment and EndPlay, and
+rejects callbacks during destruction before the base sensor closes its stream.
+Apply from the CARLA source checkout with `git apply --recount --check` followed
+by `git apply --recount`, then rebuild `make CarlaUE4Editor` from Unreal/CarlaUE4.
+This addresses a concrete lifecycle gap; full collision-capture regression is
+required before treating a particular native crash as resolved.
+
+For an already-dead native editor, `scripts/restart_carla_native.sh --after-crash`
+refuses a live UE4Editor and skips the impossible live scene save. It retains
+persisted scenes and datasets but cannot recover unsaved in-memory state.
+
 These binary assets live in the CARLA content tree and are generated rather
 than copied into this repository:
 

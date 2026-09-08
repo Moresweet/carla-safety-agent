@@ -373,6 +373,25 @@ def test_capture_stop_cannot_stop_a_new_or_model_session():
     assert env['stop_sensor_rig']({'run_id':'new'})['ok']
 
 
+def test_rule_stop_identity_and_terminal_idempotence():
+    import threading
+    current = {'kind':'rule-run','run_id':'new','state':'running'}
+    calls = []
+    env = functions('stop_rule_run', _e2e_lock=threading.RLock(),
+        SESSION=SimpleNamespace(snapshot=lambda:current),
+        stop_e2e=lambda:calls.append(True) or {'ok':True,'state':'stopping'})
+    for data in (None, {}, {'run_id':'old'}):
+        with pytest.raises(ValueError): env['stop_rule_run'](data)
+    current['kind'] = 'sensor-rig'
+    with pytest.raises(ValueError): env['stop_rule_run']({'run_id':'new'})
+    assert not calls
+    current['kind'] = 'rule-run'
+    assert env['stop_rule_run']({'run_id':'new'})['state'] == 'stopping'
+    current['state'] = 'completed'
+    assert env['stop_rule_run']({'run_id':'new'})['state'] == 'completed'
+    assert len(calls) == 1
+
+
 def test_bridge_execution_lock_allows_capture_start_reentry():
     import threading
     source=Path(__file__).resolve().parents[1]/'tools/livery_bridge.py'

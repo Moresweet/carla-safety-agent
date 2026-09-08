@@ -464,6 +464,17 @@ def stop_sensor_rig(data):
         return stop_e2e()
 
 
+def stop_rule_run(data):
+    with _e2e_lock:
+        current = SESSION.snapshot()
+        if (not isinstance(data, dict) or not data.get('run_id') or
+            current.get('kind') != 'rule-run' or current.get('run_id') != data['run_id']):
+            raise ValueError('Rule session changed; refusing to stop another task')
+        if current.get('state') not in ('preparing','running','stopping','recovering'):
+            return {'ok':True, 'state':current['state'], 'run_id':current['run_id']}
+        return {**stop_e2e(), 'run_id':current['run_id']}
+
+
 def manual_sensor_control(data):
     from carla_safety_agent.manual_control import validate_control
     from carla_safety_agent.sensor_capture import atomic_json
@@ -1880,7 +1891,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "/scenario/compile", "/scenario/run", "/scenario/evaluate", '/scenario/execute-plan',
                                 "/blender/create", "/blender/retexture",
                                 "/blender/import", "/blender/spawn",
-                                "/e2e/start", "/e2e/stop", "/collection/control", '/session/recover',
+                                "/e2e/start", "/e2e/stop", "/scenario/stop", "/collection/control", '/session/recover',
                                 '/scenes/save', '/scenes/restore', '/scenes/history', '/scenes/from-experiment',
                                 '/materials/apply', '/materials/restore', '/collection/start', '/collection/stop', '/collection/control'):
             self._headers(404)
@@ -1917,6 +1928,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = collection_request(json.loads(payload or b'{}'))
             elif request.path == "/e2e/start":
                 result = start_e2e(json.loads(payload or b"{}"))
+            elif request.path == '/scenario/stop':
+                result = stop_rule_run(json.loads(payload or b'{}'))
             elif request.path == "/e2e/stop":
                 result = stop_e2e()
             elif request.path == '/scenario/execute-plan':

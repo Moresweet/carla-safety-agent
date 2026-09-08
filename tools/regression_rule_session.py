@@ -37,7 +37,14 @@ def main():
             for path in (ROOT/'.runtime/generated-scenarios').glob('capture-*/manifest.json'):
                 manifest = json.loads(path.read_text())
                 if manifest.get('execution_id') == execution and manifest['frame_count'] >= 5:
-                    request('e2e/stop', {})
+                    try:
+                        request('scenario/stop', {'run_id':'stale-regression-id'})
+                    except urllib.error.HTTPError as exc:
+                        assert exc.code == 400
+                    else:
+                        raise AssertionError('Stale rule stop accepted')
+                    assert request('session/status')['session']['run_id'] == execution
+                    request('scenario/stop', {'run_id':execution})
                     stop_sent = True
                     break
         time.sleep(1)

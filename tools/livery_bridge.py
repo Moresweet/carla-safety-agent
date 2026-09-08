@@ -345,7 +345,7 @@ def start_e2e(data: dict) -> dict:
             if route not in allowed:
                 raise RuntimeError("Select a generated ScenarioSpec from the local catalog")
             _, scenario_digest = read_verified_scenario(route, data.get('scenario_sha256'))
-            if action == 'rule-run' and not isinstance(data.get('unified_capture',False),bool):
+            if not isinstance(data.get('unified_capture',False),bool):
                 raise ValueError('unified_capture must be boolean')
             command = ([sys.executable, str(PROJECT_ROOT/'tools/run_rule_scenario.py')]
                        if action == 'rule-run' else [str(PROJECT_ROOT / "scripts/run_uniad_target.sh")])
@@ -441,7 +441,7 @@ def start_e2e(data: dict) -> dict:
                 stderr=subprocess.STDOUT, start_new_session=True)
             launched = _e2e_process
             SESSION.attach(_e2e_process.pid)
-            if action == 'rule-run' and data.get('unified_capture',False):
+            if action in ('run', 'rule-run') and data.get('unified_capture',False):
                 collection_request({'recording':True,'every':1,'max_frames':2000})
             if action == 'sensor-rig':
                 collection_request({'recording':data.get('recording',True),

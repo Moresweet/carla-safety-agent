@@ -33,7 +33,8 @@ def _advance(queue, journal, scenario_root, request):
     job_id, attempt = claim['job_id'], claim['attempt']['attempt_id']
     try:
         config = claim['configuration']
-        if config['models']['configuration'] != {'action': 'rule-run'}:
+        model = config['models']['configuration']
+        if model not in ({'action': 'rule-run'}, {'action': 'run', 'algorithm': 'uniad-tiny'}):
             raise ValueError('Batch dispatcher model adapter is not implemented for this configuration')
         if config['textures']['configuration']:
             raise ValueError('Batch texture application adapter is not implemented')
@@ -41,7 +42,7 @@ def _advance(queue, journal, scenario_root, request):
     except (ValueError, KeyError, TypeError) as exc:
         queue.update_attempt(job_id, attempt, outcome='failed', result={'phase': 'prepare', 'error': str(exc)})
         return {'action': 'preparation_failed', 'job_id': job_id, 'error': str(exc)}
-    options = {'action': 'rule-run', 'route': plan['scenario_path'],
+    options = {**model, 'route': plan['scenario_path'],
                'scenario_sha256': plan['scenario_sha256'], 'unified_capture': True,
                'batch_job_id': job_id, 'batch_attempt_id': attempt}
     # Any transport/response failure keeps the reservation. The next step only

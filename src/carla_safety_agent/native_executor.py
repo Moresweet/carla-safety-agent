@@ -173,7 +173,7 @@ class NativeScenarioExecutor:
             rig.setup(agent.sensors())
             if os.environ.get('CSA_SENSOR_CAPTURE') == '1':
                 from .sensor_capture import SensorCapture
-                capture = SensorCapture(world, ego, agent.sensors(), os.environ['CSA_EVALUATION_CONTROL_DIR'])
+                capture = SensorCapture(world, ego, agent.sensors(), os.environ['CSA_EVALUATION_CONTROL_DIR'], scenario=spec.to_dict())
             rig.warmup()
             self._focus_spectator(carla, world, ego)
             world.tick()

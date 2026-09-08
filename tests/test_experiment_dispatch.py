@@ -57,3 +57,21 @@ def test_pause_preserves_recovery_of_current_attempt(tmp_path):
     result = advance_queue(q, journal, tmp_path/'scenarios', lambda *args: pytest.fail('No dispatch'))
     assert result['action'] == 'recover_binding'
     assert q.read()['paused'] is True
+
+
+def test_uniad_dispatch_preserves_model_and_capture_request(tmp_path, monkeypatch):
+    from carla_safety_agent import experiment_dispatch
+    model = {'action': 'run', 'algorithm': 'uniad-tiny'}
+    q = queue(tmp_path, model)
+    monkeypatch.setattr(experiment_dispatch, 'materialize_scenario', lambda *args: {
+        'scenario_path': '/local/plan.json', 'scenario_sha256': 'sha'})
+    requests = []
+    def request(path, data=None):
+        if path == 'system/preflight': return {'ready': True}
+        requests.append(data)
+        return {'execution_id': 'model-run'}
+    journal = SimpleNamespace(find_batch_attempt=lambda *args: {'run_id': 'model-run'})
+    assert advance_queue(q, journal, tmp_path, request)['action'] == 'started'
+    assert requests[0]['action'] == 'run' and requests[0]['algorithm'] == 'uniad-tiny'
+    assert requests[0]['unified_capture'] is True
+    assert q.read()['jobs'][0]['attempts'][0]['execution_id'] == 'model-run'

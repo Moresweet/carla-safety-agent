@@ -866,3 +866,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 队列终态结算和报告汇总都要求执行请求中的 batch_job_id/batch_attempt_id 匹配当前任务/尝试，不再仅凭 execution_id 一致接受记录，避免错误绑定另一项合法执行。
 - 289 项测试通过，新增错误任务和错误尝试拒绝测试；真实天气队列按增强校验重新导出成功，报告内容哈希保持 6e38e38f9bd9f9979e628d1b4dbf5021ca50d5f6e922607803d5c48fddafd028。
 - 本轮没有启动新仿真，证明范围是日志归属和离线报告校验；其余待实施范围不变。
+
+### 2026-09-08 UniAD-Tiny 批量启动适配
+
+- 调度器允许 models.configuration={action:run,algorithm:uniad-tiny}，沿用真实 run_uniad_target/native_executor，而非规则驾驶代理；未支持模型继续拒绝。桥接 run 与 rule-run 均校验 unified_capture 布尔并在启动后写入采集请求。
+- native_executor 的 SensorCapture 传入完整 ScenarioSpec，模型采集也归档对应场景。天气由既有原生执行器设置；此改动不声明跨硬件种子确定性或其他模型输入等价。
+- 290 项测试通过，新增调度请求保留真实模型、统一采集和绑定身份测试。本轮尚未重载桥接或实跑 UniAD 队列；模型结果格式报告适配仍待完成，不能视为跨模型验收通过。

@@ -1067,3 +1067,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 每次后台启动分配独立 scheduler_id。取消必须同时提交 batch_id 与 scheduler_id，防止同一批次重新启动后旧页面取消请求作用于新调度；HTTP 缺失字段明确拒绝。现有后台回归脚本同步传递该 ID。
 - 338 项测试通过，新增真实线程测试模拟同一批次两次调度，确认旧 ID 取消被拒绝且新调度取消标志未被设置。取消仍只停止后续调度，不表示当前仿真停止。
 - 本轮未重载服务或完成新协议在线验收；后续前端须读取并携带当前 scheduler_id，不能只发送批次 ID。
+
+### 2026-09-08 调度代次取消协议在线验收
+
+- 空闲检查后重载桥接 PID 3708635，扩展 regression_batch_http.py：暂停同一队列，连续启动两次立即结束为 paused 的调度，确认生成不同 scheduler_id；旧 ID 取消返回 HTTP 400，新调度记录未设置 cancel_requested。
+- 真实测试批次 d730539b603945d8b4d77dfc45882ab8，报告 runs/validation/batch-http.json 中 stale_scheduler_cancel_rejected=true、dispatched=false、session_unchanged=true；保留暂停与零尝试，没有启动 CARLA 仿真。
+- 此轮补齐在线协议证据，活跃调度取消实机边界、前端协议接入和整体八阶段验收仍需继续。

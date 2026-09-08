@@ -1150,3 +1150,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 新增 blender_package 模块及CLI export/inspect/import；白名单FBX/Blend/GLB/可选texture.png，显式RGBA/粗糙度，256MiB上限及逐文件SHA-256。导入校验后分配独立任务目录，生成现有BlenderPipeline可读取的manifest/request并重写路径，不执行资产、不写Unreal注册表。
 - 用真实 .runtime/blender-smoke-output3 安全护栏文件及历史unreal-request.json参数导出 runs/validation/blender-safetybarrier-source.zip，导入任务87f209da9a524121b8024e35123950e5位于 runs/validation/blender-source-target。FBX/Blend/GLB逐文件cmp一致；原颜色0.15/0.55/0.85/1与粗糙度0.45显式携带。
 - 360项测试通过，包括路径重写、原始字节保留、无执行/无注册表及篡改拒绝。未验证FBX/Blend内部外链完整性，未将源资产包合入场景一键包，未执行目标Unreal导入注册；磁盘中途写入失败可能留下未完成任务目录，S8仍未完成。
+
+### 2026-09-08 源资产包到Unreal注册及原生生成
+
+- 真实源包导入任务7848ba817eae4e3fb2855185be7a897e，新资产CSA_MigratedBarrier_f9e6111014，生成generated.prop.csa_migratedbarrier_f9e6111014注册记录。没有覆盖原资产，新Unreal资产保留供后续验证。导入进程写出新结果后非零退出，警告必须保留，不算干净退出。
+- 回归脚本初次和首次复用检查在旧客户端get_actor缓存处失败；新客户端确认无实际残留。改用新世界snapshot.find与全新客户端Actor集合后，复用同一注册资产验证通过（没有再次导入）。最终测试Actor1627已清理；报告 runs/validation/blender-package-7848ba817eae4e3fb2855185be7a897e-9f426f62/report.json。复用报告的import_warning=null不推翻首次导入警告，后续脚本新增import_exit_rechecked字段标明未重测退出。
+- 已查看spawned.jpg：未清晰显示预期护栏，原生Actor网格路径与位置存在仅证明接口链路，不能证明尺度/渲染正确。下一步必须排查尺寸、包导入后渲染与导入退出警告；360项单测通过不替代这些视觉验收，整体计划未完成。

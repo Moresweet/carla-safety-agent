@@ -89,9 +89,22 @@ class BlenderPipeline:
             self.ue_editor, self.carla_project, "-run=pythonscript",
             f"-script={self.importer}", "-unattended", "-nop4", "-nosplash", "-nullrhi",
         ], capture_output=True, text=True, timeout=600, env=environment)
+        log_path = job / ("unreal-log-" + attempt_id + ".json")
+        log_path.write_text(json.dumps({
+            "attempt_id": attempt_id, "returncode": completed.returncode,
+            "stdout_tail": completed.stdout[-1024*1024:],
+            "stderr_tail": completed.stderr[-1024*1024:],
+            "stdout_truncated": len(completed.stdout) > 1024*1024,
+            "stderr_truncated": len(completed.stderr) > 1024*1024,
+        }, indent=2), encoding="utf-8")
         if not result_path.is_file():
             raise RuntimeError((completed.stderr or completed.stdout)[-6000:])
         result = json.loads(result_path.read_text(encoding="utf-8"))
+        result.update(import_attempt_id=attempt_id, import_returncode=completed.returncode,
+                      import_log=str(log_path))
+        if completed.returncode:
+            result["warning"] = (
+                "UE4Editor returned a non-zero exit code after writing an asset result; inspect import_log")
         registry = self.registry()
         registry[result["blueprint_id"]] = result
         self.runtime.mkdir(parents=True, exist_ok=True)
@@ -99,9 +112,6 @@ class BlenderPipeline:
         temporary.write_text(json.dumps(registry, indent=2), encoding="utf-8")
         temporary.replace(self.registry_path)
         result["log"] = completed.stdout[-3000:]
-        if completed.returncode:
-            result["warning"] = (
-                "UE4Editor returned a non-zero shutdown code after writing the imported asset")
         return result
 
     def registry(self) -> dict[str, dict[str, Any]]:

@@ -288,3 +288,31 @@ def test_restore_unknown_weather_is_rejected_before_any_world_mutation():
     with pytest.raises(ValueError, match='Unsupported weather'):
         env['restore_scene']({'scene_id':'test'})
     assert calls == []
+
+
+def test_capture_stop_cannot_stop_a_new_or_model_session():
+    import threading
+    calls = []
+    current = {'kind':'sensor-rig','run_id':'new'}
+    env = functions('stop_sensor_rig', _e2e_lock=threading.RLock(),
+                    SESSION=SimpleNamespace(snapshot=lambda:current),
+                    stop_e2e=lambda:calls.append('stop') or {'ok':True})
+    with pytest.raises(ValueError): env['stop_sensor_rig']({'run_id':'old'})
+    current['kind']='preset-run'
+    with pytest.raises(ValueError): env['stop_sensor_rig']({'run_id':'new'})
+    assert calls == []
+    current['kind']='sensor-rig'
+    assert env['stop_sensor_rig']({'run_id':'new'})['ok']
+
+
+def test_bridge_execution_lock_allows_capture_start_reentry():
+    import threading
+    source=Path(__file__).resolve().parents[1]/'tools/livery_bridge.py'
+    node=next(n for n in ast.parse(source.read_text()).body if isinstance(n,ast.Assign)
+              and any(isinstance(t,ast.Name) and t.id=='_e2e_lock' for t in n.targets))
+    env={'threading':threading}
+    exec(compile(ast.Module(body=[node],type_ignores=[]),str(source),'exec'),env)
+    lock=env['_e2e_lock']
+    with lock:
+        assert lock.acquire(blocking=False), 'Starting collection must not deadlock itself'
+        lock.release()

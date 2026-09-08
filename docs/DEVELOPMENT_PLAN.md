@@ -984,3 +984,10 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 同一服务只允许一个活跃调度器；取消必须匹配批次 ID，只发出取消调度请求，不停止正在执行的仿真。异常显示 needs_attention，不自动重试。状态返回副本，避免读取方修改内部记录。
 - 浏览器生命周期不拥有该线程；桥接重启后服务状态为 idle，持久队列保留，必须显式启动以核对续跑。此处没有宣称跨桥接重启自动恢复。
 - 318 项测试通过，新增线程测试覆盖活跃启动排他、错误批次取消拒绝、取消后不再推进、状态隔离、异常可见和显式再次启动。HTTP 服务尚未重载实测，前端后台控制仍待接入。
+
+### 2026-09-08 后台调度服务在线双任务验收
+
+- 确认前序评测进程退出后重载桥接，PID 3596509。新增 regression_batch_service.py，通过一次 start 启动后台调度，后续仅 GET 查询；两项任务由桥接独立推进并 completed，重复 start 与 wrong-owner cancel 均 HTTP 400。
+- 批次 1d888b3c75194f259c293929751f7411，执行 d0629917402141e8bb49fdb6b97f6ed7、0a01ed00d37047fd9602dc3e000671de 各一次尝试。capture-20260908T184940-593c91ec 与 capture-20260908T184956-417e880b 各 20 帧、14/14 外参验证通过。
+- 原生结束异步零传感器；报告 runs/validation/batch-service-1d888b3c75194f259c293929751f7411.json 保存 background_completed、duplicate_start_rejected、wrong_owner_cancel_rejected 和 native_cleanup_verified 均 true。
+- 全套 318 项测试通过。前端后台控制、后台取消恢复、模型/纹理全面矩阵及其他阶段仍未完成。

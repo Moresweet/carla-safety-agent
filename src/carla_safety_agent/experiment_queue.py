@@ -56,6 +56,8 @@ class ExperimentQueue:
     def claim(self):
         with self.locked():
             state = self.read()
+            if state.get('paused', False):
+                return None
             if any(j['state'] in ('reserved', 'running') for j in state['jobs']):
                 raise ValueError('An unresolved attempt already owns this queue')
             job = next((j for j in state['jobs'] if j['state'] == 'pending'), None)
@@ -67,6 +69,15 @@ class ExperimentQueue:
             self.write(state)
             configuration = next(j['configuration'] for j in state['plan']['jobs'] if j['job_id'] == job['job_id'])
             return {'job_id': job['job_id'], 'attempt': attempt, 'configuration': configuration}
+
+    def set_paused(self, paused):
+        if not isinstance(paused, bool):
+            raise ValueError('paused must be boolean')
+        with self.locked():
+            state = self.read()
+            state['paused'] = paused
+            self.write(state)
+            return {'paused': paused}
 
     def update_attempt(self, job_id, attempt_id, *, execution_id=None, outcome=None, result=None):
         with self.locked():

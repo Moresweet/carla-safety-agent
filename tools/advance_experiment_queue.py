@@ -11,9 +11,16 @@ from regression_scene_versions import ROOT, request
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('queue', type=Path)
+    control = parser.add_mutually_exclusive_group()
+    control.add_argument('--pause', action='store_true', help='Pause new claims; do not stop the current simulation')
+    control.add_argument('--resume', action='store_true', help='Allow future claims; does not itself start a run')
     args = parser.parse_args()
-    result = advance_queue(ExperimentQueue(args.queue), SessionJournal(ROOT/'data'),
-                           ROOT/'.runtime/generated-scenarios', request)
+    queue = ExperimentQueue(args.queue)
+    if args.pause or args.resume:
+        result = queue.set_paused(args.pause)
+    else:
+        result = advance_queue(queue, SessionJournal(ROOT/'data'),
+                               ROOT/'.runtime/generated-scenarios', request)
     print(json.dumps(result, ensure_ascii=False))
 
 

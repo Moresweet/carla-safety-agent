@@ -20,12 +20,16 @@ def _advance(queue, journal, scenario_root, request):
         if active['state'] == 'reserved':
             return {'action': 'recover_binding', **queue.recover_binding(active['job_id'], attempt, journal)}
         return {'action': 'reconcile', **queue.reconcile(active['job_id'], attempt, journal)}
+    if state.get('paused', False):
+        return {'action': 'paused'}
     if not any(j['state'] == 'pending' for j in state['jobs']):
         return {'action': 'no_pending_jobs', 'states': [j['state'] for j in state['jobs']]}
     preflight = request('system/preflight')
     if not preflight.get('ready'):
         return {'action': 'preflight_blocked', 'checks': preflight.get('checks', [])}
     claim = queue.claim()
+    if claim is None:
+        return {'action': 'not_claimed'}
     job_id, attempt = claim['job_id'], claim['attempt']['attempt_id']
     try:
         config = claim['configuration']

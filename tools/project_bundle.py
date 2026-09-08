@@ -13,6 +13,7 @@ def main():
     export.add_argument('--project', type=Path, required=True)
     export.add_argument('--scene', action='append', required=True)
     export.add_argument('--output', type=Path, required=True)
+    export.add_argument('--include-material-previews', action='store_true')
     inspect = commands.add_parser('inspect')
     inspect.add_argument('archive', type=Path)
     doctor = commands.add_parser('doctor')
@@ -25,7 +26,8 @@ def main():
     load.add_argument('--destination-parent', type=Path, required=True)
     args = parser.parse_args()
     if args.action == 'export':
-        manifest = export_bundle(args.project/'data/scenes', args.project/'data', args.scene, args.output)
+        manifest = export_bundle(args.project/'data/scenes', args.project/'data', args.scene, args.output,
+                                 include_material_previews=args.include_material_previews)
         result = {'archive': str(args.output.resolve()), 'manifest': manifest}
     elif args.action == 'inspect':
         manifest, _ = read_bundle(args.archive)

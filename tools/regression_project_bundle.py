@@ -20,17 +20,19 @@ def main():
     parent = root/'runs/validation'; parent.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix='project-bundle-', dir=parent))
     archive = work/'project.zip'
-    manifest = export_bundle(store.root, root/'data', chosen, archive)
+    manifest = export_bundle(store.root, root/'data', chosen, archive, include_material_previews=True)
     imported = import_bundle(archive, work)
     _, files = read_bundle(archive)
     for name, payload in files.items():
-        assert (root/'data'/name).read_bytes() == payload
+        if not name.endswith('/preview-catalog.json'):
+            assert (root/'data'/name).read_bytes() == payload
         assert (imported/'data'/name).read_bytes() == payload
     destination = SceneStore(imported/'data/scenes')
     for scene_id in chosen:
         assert destination.read(scene_id) == store.read(scene_id)
     result = {'passed': True, 'scene_ids': chosen, 'file_count': len(files),
               'texture_count': sum(name.startswith('textures/') for name in files),
+              'preview_file_count': sum(name.startswith('material-exports/') for name in files),
               'archive': str(archive), 'imported': str(imported),
               'dependencies': manifest['dependencies'], 'live_restore_verified': False}
     (work/'report.json').write_text(json.dumps(result, ensure_ascii=False, indent=2)+'\n')

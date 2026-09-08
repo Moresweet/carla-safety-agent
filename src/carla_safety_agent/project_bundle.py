@@ -13,7 +13,7 @@ from .scene_store import SceneStore, identifier, validate_scene
 
 LIMIT = 256 * 1024 * 1024
 SCHEMA = 'carla-project-bundle/1'
-ENTRY = re.compile(r'(?:scenes/[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_-]{1,80}\.json|textures/[a-f0-9]{64}\.png)')
+ENTRY = re.compile(r'(?:scenes/[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_-]{1,80}\.json|textures/[a-f0-9]{64}\.png|material-exports/[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_-]{1,120}\.json)')
 
 
 def _validate(files):
@@ -21,6 +21,8 @@ def _validate(files):
     for name, payload in files.items():
         if not ENTRY.fullmatch(name):
             raise ValueError('Unsupported bundle path')
+        if name.startswith('material-exports/'):
+            continue
         if name.startswith('textures/'):
             if hashlib.sha256(payload).hexdigest() != Path(name).stem:
                 raise ValueError('Texture checksum mismatch')
@@ -50,13 +52,30 @@ def _validate(files):
         raise ValueError('Bundle requires scenes')
     if {name for name in files if name.startswith('textures/')} != {f'textures/{digest}.png' for digest in textures}:
         raise ValueError('Missing or unreferenced textures')
+    preview_files = {name for name in files if name.startswith('material-exports/')}
+    if preview_files:
+        expected = set()
+        for map_name, target, component, slot in slots:
+            town = identifier(map_name.split('/')[-1])
+            catalog_name = f'material-exports/{town}/preview-catalog.json'
+            catalog = json.loads(files[catalog_name])
+            matches = [s for entry in catalog['actors'].get(target, []) if entry['component'] == component
+                       for s in entry['slots'] if s['slot'] == slot and s.get('status') == 'uv0_ready']
+            if len(matches) != 1: raise ValueError('Missing or ambiguous preview slot')
+            mesh = matches[0]['mesh_file']
+            if not isinstance(mesh, str) or Path(mesh).name != mesh: raise ValueError('Invalid mesh filename')
+            mesh_name = f'material-exports/{town}/{mesh}'
+            if mesh_name not in files: raise ValueError('Missing preview mesh')
+            json.loads(files[mesh_name])
+            expected.update((catalog_name, mesh_name))
+        if preview_files != expected: raise ValueError('Unexpected preview files')
     return {'maps': sorted(maps), 'blueprints': sorted(blueprints),
             'material_slots': [list(slot) for slot in sorted(slots)],
             'external_assets_included': False, 'weights_included': False,
             'execution_history_included': False, 'datasets_included': False}
 
 
-def export_bundle(scene_root, material_root, scene_ids, output):
+def export_bundle(scene_root, material_root, scene_ids, output, *, include_material_previews=False):
     files = {}; total = 0
     def add(name, path):
         nonlocal total
@@ -82,6 +101,32 @@ def export_bundle(scene_root, material_root, scene_ids, output):
                     texture = f'textures/{digest}.png'
                     if texture not in files: add(texture, Path(material_root)/texture)
     dependencies = _validate(files)
+    if include_material_previews:
+        catalogs = {}
+        for map_name, target, component, slot in dependencies['material_slots']:
+            town = identifier(map_name.split('/')[-1])
+            catalog_name = f'material-exports/{town}/preview-catalog.json'
+            source_path = Path(material_root)/catalog_name
+            if source_path.is_symlink() or source_path.stat().st_size > 8*1024*1024:
+                raise ValueError('Invalid preview catalog')
+            source = json.loads(source_path.read_bytes())
+            entries = [entry for entry in source['actors'].get(target, []) if entry['component'] == component]
+            slots = [(entry, s) for entry in entries for s in entry['slots']
+                     if s['slot'] == slot and s.get('status') == 'uv0_ready']
+            if len(slots) != 1: raise ValueError('Missing or ambiguous source preview')
+            entry, value = slots[0]
+            mesh_name = f'material-exports/{town}/{value["mesh_file"]}'
+            if not ENTRY.fullmatch(mesh_name): raise ValueError('Invalid source preview path')
+            if mesh_name not in files: add(mesh_name, Path(material_root)/mesh_name)
+            catalog = catalogs.setdefault(catalog_name, {**source, 'actors': {}})
+            components = catalog['actors'].setdefault(target, [])
+            chosen = next((item for item in components if item['component'] == component), None)
+            if chosen is None:
+                chosen = {**entry, 'slots': []}; components.append(chosen)
+            if value not in chosen['slots']: chosen['slots'].append(value)
+        for name, catalog in catalogs.items(): files[name] = canonical(catalog)
+        if sum(map(len, files.values())) > LIMIT: raise ValueError('Bundle exceeds size limit')
+        _validate(files)
     manifest = {'schema_version': SCHEMA, 'dependencies': dependencies,
                 'files': {name: {'sha256': hashlib.sha256(payload).hexdigest(), 'size': len(payload)}
                           for name, payload in sorted(files.items())}}

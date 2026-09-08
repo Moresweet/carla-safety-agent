@@ -1106,3 +1106,10 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - tools/project_bundle.py doctor <archive> --project <目标项目> 只读连接 CARLA，核对可用地图、Blueprint，以及当前已加载地图的精准 UV0 材质槽；其他地图的槽位标记 not_checked，不自动切图。缺失和未检查均不算全部依赖可用。
 - 真实 project-bundle-pc2c7dz2/project.zip 检查发现地图目录返回 Town04 短名称，与保存的 Carla/Maps/Town04 不同；兼容短名称后，Town04 与道路/教堂/加油站三个槽位均 available。完整路径条目仍精确匹配，不对不同完整路径做末级名称合并。
 - 347 项测试通过，包括完整/短地图名称、缺失地图与 Blueprint、缺失材质槽、其他地图未检查。此项证明声明依赖可查，不证明外部资产内容、引擎补丁兼容或实际世界恢复；restore_verified 保持 false，S8 未完成。
+
+### 2026-09-08 引用材质预览随包迁移
+
+- 导出命令新增 --include-material-previews，按场景历史实际引用的槽位选择预览网格与精简材质目录，不复制整个资产库；校验路径、唯一 UV0 槽位、引用文件和校验和。旧包仍可读取；未选该参数的包仍需外部预览目录。
+- 三个真实场景新包共14文件：1纹理、3网格、1精简目录及场景历史；源网格/纹理与导入结果逐字节一致。证据 runs/validation/project-bundle-0aom3lea/report.json。
+- 使用导入目录 carla-project-0n60_yw1 的 data 而非原项目运行 doctor，Town04 与道路/教堂/加油站三槽均 available。348项测试通过，新增只打包引用槽、不读取未引用网格的往返测试。
+- 此处迁移的是网页材质编辑预览网格，不是 Unreal 可生成资产；Blender/Unreal资产制作文件、目标运行时注册与实际恢复仍需继续。没有修改 CARLA 世界，也不将声明可用当作几何正确或整体迁移完成。

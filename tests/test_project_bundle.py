@@ -40,6 +40,24 @@ def test_roundtrip_history_textures_and_independent_destination(tmp_path):
     assert import_bundle(output, tmp_path) != imported
 
 
+def test_referenced_material_preview_roundtrip(tmp_path):
+    _, scene_id, *_ = fixture_bundle(tmp_path)
+    folder = tmp_path/'source/material-exports/Town04'; folder.mkdir(parents=True)
+    catalog = {'map': 'Town04', 'actors': {'building': [{'component': 'mesh', 'slots': [
+        {'slot': 0, 'status': 'uv0_ready', 'mesh_file': 'mesh.json'},
+        {'slot': 1, 'status': 'uv0_ready', 'mesh_file': 'unused.json'}]}]}}
+    (folder/'preview-catalog.json').write_text(json.dumps(catalog))
+    (folder/'mesh.json').write_text('{"vertices": []}')
+    archive = tmp_path/'previews.zip'
+    export_bundle(tmp_path/'source/scenes', tmp_path/'source', [scene_id], archive,
+                  include_material_previews=True)
+    imported = import_bundle(archive, tmp_path)
+    restored = json.loads((imported/'data/material-exports/Town04/preview-catalog.json').read_text())
+    assert len(restored['actors']['building'][0]['slots']) == 1
+    assert (imported/'data/material-exports/Town04/mesh.json').read_bytes() == (folder/'mesh.json').read_bytes()
+    assert not (imported/'data/material-exports/Town04/unused.json').exists()
+
+
 @pytest.mark.parametrize('damage', ['traversal', 'checksum', 'duplicate', 'dependency'])
 def test_invalid_archive_rejected_without_import_directory(tmp_path, damage):
     output, *_ = fixture_bundle(tmp_path)

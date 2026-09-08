@@ -29,6 +29,48 @@ def replay_file(root, run_id, frame, name):
     return _indexed_file(path,entry,name)
 
 
+def replay_events(root, run_id):
+    """Index recorded braking segments, never infer collisions from controls."""
+    import math
+    path = dataset_path(root, run_id)
+    index = replay_index(root, run_id)
+    entries = index.get('frames', [])
+    if index.get('legacy') or not index['temporal_quality']['temporal_order_valid']:
+        raise ValueError('A valid temporal index is required for event lookup')
+    if len(entries) > 10000:
+        raise ValueError('Event indexing supports at most 10000 recorded samples')
+    events = []
+    active = None
+    previous = None
+    cadence = index['temporal_quality']['sampling_every_frames']
+    for entry in entries:
+        record = json.loads(_indexed_file(path, entry, 'frame.json').read_text())
+        if record.get('frame') != entry['frame'] or record.get('timestamp') != entry['timestamp']:
+            raise ValueError('Index/sample identity mismatch')
+        control = record.get('control')
+        brake = control.get('brake') if isinstance(control, dict) else None
+        if (isinstance(brake, bool) or not isinstance(brake, (int, float)) or
+                not math.isfinite(brake) or not 0 <= brake <= 1):
+            raise ValueError('Missing or invalid recorded brake control')
+        # Do not join known recording gaps into one continuous braking segment.
+        if previous is not None and cadence is not None and entry['frame'] - previous != cadence:
+            active = None
+        if brake >= 0.5:
+            if active is None:
+                active = {'kind':'brake_segment', 'start_frame':entry['frame'],
+                    'start_timestamp':entry['timestamp'], 'sample_count':0, 'peak_brake':brake}
+                events.append(active)
+            active.update(end_frame=entry['frame'], end_timestamp=entry['timestamp'],
+                          sample_count=active['sample_count'] + 1,
+                          peak_brake=max(active['peak_brake'], brake))
+        else:
+            active = None
+        previous = entry['frame']
+    return {'events':events, 'source':'recorded_control', 'brake_threshold':0.5,
+            'sample_count':len(entries), 'collision_detection_available':False,
+            'note':'Braking segments are not collision or danger labels; boundaries use saved samples only.'}
+
+
 def _indexed_file(path, entry, name):
     """Resolve an already selected index entry without rereading the full index."""
     if not entry or Path(name).name != name:

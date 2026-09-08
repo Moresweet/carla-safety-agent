@@ -290,6 +290,49 @@ def test_restore_unknown_weather_is_rejected_before_any_world_mutation():
     assert calls == []
 
 
+@pytest.mark.parametrize('fail_after_weather', [False, True])
+def test_scene_restore_weather_round_trip_and_transaction_rollback(fail_after_weather):
+    from carla_safety_agent.scene_store import validate_scene
+    keys = ('cloudiness', 'precipitation', 'precipitation_deposits', 'wind_intensity',
+            'sun_azimuth_angle', 'sun_altitude_angle', 'fog_density', 'fog_distance',
+            'fog_falloff', 'wetness', 'scattering_intensity', 'mie_scattering_scale',
+            'rayleigh_scattering_scale', 'dust_storm')
+    original = {key: float(i) / 10 for i, key in enumerate(keys)}
+    desired = {key: value + 1 for key, value in original.items()}
+    state = {'weather': dict(original)}
+    calls = []
+
+    def set_weather(weather):
+        state['weather'] = dict(vars(weather))
+        calls.append(dict(state['weather']))
+
+    def apply_visibility():
+        if fail_after_weather:
+            raise RuntimeError('visibility failure')
+
+    spectator = SimpleNamespace(get_transform=lambda:'original-view',
+        set_transform=lambda value:calls.append(value))
+    world = SimpleNamespace(id=1, get_map=lambda:SimpleNamespace(name='Town04'),
+        get_weather=lambda:SimpleNamespace(**state['weather']), set_weather=set_weather,
+        get_spectator=lambda:spectator)
+    document = {'map':'Town04', 'objects':[], 'weather':desired}
+    env = functions('restore_scene', connect_world=lambda:world,
+        SCENES=SimpleNamespace(read=lambda *args:{'document':document}), validate_scene=validate_scene,
+        BLENDER=SimpleNamespace(registry=lambda:{}), _provenance=SimpleNamespace(records=lambda _:{}),
+        prepare_scene_materials=lambda *args:None,
+        prepare_scene_visibility=lambda *args:SimpleNamespace(apply=apply_visibility,
+            rollback=lambda:calls.append('visibility-rollback')))
+    if fail_after_weather:
+        with pytest.raises(RuntimeError, match='visibility failure'):
+            env['restore_scene']({'scene_id':'test'})
+        assert state['weather'] == original
+        assert calls == [desired, 'visibility-rollback', original, 'original-view']
+    else:
+        assert env['restore_scene']({'scene_id':'test'})['ok']
+        assert state['weather'] == desired
+        assert calls == [desired]
+
+
 def test_capture_stop_cannot_stop_a_new_or_model_session():
     import threading
     calls = []

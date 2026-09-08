@@ -1,6 +1,7 @@
 "use client";
 import {useEffect,useState} from "react";
 import ProjectionPreview from './ProjectionPreview';
+import RecordedTrajectory from './RecordedTrajectory';
 
 const bridge="http://127.0.0.1:8765";
 const cameras=[['CAM_FRONT_LEFT','左前'],['CAM_FRONT','正前'],['CAM_FRONT_RIGHT','右前'],['CAM_BACK_LEFT','左后'],['CAM_BACK','正后'],['CAM_BACK_RIGHT','右后']];
@@ -22,6 +23,7 @@ export default function SensorWorkbench({recorded,runId}:{recorded?:CaptureFrame
  <div className="sensor-health">{frame?.synchronized?"同帧 RGB / 深度 / 点云":"等待同帧数据"} · {runId?"已保存数据":frame?.updated_at&&Date.now()/1000-frame.updated_at>5?"数据暂未更新":"实时"}{frame?.missing?.length?` · 缺失：${frame.missing.join(', ')}`:""}</div>
  <div className="surround-grid">{cameras.map(([name,label])=>{const id=depth?'DEPTH_'+name:name;return <button className="sensor-tile" key={name} onClick={()=>setFocus(id)} disabled={!has(id)}><div className="sensor-image">{has(id)?<img src={image(id)} alt={`${label}${depth?'深度':'摄像头'}`}/>:<span>等待 {label}{depth?'深度':'图像'}</span>}</div><span><b>{label}</b><small>{depth?'辅助深度 · 0–80m 显示范围':frame?.actual_model_inputs?.includes(name)?'模型实际输入':frame?.source==='sensor-rig'?'独立采集摄像头':'辅助摄像头（非模型输入）'}</small></span></button>})}</div>
  <div className="sensor-analysis">{[['BEV_POINTS','BEV 点云 · 前方朝上 · ±60m'],['BEV_RGB','BEV 实景 · 顶视 RGB']].map(([id,label])=><button className="sensor-tile" key={id} onClick={()=>setFocus(id)} disabled={!has(id)}><div className="sensor-image square">{has(id)?<img src={image(id)} alt={label}/>:<span>等待 {label}</span>}</div><span><b>{label}</b></span></button>)}<div className="trajectory-panel"><h3>模型预测轨迹</h3><svg viewBox="0 0 320 260" role="img" aria-label="自车坐标系预测轨迹"><path d="M160 10V250M15 230H305" stroke="#354b60"/><polyline points={plot} fill="none" stroke="#5de2bc" strokeWidth="3"/><path d="M160 220l-6 12h12z" fill="white"/></svg><p>横向 / 前向距离（m），每米 4 像素</p><p>转向 {frame?.control?.steer.toFixed(3)??'—'} · 油门 {frame?.control?.throttle.toFixed(2)??'—'} · 制动 {frame?.control?.brake.toFixed(2)??'—'}</p></div></div>
+ {runId&&frame&&<RecordedTrajectory key={`${runId}:${frame.frame}`} runId={runId} frame={frame.frame}/>}
  {focus&&<div className="sensor-modal" role="dialog" aria-modal="true" aria-label="传感器大图" onClick={()=>setFocus(null)}><button autoFocus onClick={()=>setFocus(null)}>关闭大图 ×</button><img src={image(focus)} alt={focus}/><p>点击任意位置关闭 · {focus}</p></div>}
  </section>;
 }

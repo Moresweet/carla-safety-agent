@@ -36,6 +36,7 @@ from carla_safety_agent.natural_language import NaturalLanguageCompiler
 from carla_safety_agent.session import SessionJournal
 from carla_safety_agent.scene_store import SceneStore, validate_scene
 from carla_safety_agent.material_library import MaterialLibrary, MaterialTransaction, exact_environment_target
+from carla_safety_agent.visibility import VisibilityStore, VisibilityTransaction
 
 
 HOST = "127.0.0.1"
@@ -93,6 +94,7 @@ UNIAD_PYTHON = Path(os.environ.get(
 BLENDER = BlenderPipeline(PROJECT_ROOT)
 SESSION = SessionJournal(PROJECT_ROOT / 'data')
 SCENES = SceneStore(PROJECT_ROOT / 'data/scenes')
+VISIBILITY = VisibilityStore(PROJECT_ROOT / 'data')
 MATERIALS = MaterialLibrary(PROJECT_ROOT / 'data')
 _thumbnail_dir = os.environ.get("THUMBNAIL_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), ".runtime", "thumbnails"))
 ENVIRONMENT_CATEGORIES = {
@@ -714,8 +716,12 @@ def catalog_objects(category: str, query: str, offset: int, limit: int, origin: 
                 "evaluation_active": True}
     world = connect_world()
     if category in ENVIRONMENT_CATEGORIES:
+        hidden = {record['object_id'] for record in VISIBILITY.records(world.id)}
         records = [environment_record(obj, category)
                    for obj in environment_objects(world, category)]
+        for record in records:
+            record['visible'] = record['id'] not in hidden
+            record['visibility_source'] = 'studio-managed'
     else:
         pattern = {"vehicles": "vehicle.*", "pedestrians": "walker.*",
                    "spawned_props": "static.prop.*"}.get(category)
@@ -763,12 +769,14 @@ def focus_environment(object_id: int) -> dict:
 
 @simulation_operation
 def set_environment_visibility(object_id: int, enabled: bool) -> dict:
+    if not isinstance(enabled, bool): raise ValueError('Visibility must be boolean')
     if evaluation_active():
         return evaluation_command("environment_visibility", {
             "object_id": object_id, "visible": enabled})
     world = connect_world()
     category, obj = find_environment(world, object_id)
     world.enable_environment_objects({obj.id}, enabled)
+    VISIBILITY.record(world.id, obj.id, obj.name, enabled)
     return {"ok": True, "id": str(obj.id), "category": category,
             "visible": enabled}
 
@@ -861,9 +869,10 @@ def save_scene(data):
                     'sun_azimuth_angle','sun_altitude_angle','fog_density','fog_distance','wetness')
     document = {'map': world.get_map().name, 'objects': objects,
                 'environment_materials': list(MATERIALS.overrides(world.id).values()),
+                'hidden_environment': VISIBILITY.records(world.id),
                 'weather': {k: float(getattr(weather,k)) for k in weather_keys},
                 'spectator': transform_record(world.get_spectator().get_transform()),
-                'limitations': ['Managed user actors and exact environment material slots; legacy actor textures and visibility not included yet']}
+                'limitations': ['Managed user actors, exact environment material slots and studio-managed visibility; legacy actor textures and external visibility changes not captured']}
     return {'ok': True, **SCENES.save(document, data.get('name',''), data.get('scene_id'), data.get('expected_version'))}
 
 
@@ -876,6 +885,7 @@ def restore_scene(data):
         raise RuntimeError('Scene belongs to another map; explicit map handoff is not implemented yet')
     registry = BLENDER.registry()
     material_transaction = prepare_scene_materials(world, document)
+    visibility_transaction = prepare_scene_visibility(world, document)
     for obj in document['objects']:
         blueprint = obj['blueprint_id']
         if blueprint not in registry:
@@ -909,11 +919,16 @@ def restore_scene(data):
         world.set_weather(weather)
         if material_transaction:
             material_transaction.apply()
+        if visibility_transaction:
+            visibility_transaction.apply()
         view = document.get('spectator')
         if view:
             world.get_spectator().set_transform(carla.Transform(carla.Location(**view['location']), carla.Rotation(**view['rotation'])))
     except Exception as original:
         recovery_errors = []
+        if visibility_transaction:
+            try: visibility_transaction.rollback()
+            except Exception as exc: recovery_errors.append(str(exc))
         if material_transaction:
             try: material_transaction.rollback()
             except Exception as exc: recovery_errors.append(str(exc))
@@ -932,7 +947,16 @@ def restore_scene(data):
         raise
     return {'ok': True, **saved, 'restored': len(document['objects']), 'spawned': len(created),
             'bindings': {obj['stable_id']: live[obj['stable_id']].id for obj in document['objects']},
-            'mode': 'merge', 'note': 'Unrelated actors preserved; managed environment material slots restored; legacy textures and visibility not restored'}
+            'mode': 'merge', 'note': 'Unrelated actors preserved; managed environment materials and visibility restored; legacy actor textures not restored'}
+
+
+def prepare_scene_visibility(world, document):
+    if 'hidden_environment' not in document: return None
+    def apply(record, visible):
+        world.enable_environment_objects({int(record['object_id'])}, visible)
+        VISIBILITY.record(world.id, record['object_id'], record['name'], visible)
+    return VisibilityTransaction(VISIBILITY.records(world.id), document['hidden_environment'],
+                                 lambda number: find_environment(world, number)[1].name, apply)
 
 
 def prepare_scene_materials(world, document):
@@ -1712,7 +1736,7 @@ class Handler(BaseHTTPRequestHandler):
             elif request.path == "/objects/environment/visibility":
                 data = json.loads(payload or b"{}")
                 result = set_environment_visibility(
-                    int(data["object_id"]), bool(data.get("visible", True)))
+                    int(data["object_id"]), data.get("visible", True))
             elif request.path == "/objects/spawn":
                 data = json.loads(payload or b"{}")
                 result = spawn_object(str(data["blueprint_id"]), data.get("transform", {}))

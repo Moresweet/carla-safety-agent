@@ -17,6 +17,7 @@ from typing import Any
 import carla
 from PIL import Image
 from .provenance import ActorProvenance
+from .visibility import VisibilityStore
 
 
 ENVIRONMENT_LABELS = {
@@ -108,6 +109,7 @@ class EvaluationControl:
         configured = runtime_dir or os.environ.get("CSA_EVALUATION_CONTROL_DIR")
         self.root = Path(configured) if configured else None
         self.provenance = ActorProvenance(self.root.parent/'actor-provenance.json') if self.root else None
+        self.visibility = VisibilityStore(self.root.parent.parent/'data') if self.root else None
         self.last_snapshot = 0.0
         self.blueprints: list[str] | None = None
         self.road_points: list[dict[str, float]] | None = None
@@ -206,6 +208,7 @@ class EvaluationControl:
                             "location": _vector(location)}
             raise RuntimeError(f"Environment object {object_id} was not found")
         if action == "catalog_environment":
+            hidden = {record['object_id'] for record in self.visibility.records(world.id)} if self.visibility else set()
             category = str(data["category"])
             if category not in ENVIRONMENT_LABELS:
                 raise RuntimeError(f"Unknown environment category: {category}")
@@ -220,7 +223,8 @@ class EvaluationControl:
                 box = obj.bounding_box
                 records.append({"key": f"environment:{obj.id}", "id": str(obj.id),
                     "source": "environment", "category": category, "group": "environment",
-                    "origin": "existing",
+                    "origin": "existing", "visible": str(obj.id) not in hidden,
+                    "visibility_source": "studio-managed",
                     "kind": "road" if category in {"roads", "road_lines", "sidewalks", "ground", "terrain", "water"} else "building",
                     "name": obj.name, "label": f"{obj.name} · {str(obj.id)[-6:]}",
                     "location": _vector(box.location), "extent": _vector(box.extent),
@@ -232,12 +236,15 @@ class EvaluationControl:
                     "limit": limit, "objects": records[offset:offset+limit]}
         if action == "environment_visibility":
             object_id = int(data["object_id"])
-            enabled = bool(data.get("visible", True))
+            enabled = data.get("visible", True)
+            if not isinstance(enabled, bool): raise ValueError('Visibility must be boolean')
             for label in ENVIRONMENT_LABELS.values():
                 match = next((obj for obj in world.get_environment_objects(label)
                               if int(obj.id) == object_id), None)
                 if match:
                     world.enable_environment_objects({match.id}, enabled)
+                    if self.visibility:
+                        self.visibility.record(world.id, match.id, match.name, enabled)
                     return {"id": str(match.id), "visible": enabled}
             raise RuntimeError(f"Environment object {object_id} was not found")
         if action == "spawn":

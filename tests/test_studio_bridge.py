@@ -243,3 +243,27 @@ def test_evaluation_texture_does_not_match_actor_id_in_lamppost_name():
     world.get_names_of_all_objects = lambda:['BP_Lamppost_tall15_173']
     with pytest.raises(RuntimeError, match='ambiguous'):
         env['_runtime_vehicle_name'](world,actor)
+
+
+def test_evaluation_visibility_uses_same_durable_store(tmp_path):
+    import __future__
+    from carla_safety_agent.visibility import VisibilityStore
+    source = Path(__file__).resolve().parents[1]/'src/carla_safety_agent/evaluation_control.py'
+    node = next(n for n in ast.parse(source.read_text()).body if isinstance(n, ast.ClassDef))
+    env = {'ENVIRONMENT_LABELS':{'buildings':'building'}, '_vector':lambda _: {'x':0,'y':0,'z':0}}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec',
+                 flags=__future__.annotations.compiler_flag), env)
+    controller = object.__new__(env['EvaluationControl'])
+    controller.visibility = VisibilityStore(tmp_path)
+    obj = SimpleNamespace(id=17,name='House',bounding_box=SimpleNamespace(location=None,extent=None),
+                          transform=SimpleNamespace(rotation=SimpleNamespace(pitch=0,yaw=0,roll=0)))
+    calls = []
+    world = SimpleNamespace(id=3,get_environment_objects=lambda _: [obj],
+                            enable_environment_objects=lambda ids,value: calls.append((ids,value)))
+    controller._execute(world,'environment_visibility',{'object_id':17,'visible':False})
+    listing = controller._execute(world,'catalog_environment',{'category':'buildings'})
+    assert listing['objects'][0]['visible'] is False
+    assert VisibilityStore(tmp_path).records(3) == [{'object_id':'17','name':'House'}]
+    with pytest.raises(ValueError):
+        controller._execute(world,'environment_visibility',{'object_id':17,'visible':'false'})
+    assert calls == [({17},False)]

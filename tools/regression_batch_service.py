@@ -13,7 +13,7 @@ from validate_completed_batch import validate
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--model', choices=('rule-run', 'uniad-tiny', 'vad', 'tcp', 'admlp'), default='rule-run')
+    parser.add_argument('--model', choices=('rule-run', 'uniad-tiny', 'uniad-base', 'vad', 'tcp', 'admlp'), default='rule-run')
     parser.add_argument('--seeds', type=int, nargs='+', default=[31, 32])
     args = parser.parse_args()
     assert request('system/preflight')['ready']

@@ -34,8 +34,14 @@ fi
 NATIVE_LAUNCH=()
 if [[ "${CSA_NATIVE_DEBUG:-0}" == '1' ]]; then
   NATIVE_LAUNCH=(gdb -q -batch -ex 'set pagination off' -ex 'set debuginfod enabled off'
+    -ex 'disable pretty-printer' -ex 'set print static-members off'
+    -ex 'set print elements 8' -ex 'set print max-depth 2'
     -ex 'handle SIGPIPE nostop noprint pass' -ex 'handle SIGTRAP nostop noprint nopass'
-    -ex run -ex 'frame 1' -ex 'info locals' -ex 'thread apply all bt 20' --args)
+    -ex run -ex 'frame 1' -ex 'p PrimitiveSceneProxy'
+    -ex 'info symbol *((void**)PrimitiveSceneProxy)' -ex 'p *PrimitiveSceneProxy'
+    -ex 'p ((FSkeletalMeshSceneProxy*)PrimitiveSceneProxy)->MeshObject'
+    -ex 'info symbol *((void**)((FSkeletalMeshSceneProxy*)PrimitiveSceneProxy)->MeshObject)'
+    -ex 'thread apply all bt 20' --args)
 fi
 setsid "${NATIVE_LAUNCH[@]}" /home/moresweet/UnrealEngine_4.26/Engine/Binaries/Linux/UE4Editor \
   /home/moresweet/carla/Unreal/CarlaUE4/CarlaUE4.uproject /Game/Carla/Maps/Town04 \

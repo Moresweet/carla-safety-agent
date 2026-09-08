@@ -374,3 +374,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 原生源码确认 FTaggedSkeletalMeshSceneProxy 复用父骨骼 MeshObject，FSkeletalMeshSceneProxy::OnTransformChanged 会调用该对象。新增 tagged-skeletal-destroy-order.patch，在 ActorDispatcher 中注销车辆语义骨骼组件、FlushRenderingCommands 后销毁车辆；销毁失败则重新注册。仅针对 CARLA RPC 销毁，不覆盖切图或外部销毁。
 - 补丁检查及本机 CarlaUE4Editor 编译通过（33.26 秒），144 项 Python 测试通过。同图同参数完整回归 e770a199f4814db7b78b0c82b96805ac **仍失败**：worker 返回 0，但 recovering/world_recovery、原生日志再次 Signal 11、测试车清理 RPC 超时。因此不得把该补丁描述为已解决崩溃，也不能排除其他代理或父资源释放路径。
 - 调试启动追加崩溃调用帧局部变量输出，下一步明确坏指针所属代理；当前原生服务再次退出，未完成稳定性验收。
+
+### 2026-09-08 确认失效路径的代理类型
+
+- 增强局部变量回归 2276221761364d22b9b087a35c4ee4e6 仍失败，获取代理地址但 Unreal pretty-printer 过度展开容器。调试启动改成禁用 pretty-printer、限制元素/深度、关闭静态成员展开，只打印目标代理及虚表，避免巨大无关输出。
+- 限量诊断回归 eaba02ddadc54cc7b10ee42b08e74855 再次捕获同处崩溃；.runtime/carla.log:74755 明确虚表为 FTaggedSkeletalMeshSceneProxy+16。代理地址 0x7ffcebd4ea00，PrimitiveComponentId=14028，ComponentForDebuggingOnly=0x7ffd0a4999a0，ActorPosition 约 (22526.9648,-36408.3711,106.5376) cm；虚表本身仍能识别，不能只根据跳转 PC 就断言代理本身已释放。
+- 下一步诊断增加共享 MeshObject 指针和虚表读取，以区分代理自身、父资源或其他调用失效。本轮没有声称修复成功，所有完整碰撞回归仍失败，服务已退出。

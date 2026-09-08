@@ -94,13 +94,15 @@ def sample_storage_reserve(arrays, rgb, auxiliary):
 
 
 class SensorCapture:
-    def __init__(self, world, ego, specs, runtime, source='model-input', dataset_root=None):
+    def __init__(self, world, ego, specs, runtime, source='model-input', dataset_root=None,
+                 scenario=None):
         import carla
         if source not in ('model-input', 'sensor-rig'):
             raise ValueError('Unknown capture source')
         if source == 'sensor-rig' and specs:
             raise ValueError('Standalone rig owns its complete sensor configuration')
         self.source = source
+        self.scenario = json.loads(json.dumps(scenario, allow_nan=False)) if scenario is not None else None
         self.dataset_root = Path(dataset_root) if dataset_root is not None else None
         self.world, self.ego = world, ego
         self.map_name = world.get_map().name
@@ -190,6 +192,12 @@ class SensorCapture:
         self.execution_id = os.environ.get('CSA_EXECUTION_ID') or None
         self.recording_start_frame = self.world.get_snapshot().frame
         atomic_json(self.run/'calibration.json', self.specs)
+        self.scenario_reference = None
+        if getattr(self, 'scenario', None) is not None:
+            from .scenario_archive import archive_scenario
+            path, digest = archive_scenario(self.run, self.scenario)
+            self.scenario_reference = {'path': path.name, 'sha256': digest,
+                                       'scenario_id': self.scenario['scenario_id']}
         self.manifest('recording')
 
     def manifest(self, status):
@@ -198,13 +206,16 @@ class SensorCapture:
         if hasattr(self, 'collisions'):
             atomic_json(self.run/'collisions.json', self.collisions.snapshot(self.recording_start_frame))
         atomic_json(self.run/'manifest.json', dict(schema_version='carla-safety-dataset/0.2',
-            run_id=self.run_id, scenario_id=(os.environ.get('CSA_ALGORITHM_LABEL', 'model')+' closed-loop'
-                                           if self.source == 'model-input' else 'standalone sensor rig'),
+            run_id=self.run_id, scenario_id=(self.scenario_reference['scenario_id'] if getattr(self,'scenario_reference',None)
+                else (os.environ.get('CSA_ALGORITHM_LABEL', 'model')+' closed-loop'
+                      if self.source == 'model-input' else 'standalone sensor rig')),
+            scenario=getattr(self,'scenario_reference',None),
             map=self.map_name, family=self.source, status=status, started_at=self.started,
             completed_at=time.strftime('%Y-%m-%dT%H:%M:%S'), frame_count=self.count, skipped_frames=self.skipped,
             bytes=self.bytes, replay=True, model=os.environ.get('CSA_ALGORITHM_LABEL') if self.source == 'model-input' else None,
             sensors={name: {'samples': self.count, 'format': 'png/npy/npz', 'path': 'samples'} for name in self.specs},
             files={'calibration': 'calibration.json', 'index': 'index.json',
+                   **({'scenario':self.scenario_reference['path']} if getattr(self,'scenario_reference',None) else {}),
                    **({'collisions':'collisions.json'} if hasattr(self,'collisions') else {})}, error=self.error,
             input_archive='model_input.npz' if self.source == 'model-input' else 'sensor_input.npz',
             sampling_every_frames=self.sampling_every,

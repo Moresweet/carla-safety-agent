@@ -6,6 +6,7 @@ import math
 import random
 import sys
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -145,7 +146,8 @@ class CarlaAdapter:
             if capture_runtime is not None:
                 from .sensor_capture import SensorCapture
                 unified_capture = SensorCapture(world, ego, [], capture_runtime,
-                                                source='sensor-rig', dataset_root=output_dir)
+                                                source='sensor-rig', dataset_root=output_dir,
+                                                scenario=asdict(spec))
             ego.set_autopilot(spec.family != "road_hazard")
             for adv, adv_spec in zip(adversaries, spec.adversaries):
                 if adv_spec.behavior == "autopilot":

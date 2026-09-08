@@ -549,3 +549,8 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 控制目录 .runtime/rule-capture/c74c34a0d68541759d9ca871ad462d5a；统一数据 .runtime/generated-scenarios/capture-20260908T155748-df4b3759。tools/validate_capture_dataset.py 实际读取并通过 20 个同步样本：六视角原始 BGRA 与 PNG 一致、米制深度、XYZI、BEV，以及 14/14 传感器外参。
 - 完成后独立只读 CARLA RPC 确认 Town04 仍响应、synchronous=false、sensor.* 列表为空。两套传感器并存的这次短程测试未发生崩溃；不外推为长时间、跨地图或所有场景已验收。
 - 场景配置到统一 manifest 的关联、前端采集选项及规则执行生命周期统一仍待完成，S4 保持进行中。GitHub 推送被安全审核拦截，等待用户明确确认既有仓库及已提交内容上传范围；本机开发不受影响。
+
+### 2026-09-08 规则统一采集场景归档关联
+
+- CarlaAdapter 将实际 ScenarioSpec 完整传给统一采集器，采集器保存独立副本，并在每个数据目录中生成内容寻址的 plan-SHA256.json。manifest 记录相对文件名、SHA-256 和真实 scenario_id，files.scenario 可随数据目录一起迁移，不依赖临时控制目录。
+- 无场景的独立采集保留原语义；sensor-rig 不伪称调用模型。新增有/无场景两种录制测试，核验归档内容、文件哈希和 manifest 对应。本轮尚未重启桥接执行带场景关联的原生验收，前端选项和统一生命周期也仍待完成。

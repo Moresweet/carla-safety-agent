@@ -104,10 +104,12 @@ def test_uv_audit_reports_missing_and_invalid(tmp_path):
     assert audit['other_categories'] == 'not_exported'
 
 
-def test_standalone_capture_records_real_rig_arrays_without_model_claim(tmp_path, monkeypatch):
+@pytest.mark.parametrize('with_scenario', [False, True])
+def test_standalone_capture_records_real_rig_arrays_without_model_claim(tmp_path, monkeypatch, with_scenario):
     import threading
     capture = object.__new__(SensorCapture)
     capture.source = 'sensor-rig'
+    capture.scenario = {'scenario_id':'rule-test', 'seed':7, 'environment':{'precipitation':20}} if with_scenario else None
     capture.root = tmp_path/'runtime'
     capture.live = capture.root/'capture'
     capture.live.mkdir(parents=True)
@@ -137,6 +139,15 @@ def test_standalone_capture_records_real_rig_arrays_without_model_claim(tmp_path
     manifest = json.loads((capture.run/'manifest.json').read_text())
     assert manifest['family']=='sensor-rig' and manifest['model'] is None
     assert manifest['execution_id']=='verified-session-id'
+    if with_scenario:
+        from carla_safety_agent.scenario_archive import read_verified_scenario
+        reference = manifest['scenario']
+        saved, digest = read_verified_scenario(capture.run/reference['path'], reference['sha256'])
+        assert saved == capture.scenario
+        assert manifest['scenario_id'] == saved['scenario_id'] == 'rule-test'
+        assert manifest['files']['scenario'] == reference['path']
+    else:
+        assert manifest['scenario'] is None and 'scenario' not in manifest['files']
     folder = capture.run/'samples'/'0000000012'
     meta = json.loads((folder/'frame.json').read_text())
     assert meta['synchronized'] and meta['actual_model_inputs']==[] and meta['model'] is None

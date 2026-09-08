@@ -49,6 +49,15 @@ def main():
             print(f'START {model}', flush=True)
             payload = dict(action='preset-run', algorithm=model, collection=collection, route_id=args.route)
             assert request('e2e/start', payload)['ok']
+            launch_session = request('session/status')['session']
+            report['execution_id'] = launch_session['run_id']
+            report['starting_scene'] = launch_session['configuration']['starting_scene']
+            assert report['starting_scene']['map']
+            assert isinstance(report['starting_scene']['objects'], list)
+            assert report['starting_scene']['weather']
+            assert 'environment_materials' in report['starting_scene']
+            assert 'hidden_environment' in report['starting_scene']
+            assert report['starting_scene']['limitations']
             try:
                 request('e2e/start', payload)
                 raise AssertionError('Duplicate start was accepted')
@@ -85,6 +94,8 @@ def main():
             assert report['stop']['state'] == 'stopped', report['stop']
             assert not report['stop'].get('cleanup_error'), report['stop']
             report['session'] = request('session/status')['session']
+            assert report['session']['run_id'] == report['execution_id']
+            assert report['session']['configuration']['starting_scene'] == report['starting_scene']
             assert report['session']['state'] == 'stopped', report['session']
             assert not report['session'].get('error'), report['session']
             report['preflight'] = request('system/preflight')

@@ -366,6 +366,10 @@ def start_e2e(data: dict) -> dict:
                 raise RuntimeError("The selected algorithm is not installed with a runnable checkpoint")
             route = collection
             command = [str(PROJECT_ROOT / "scripts/run_benchmark_preset.sh")]
+        # Capture the editor state before clearing previews or starting a worker.
+        # Preset routes may subsequently rebuild the world: this is not the
+        # benchmark's instantiated scene, and does not imply automatic restore.
+        starting_scene = capture_scene_document() if action in ('run', 'preset-run', 'sensor-rig') else None
         _e2e_log.parent.mkdir(parents=True, exist_ok=True)
         log_stream = _e2e_log.open("wb")
         env = os.environ.copy()
@@ -404,7 +408,6 @@ def start_e2e(data: dict) -> dict:
                        BENCH2DRIVE_ROOT=str(BENCH2DRIVE_ROOT),
                        BENCH2DRIVE_ZOO=str(BENCH2DRIVE_ZOO),
                        BENCH2DRIVE_TCP_ZOO=str(BENCH2DRIVE_TCP_ZOO))
-        starting_scene = capture_scene_document() if action == 'sensor-rig' else None
         execution_id = SESSION.begin(action, {'request': data, 'command': command,
                               'starting_scene': starting_scene,
                               'python': sys.executable if action == 'sensor-rig' else str(UNIAD_PYTHON), 'carla_port': CARLA_PORT,

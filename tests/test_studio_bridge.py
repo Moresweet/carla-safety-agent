@@ -487,3 +487,22 @@ def test_starting_scene_snapshot_includes_managed_state_without_saving_version()
     assert result['hidden_environment'][0]['object_id']=='1'
     assert result['limitations'] and 'version' not in result
     assert result['weather']==vars(weather)
+
+
+@pytest.mark.parametrize('action,expected', [('run', True), ('preset-run', True),
+                                           ('sensor-rig', True), ('doctor', False), ('model-smoke', False)])
+def test_all_world_executions_capture_editor_scene_before_mutation(action, expected):
+    source = Path(__file__).resolve().parents[1]/'tools/livery_bridge.py'
+    tree = ast.parse(source.read_text())
+    start = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'start_e2e')
+    assignment = next(n for n in ast.walk(start) if isinstance(n, ast.Assign)
+                      and any(isinstance(t, ast.Name) and t.id == 'starting_scene' for t in n.targets))
+    calls = []
+    snapshot = {'map':'Town04', 'objects':[{'stable_id':'user-object'}]}
+    env = {'action':action, 'capture_scene_document':lambda:calls.append(True) or snapshot}
+    exec(compile(ast.Module(body=[assignment], type_ignores=[]), str(source), 'exec'), env)
+    assert env['starting_scene'] == (snapshot if expected else None)
+    assert bool(calls) is expected
+    first_write = next(n for n in ast.walk(start) if isinstance(n, ast.Assign)
+                       and any(isinstance(t, ast.Name) and t.id == 'log_stream' for t in n.targets))
+    assert assignment.lineno < first_write.lineno

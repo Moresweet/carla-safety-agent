@@ -409,3 +409,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 修复 _finish_e2e 的状态矛盾：世界恢复失败时 outcome.execution 必须 failed，不能沿用进程正常结束的 succeeded/stopped；会话仍保持 recovering 以阻止并发仿真。新增正常退出与主动停止两种故障注入测试，146 项测试通过。
 - 收紧生命周期脚本：停止后检查 job、持久化 session、preflight 和异步设置。上面六轮使用启动时的旧脚本定义，不能声称覆盖新增断言；已在矩阵停止后重启桥接加载报告修正，开始独立加强版 VAD 验证。
 - 加强版实际通过：runs/validation/lifecycle-strict-parent-refresh-20260908/report.json，VAD 帧 4→16，job/session 均 stopped，无错误，preflight.ready=true，原生异步。此轮已运行新增断言并加载报告修正；没有故意让原生崩溃验证分类，分类失败路径证据来自故障注入单测。
+
+### 2026-09-08 模型闭环启动前编辑器快照
+
+- 修复模型 run/preset-run 的 starting_scene=null 缺口：所有涉及世界的执行均在清理预览/打开日志之前捕获编辑器管理对象、14 项天气、材质引用、隐藏对象和视角；doctor/model-smoke 不读取场景。沿用 SessionJournal 保存到每次执行记录，不创建虚假的场景版本。
+- 此快照是执行前编辑器状态，不是预设路线随后生成的实际场景；尚未实现自动恢复，已有快照限制（旧式 actor 纹理、外部可见性未纳管）继续明确保留。
+- 增加五种 action 的快照分支与顺序测试，151 项测试通过。实机 runs/validation/lifecycle-starting-scene-20260908/report.json：VAD 帧 4→16，启动与结束快照相同、会话 stopped、preflight.ready=true、世界异步；另行读取 data/experiments/<execution_id>/execution.json 与报告逐值对比一致。此次现场没有纳管用户对象，不能据此声称非空对象的模型前后恢复已验证。

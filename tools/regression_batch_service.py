@@ -1,5 +1,6 @@
 """Native background scheduler regression; GET polling never advances jobs."""
 import hashlib
+import argparse
 import json
 import time
 from urllib.error import HTTPError
@@ -11,14 +12,19 @@ from validate_completed_batch import validate
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--model', choices=('rule-run', 'uniad-tiny', 'vad'), default='rule-run')
+    parser.add_argument('--seeds', type=int, nargs='+', default=[31, 32])
+    args = parser.parse_args()
     assert request('system/preflight')['ready']
     assert request('batches/scheduler')['scheduler']['state'] != 'running'
     plan = request('scenario/compile', {'description': 'Town04 前车急刹', 'max_duration_s': 1})
     variant = lambda value: {'id': 'baseline', 'configuration': value}
     dimensions = {'scenes': [variant({'scenario': plan['scenario'],
         'scenario_sha256': hashlib.sha256(canonical(plan['scenario'])).hexdigest()})],
-        'models': [variant({'action': 'rule-run'})], 'weather': [variant({})],
-        'textures': [variant({})], 'seeds': [31, 32]}
+        'models': [variant({'action': 'rule-run'} if args.model == 'rule-run' else
+                           {'action': 'run', 'algorithm': args.model})], 'weather': [variant({})],
+        'textures': [variant({})], 'seeds': args.seeds}
     batch_id = request('batches/create', dimensions)['batch_id']
     catalog = BatchCatalog(ROOT/'data/experiment-queues')
     try:
@@ -32,7 +38,7 @@ def main():
                 assert exc.code == 400
             else:
                 raise AssertionError('Unsafe scheduler control accepted')
-        deadline = time.monotonic()+180
+        deadline = time.monotonic()+600*len(args.seeds)
         while time.monotonic() < deadline:
             status = request('batches/scheduler')['scheduler']
             assert status['batch_id'] == batch_id
@@ -48,7 +54,8 @@ def main():
         assert not world.get_settings().synchronous_mode
         assert not list(world.get_actors().filter('sensor.*'))
         result.update(background_completed=True, duplicate_start_rejected=True,
-                      wrong_owner_cancel_rejected=True, native_cleanup_verified=True)
+                      wrong_owner_cancel_rejected=True, native_cleanup_verified=True,
+                      model=args.model, seeds=args.seeds)
     finally:
         status = request('batches/scheduler')['scheduler']
         if status['batch_id'] == batch_id and status['state'] == 'running':
@@ -63,7 +70,8 @@ def main():
         session = request('session/status')['session']
         attempts = {a['attempt_id'] for j in catalog.read(batch_id)['jobs'] for a in j['attempts']}
         if session.get('configuration', {}).get('request', {}).get('batch_attempt_id') in attempts and session['state'] in ACTIVE:
-            request('scenario/stop', {'run_id': session['run_id']})
+            request('scenario/stop' if session['kind'] == 'rule-run' else 'e2e/stop',
+                    {'run_id': session['run_id']})
             wait_terminal(session['run_id'])
     output = ROOT/'runs/validation'/('batch-service-'+batch_id+'.json')
     output.parent.mkdir(parents=True, exist_ok=True)

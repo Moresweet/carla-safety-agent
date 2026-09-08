@@ -1,5 +1,6 @@
 "use client";
 import {useEffect,useRef,useState} from 'react';
+import BatchScheduler from './BatchScheduler';
 
 const bridge='http://127.0.0.1:8765';
 type Batch={batch_id:string;job_count?:number;paused?:boolean;error?:string};
@@ -19,12 +20,13 @@ export default function BatchPanel(){
  useEffect(()=>{void perform(()=>list())},[]);
  async function control(action:string,job_id?:string){await perform(async()=>{
   const value=await api<{action?:string}>('/batches/control',{batch_id:selected,action,...(job_id?{job_id}:{})});
-  setMessage(action==='advance'?`推进结果：${value.action}。请刷新核对状态；不会自动启动下一项。`:'操作已保存；暂停与恢复不终止当前仿真，也不自动启动任务。');
+  setMessage(action==='advance'?`推进结果：${value.action}。请刷新核对状态；若后台调度仍在运行，它会继续处理队列。`:'操作已保存。暂停与恢复不终止当前仿真；正在运行的后台调度可能继续处理恢复后的队列。');
   await read(selected);await list();
  })}
  return <section aria-label="批量实验" style={{fontSize:'14px',padding:'20px',border:'1px solid #334155',borderRadius:'8px',marginTop:'20px'}}>
   <h2>批量实验</h2>
-  <p>导入五维矩阵 JSON 创建待执行队列。当前执行适配器支持规则驾驶和 UniAD-Tiny；纹理配置必须为空。读取和刷新不会启动仿真。</p>
+  <p>导入五维矩阵 JSON 创建待执行队列。读取和刷新不会启动仿真。</p>
+  <BatchScheduler batchId={selected} paused={!report||report.paused} onSelect={id=>void perform(()=>read(id))}/>
   <div style={{display:'flex',gap:'12px',flexWrap:'wrap',alignItems:'center'}}>
    <label>导入矩阵 <input aria-label="导入批次矩阵 JSON" type="file" accept=".json,application/json" disabled={busy} onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(!file)return;void perform(async()=>{if(file.size>8*1024*1024)throw new Error('矩阵文件超过 8 MiB');const document=JSON.parse(await file.text());const value=await api<{batch_id:string}>('/batches/create',document.dimensions??document);setMessage('队列已创建，尚未启动任何任务。');await list();await read(value.batch_id)})}}/></label>
    <button disabled={busy} onClick={()=>void perform(()=>list())}>刷新批次列表</button>

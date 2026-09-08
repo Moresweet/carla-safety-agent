@@ -1073,3 +1073,10 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 空闲检查后重载桥接 PID 3708635，扩展 regression_batch_http.py：暂停同一队列，连续启动两次立即结束为 paused 的调度，确认生成不同 scheduler_id；旧 ID 取消返回 HTTP 400，新调度记录未设置 cancel_requested。
 - 真实测试批次 d730539b603945d8b4d77dfc45882ab8，报告 runs/validation/batch-http.json 中 stale_scheduler_cancel_rejected=true、dispatched=false、session_unchanged=true；保留暂停与零尝试，没有启动 CARLA 仿真。
 - 此轮补齐在线协议证据，活跃调度取消实机边界、前端协议接入和整体八阶段验收仍需继续。
+
+### 2026-09-08 后台调度前端入口
+
+- 新增 BatchScheduler：读取实际 capabilities 展示规则驾驶及五个模型，独立确认后台启动，轮询调度状态，取消携带 scheduler_id；请求失败不自动重发。页面重新挂载可读取后端现存调度，并查看关联批次。
+- 浏览器 tab 2 已显示真实 paused 调度，点击查看批次读取 d730539b603945d8b4d77dfc45882ab8，确认 pending 1、尝试 0、暂停时后台启动按钮禁用。此轮只读浏览器验证，没有启动模型或验证活跃取消。
+- TypeScript 检查、生产构建成功，现有 Python 测试 338 项通过（不等同于新增前端交互的自动测试）。延续既有本机界面，不发布网站。
+- 尚需补齐前端活跃启动/取消验收、报告自动刷新、比较入口、控件视觉样式及生成场景页面的多模型限制；整体八阶段未完成。

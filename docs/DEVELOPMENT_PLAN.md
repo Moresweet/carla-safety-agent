@@ -380,3 +380,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 增强局部变量回归 2276221761364d22b9b087a35c4ee4e6 仍失败，获取代理地址但 Unreal pretty-printer 过度展开容器。调试启动改成禁用 pretty-printer、限制元素/深度、关闭静态成员展开，只打印目标代理及虚表，避免巨大无关输出。
 - 限量诊断回归 eaba02ddadc54cc7b10ee42b08e74855 再次捕获同处崩溃；.runtime/carla.log:74755 明确虚表为 FTaggedSkeletalMeshSceneProxy+16。代理地址 0x7ffcebd4ea00，PrimitiveComponentId=14028，ComponentForDebuggingOnly=0x7ffd0a4999a0，ActorPosition 约 (22526.9648,-36408.3711,106.5376) cm；虚表本身仍能识别，不能只根据跳转 PC 就断言代理本身已释放。
 - 下一步诊断增加共享 MeshObject 指针和虚表读取，以区分代理自身、父资源或其他调用失效。本轮没有声称修复成功，所有完整碰撞回归仍失败，服务已退出。
+
+### 2026-09-08 共享 MeshObject 诊断
+
+- 调试回归 dffc5878fa1c46aa8d1ed540fcdaed58 仍复现退出故障；.runtime/carla.log:80516 记录语义代理持有 MeshObject=0x7ffc856b2440，随后该对象首地址无法解析为已知虚表符号。结合已识别的 FTaggedSkeletalMeshSceneProxy 与 FSkeletalMeshSceneProxy::OnTransformChanged→RefreshClothingTransforms 路径，进一步支持共享资源有效性问题，但单独的“无符号”仍不能严格证明释放时刻。
+- 源码检查确认父 USkinnedMeshComponent::DestroyRenderState_Concurrent 会 ReleaseResources 并 BeginCleanup(MeshObject)，不限于 ActorDispatcher 销毁；已有销毁入口补丁未覆盖所有父渲染状态重建。下一轮比较代理缓存与父组件当前 MeshObject，并读取有限原始字，随后决定是否需要父渲染状态重建通知。
+- 保持失败判定，原生服务已退出；没有据此宣称根因完全确认或修复完成。

@@ -41,6 +41,8 @@ if [[ "${CSA_NATIVE_DEBUG:-0}" == '1' ]]; then
     -ex 'info symbol *((void**)PrimitiveSceneProxy)' -ex 'p *PrimitiveSceneProxy'
     -ex 'p ((FSkeletalMeshSceneProxy*)PrimitiveSceneProxy)->MeshObject'
     -ex 'info symbol *((void**)((FSkeletalMeshSceneProxy*)PrimitiveSceneProxy)->MeshObject)'
+    -ex 'x/4gx ((FSkeletalMeshSceneProxy*)PrimitiveSceneProxy)->MeshObject'
+    -ex 'p ((USkinnedMeshComponent*)PrimitiveSceneProxy->ComponentForDebuggingOnly)->MeshObject'
     -ex 'thread apply all bt 20' --args)
 fi
 setsid "${NATIVE_LAUNCH[@]}" /home/moresweet/UnrealEngine_4.26/Engine/Binaries/Linux/UE4Editor \

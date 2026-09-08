@@ -1825,18 +1825,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._headers(500)
                 self.wfile.write(json.dumps({"ok": False, "error": str(exc)}).encode())
             return
+        if request.path in ('/catalog/categories','/catalog/objects'):
+            try:
+                result = catalog_categories() if request.path == '/catalog/categories' else catalog_objects(
+                    params.get('category',['buildings'])[0], params.get('q',[''])[0],
+                    max(0,int(params.get('offset',['0'])[0])),
+                    min(200,max(1,int(params.get('limit',['50'])[0]))),params.get('origin',['all'])[0])
+                payload = json.dumps(result).encode()
+                self._headers()
+            except Exception as exc:
+                payload = json.dumps({'ok':False,'error':str(exc)}).encode()
+                self._headers(400 if isinstance(exc,ValueError) else 503)
+            self.wfile.write(payload)
+            return
         self._headers()
-        if request.path == "/catalog/categories":
-            self.wfile.write(json.dumps(catalog_categories()).encode())
-        elif request.path == "/catalog/objects":
-            result = catalog_objects(
-                params.get("category", ["buildings"])[0],
-                params.get("q", [""])[0],
-                max(0, int(params.get("offset", ["0"])[0])),
-                min(200, max(1, int(params.get("limit", ["50"])[0]))),
-                params.get("origin", ["all"])[0])
-            self.wfile.write(json.dumps(result).encode())
-        elif request.path == "/catalog/blueprints":
+        if request.path == "/catalog/blueprints":
             result = spawnable_blueprints(params.get("q", [""])[0], 200)
             self.wfile.write(json.dumps(result).encode())
         elif request.path == "/scene/state":

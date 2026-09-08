@@ -46,7 +46,7 @@ def test_batch_http_create_list_report_and_invalid_id(tmp_path):
     import json
     from pathlib import Path
     from urllib.parse import urlparse, parse_qs
-    from carla_safety_agent.experiment_report import summarize_queue
+    from carla_safety_agent.experiment_report import summarize_queue, compare_variants
     from carla_safety_agent.batch_control import control_batch
     source = Path(__file__).resolve().parents[1]/'tools/livery_bridge.py'
     node = next(n for n in ast.parse(source.read_text()).body
@@ -54,7 +54,7 @@ def test_batch_http_create_list_report_and_invalid_id(tmp_path):
     catalog = BatchCatalog(tmp_path/'batches')
     env = {'BaseHTTPRequestHandler': object, 'urlparse': urlparse, 'parse_qs': parse_qs,
            'json': json, 'BATCHES': catalog, 'PROJECT_ROOT': tmp_path,
-           'summarize_queue': summarize_queue}
+           'summarize_queue': summarize_queue, 'compare_variants': compare_variants}
     env['batch_control'] = lambda data: control_batch(
         catalog, data, None, tmp_path/'scenarios',
         lambda *args: pytest.fail('Pause/resume must not dispatch'))
@@ -87,3 +87,17 @@ def test_batch_http_create_list_report_and_invalid_id(tmp_path):
     assert request('/batches/create', [])['ok'] is False
     assert statuses[-1] == 400
     assert len(catalog.list()['batches']) == 1
+    matrix = dimensions()
+    matrix['weather'] = [{'id': 'clear', 'configuration': {}},
+                         {'id': 'rain', 'configuration': {'precipitation': 75}}]
+    pair_id = request('/batches/create', matrix)['batch_id']
+    url = '/batches/compare?batch_id='+pair_id+'&axis=weather&baseline=clear&candidate=rain'
+    comparison = request(url)['comparison']
+    assert comparison['comparable_count'] == 0
+    assert len(comparison['pairs']) == 1
+    assert comparison['pairs'][0]['reason'] == 'Both executions need verified completed metrics'
+    assert request(url.replace('axis=weather', 'axis=seeds'))['ok'] is False
+    assert statuses[-1] == 400
+    assert request(url.replace('candidate=rain', 'candidate=clear'))['ok'] is False
+    assert statuses[-1] == 400
+    assert all(j['attempts'] == [] for j in catalog.read(pair_id)['jobs'])

@@ -38,7 +38,7 @@ from carla_safety_agent.build_plan import build_plan
 from carla_safety_agent.session import SessionJournal
 from carla_safety_agent.batch_catalog import BatchCatalog
 from carla_safety_agent.batch_control import control_batch
-from carla_safety_agent.experiment_report import summarize_queue
+from carla_safety_agent.experiment_report import summarize_queue, compare_variants
 from carla_safety_agent.scene_store import SceneStore, validate_scene
 from carla_safety_agent.material_library import MaterialLibrary, MaterialTransaction, exact_environment_target
 from carla_safety_agent.visibility import VisibilityStore, VisibilityTransaction
@@ -1727,12 +1727,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         request = urlparse(self.path)
         params = parse_qs(request.query)
-        if request.path in ('/batches', '/batches/report'):
+        if request.path in ('/batches', '/batches/report', '/batches/compare'):
             try:
                 result = (BATCHES.list(int(params.get('limit', ['30'])[0]), params.get('after', [None])[0])
                           if request.path == '/batches' else
                           {'report': summarize_queue(BATCHES.read(params.get('batch_id', [''])[0]),
                               {'rule-run': PROJECT_ROOT/'runs/rule', 'run': PROJECT_ROOT/'runs/uniad'})})
+                if request.path == '/batches/compare':
+                    result = {'comparison': compare_variants(result['report'],
+                        params.get('axis', [''])[0], params.get('baseline', [''])[0],
+                        params.get('candidate', [''])[0])}
                 self._headers()
                 self.wfile.write(json.dumps({'ok': True, **result}).encode())
             except (ValueError, KeyError, TypeError, OSError) as exc:

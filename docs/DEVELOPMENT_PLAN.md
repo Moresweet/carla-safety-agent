@@ -884,3 +884,10 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 加载桥接 PID 3507047，真实 UniAD-Tiny 队列 batch-uniad-7f7f469e00fd4b42bc5e9257c913dbd0 启动执行 5748a275add4471389f9797ac12a37d4，日志确认加载 uniad_tiny_b2d.pth 并推理。1 秒场景结束后保留预览 60 秒，期间原进程身份仍存活，队列未提前结算；退出后 completed、异步、零传感器。
 - 整体验收失败：capture-20260908T180757-8349f1b3 原始输入校验 Missing raw input arrays。actual_model_inputs 含 SPEED，但 model_input.npz 无 SPEED；SensorCapture 排除了 dict 输入，而该模型 SPEED 是字典。IMU/GPS/六相机/bev 数组存在，不得据此冒充全部模型输入保存成功。
 - 291 项单测通过未覆盖这一原生结构化输入情形。保留失败数据，不回填伪造 SPEED；下一步需要增加结构化模型输入档案及完整性验证并重新实跑，模型队列采集验收保持未通过。
+
+### 2026-09-08 更正 SPEED 遗漏诊断并修复校验器
+
+- 进一步读取同一份原始 frame.json，确认 input_scalars 已保存 SPEED.speed（首帧 11.758416349652581）；上一节“SPEED 未保存”诊断不准确，实际是校验器仅检查 NPZ 导致误报。没有修改/回填历史数据，也无需重复生成相同采集。
+- 新增 validate_input_coverage，要求 NPZ 数组与 input_scalars 联合精确覆盖 actual_model_inputs，拒绝重复、额外/缺失输入、空字典、非有限值及可能由有损转换产生的 null。现有采集器字段沿用，不新造重复档案。
+- 298 项测试通过。同一真实 UniAD 数据 capture-20260908T180757-8349f1b3 的 20 帧通过增强校验，外参 17/18 可验证（无空间位姿声明的伪传感器不伪造标定）。此前模型已正常退出、异步零传感器，本轮为离线复验。
+- 本轮结果证明此 UniAD 队列输入覆盖，不外推其他模型或任意结构化输入类型；多模型矩阵与其余阶段仍未完成。

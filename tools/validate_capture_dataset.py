@@ -49,7 +49,10 @@ for entry in index:
         else:
             required = meta['actual_model_inputs']
             assert required, 'No actual model inputs recorded'
-        assert set(required).issubset(model.files), 'Missing raw input arrays'
+            from carla_safety_agent.input_archive import validate_input_coverage
+            validate_input_coverage(required, model.files, meta.get('input_scalars', {}))
+        if archive == 'sensor_input.npz':
+            assert set(required).issubset(model.files), 'Missing raw input arrays'
         for name in ('CAM_FRONT','CAM_FRONT_LEFT','CAM_FRONT_RIGHT','CAM_BACK','CAM_BACK_LEFT','CAM_BACK_RIGHT'):
             rgb = np.asarray(Image.open(folder/(name+'.png')))
             assert rgb.ndim == 3 and rgb.shape[2] == 3, 'Invalid RGB shape'

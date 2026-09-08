@@ -576,3 +576,8 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 
 - CarlaAdapter.run 增加可选 should_stop 回调，启动前检查取消时不导入/连接 CARLA、不创建输出；运行中在每个 tick 前检查停止，退出循环后保存已有 trace，结果明确为 stopped，仍经原 finally 关闭采集、传感器和 Actor 并恢复世界设置。
 - 189 项测试通过，新增预启动取消测试确认不会连接或创建输出。本轮只提供执行器停止基础，尚未接到独立 worker、会话停止接口或前端；运行中停止及数据清理仍需真实验收，不能宣称用户已可停止规则任务。
+
+### 2026-09-08 规则独立 worker 实现
+
+- 新增 tools/run_rule_scenario.py，启动须经 SessionJournal 核验 PID 和执行 ID，校验场景 SHA-256 后调用规则执行器；SIGINT/SIGTERM 转为协作停止，结果保存场景配置、哈希和执行 ID。预启动取消生成 stopped 结果；无距离观测时使用 null，避免严格 JSON 输出失败。
+- 190 项测试通过，新增模拟已拥有会话下的取消结果落盘测试。桥接 start_e2e 尚未接入该 worker，因此当前网页仍走同步旧入口；本轮未进行独立 worker 原生测试，不宣称停止功能已端到端完成。

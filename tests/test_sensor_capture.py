@@ -126,7 +126,7 @@ def test_standalone_capture_records_real_rig_arrays_without_model_claim(tmp_path
     capture.auxiliary = set(samples)
     capture.specs = {name:{} for name in samples}
     capture.request = lambda: {'recording':True,'id':'record','every':1,'max_frames':2}
-    capture.world = SimpleNamespace(get_snapshot=lambda:SimpleNamespace(timestamp=SimpleNamespace(elapsed_seconds=.6)),
+    capture.world = SimpleNamespace(get_snapshot=lambda:SimpleNamespace(frame=12,timestamp=SimpleNamespace(elapsed_seconds=.6)),
                                     get_actors=lambda:[])
     capture.ego = SimpleNamespace(id=3,get_transform=lambda:SimpleNamespace(get_matrix=lambda:np.eye(4).tolist()),
                                   get_velocity=lambda:SimpleNamespace(x=0,y=0,z=0))

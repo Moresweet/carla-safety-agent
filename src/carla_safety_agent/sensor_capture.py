@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+from .collision_events import CollisionEvents
 
 CAMERAS = ('CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT', 'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT')
 POSES = ((.8, 0, 1.6, 0, 70), (.27, -.55, 1.6, -55, 70), (.27, .55, 1.6, 55, 70),
@@ -106,6 +107,7 @@ class SensorCapture:
         self.live = self.root/'capture'
         self.live.mkdir(parents=True, exist_ok=True)
         self.samples, self.sensors = {}, []
+        self.collisions = CollisionEvents()
         self.lock = threading.Condition()
         self.closed = False
         self.run = None
@@ -143,6 +145,10 @@ class SensorCapture:
                 sensor = world.spawn_actor(bp, transform, attach_to=ego)
                 self.sensors.append(sensor)
                 sensor.listen(lambda data, name=spec['id']: self.receive(name, data))
+            collision = world.spawn_actor(world.get_blueprint_library().find('sensor.other.collision'),
+                                          carla.Transform(), attach_to=ego)
+            self.sensors.append(collision)
+            collision.listen(self.collisions.receive)
             atomic_json(self.live/'calibration.json', self.specs)
         except BaseException:
             self.close()
@@ -181,12 +187,15 @@ class SensorCapture:
         self.sampling_every = int(request.get('every',5))
         self.stop_reason = None
         self.execution_id = os.environ.get('CSA_EXECUTION_ID') or None
+        self.recording_start_frame = self.world.get_snapshot().frame
         atomic_json(self.run/'calibration.json', self.specs)
         self.manifest('recording')
 
     def manifest(self, status):
         if self.run is None:
             return
+        if hasattr(self, 'collisions'):
+            atomic_json(self.run/'collisions.json', self.collisions.snapshot(self.recording_start_frame))
         atomic_json(self.run/'manifest.json', dict(schema_version='carla-safety-dataset/0.2',
             run_id=self.run_id, scenario_id=(os.environ.get('CSA_ALGORITHM_LABEL', 'model')+' closed-loop'
                                            if self.source == 'model-input' else 'standalone sensor rig'),
@@ -194,7 +203,8 @@ class SensorCapture:
             completed_at=time.strftime('%Y-%m-%dT%H:%M:%S'), frame_count=self.count, skipped_frames=self.skipped,
             bytes=self.bytes, replay=True, model=os.environ.get('CSA_ALGORITHM_LABEL') if self.source == 'model-input' else None,
             sensors={name: {'samples': self.count, 'format': 'png/npy/npz', 'path': 'samples'} for name in self.specs},
-            files={'calibration': 'calibration.json', 'index': 'index.json'}, error=self.error,
+            files={'calibration': 'calibration.json', 'index': 'index.json',
+                   **({'collisions':'collisions.json'} if hasattr(self,'collisions') else {})}, error=self.error,
             input_archive='model_input.npz' if self.source == 'model-input' else 'sensor_input.npz',
             sampling_every_frames=self.sampling_every,
             execution_id=self.execution_id,

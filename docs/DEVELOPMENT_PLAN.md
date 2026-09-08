@@ -542,3 +542,10 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - CarlaAdapter.run 增加 capture_runtime，复用 SensorCapture 的独立传感器模式，用唯一规则 tick 的真实帧号调用 process_frame；采集在场景 Actor 销毁前关闭，错误延后至场景清理后报告。SensorCapture 可显式指定数据根目录，不依赖桥接继承环境。
 - /scenario/run 可传 unified_capture=true，创建独立控制目录并启动每帧录制（上限 2000），六视角数据写入现有数据目录；旧追车录制暂保留，因此启用后同时存在两套传感器，尚需实机负载/清理验收。默认关闭，未接前端选项。
 - 187 项既有测试通过；新增原生组合尚未实机验证，也未补齐场景配置到统一 manifest 的关联，不标记 S4 完成。后续必须检查真实同步样本、深度/点云文件和清理，而非仅凭代码路径宣称接入完成。
+
+### 2026-09-08 规则统一采集首次实机验收
+
+- 本机预检确认 Town04、异步且空闲后，POST /scenario/run：description 为“Town04 前车急刹，自车 5 m/s”，max_duration_s=1、unified_capture=true。返回 passed，运行 1 秒；未切换地图。
+- 控制目录 .runtime/rule-capture/c74c34a0d68541759d9ca871ad462d5a；统一数据 .runtime/generated-scenarios/capture-20260908T155748-df4b3759。tools/validate_capture_dataset.py 实际读取并通过 20 个同步样本：六视角原始 BGRA 与 PNG 一致、米制深度、XYZI、BEV，以及 14/14 传感器外参。
+- 完成后独立只读 CARLA RPC 确认 Town04 仍响应、synchronous=false、sensor.* 列表为空。两套传感器并存的这次短程测试未发生崩溃；不外推为长时间、跨地图或所有场景已验收。
+- 场景配置到统一 manifest 的关联、前端采集选项及规则执行生命周期统一仍待完成，S4 保持进行中。GitHub 推送被安全审核拦截，等待用户明确确认既有仓库及已提交内容上传范围；本机开发不受影响。

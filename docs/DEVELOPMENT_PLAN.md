@@ -421,3 +421,10 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 新增 POST /scenes/from-experiment（run_id、可选 name），读取已保存执行记录并验证 starting_scene，创建独立场景版本，保留 source_execution.run_id 和 pre_execution_editor 范围；不执行 CARLA 操作，不覆盖已有场景。后续可复用已有 /scenes/restore 同图合并恢复与失败补偿。
 - 执行记录读取限定实验目录、身份一致及 8 MiB 上限，拒绝路径穿越/外部符号链接和没有快照的旧记录。153 项测试通过，覆盖读取边界、缺失快照、来源记录与原始文档不变。
 - 本机 HTTP 实测：执行 d3ba6b3c31aa42d9a7e15bf20f64bc10 保存为场景 0bc18ba3c7034793b3018fedac56cca6、版本 527b08626277461faf4da32071896f4f；经场景读取接口核对来源 ID 与 Town04。此轮仅保存/读取，没有执行世界恢复；前端入口、非空场景恢复和自动恢复仍待实现验收。
+
+### 2026-09-08 非空实验快照恢复与旧 Actor 缓存修复
+
+- 新增显式实机 tools/regression_experiment_scene.py：临时广告牌→独立采集启动快照→转场景版本→删除→恢复→位置/稳定 ID 验证→清理。按新增稳定 ID 识别自己对象，不依赖同型号猜测。
+- 首次恢复错误复用旧 Actor ID；仅等待新 tick 并查询 get_actor 的候选修复仍失败，因为 Actor 描述缓存不等于当前世界存在性。最终删除接口检查 destroy 返回值并核验新 WorldSnapshot.find；恢复同样排除当前快照中不存在的旧 provenance 绑定。
+- 成功回归执行 038b15ef1c41400ea71b3ced5f563d87，场景 42dcf85e40e54b0d99494371636c0735：广告牌 actor 521→538，稳定 ID f4980303ace94ce6a2f3a90d249cd36b 保持，位置 (393.098,-228.088,2.5)。报告 runs/validation/experiment-scene-aae81366611b45378250ec8d9e82890b.json，脚本退出 0 并完成 finally 清理。
+- 156 项测试通过，包括删除拒绝/快照残留不能返回成功。此轮证明同图单道具经真实实验快照恢复，不覆盖跨图、多对象失败补偿、骨骼材质或自动恢复；整体阶段仍未完成。

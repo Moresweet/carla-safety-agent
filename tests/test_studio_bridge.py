@@ -524,3 +524,25 @@ def test_promote_experiment_snapshot_reuses_scene_store_without_world_access(tmp
     env['SESSION'] = SimpleNamespace(read_execution=lambda _: {'configuration':{}})
     with pytest.raises(ValueError, match='no recorded starting scene'):
         env['save_experiment_scene']({'run_id':'legacy'})
+
+
+@pytest.mark.parametrize('accepted,residual', [(False, True), (True, True), (True, False)])
+def test_delete_requires_native_acceptance_and_fresh_snapshot(accepted, residual):
+    calls = []
+    actor = SimpleNamespace(type_id='static.prop.test', destroy=lambda:accepted)
+    def lookup(_):
+        return actor if not calls or residual else None
+    def fresh(_):
+        calls.append('fresh')
+        return SimpleNamespace(find=lambda _:actor if residual else None)
+    world = SimpleNamespace(get_actor=lookup, wait_for_tick=fresh)
+    names = {7:'test'}
+    env = functions('delete_actor', evaluation_active=lambda:False, connect_world=lambda:world,
+                    _actor_object_names=names, _generated_actor_assets={}, _editor_actors={7})
+    if accepted and not residual:
+        assert env['delete_actor'](7)['ok']
+        assert names == {} and calls == ['fresh']
+    else:
+        with pytest.raises(RuntimeError): env['delete_actor'](7)
+        assert names == {7:'test'}
+        assert calls == (['fresh'] if accepted else [])

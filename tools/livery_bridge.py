@@ -987,7 +987,7 @@ def restore_scene(data):
             world.get_blueprint_library().find(blueprint)
     provenance = _provenance.records(world.id)
     live = {r.get('stable_id'): world.get_actor(int(actor_id)) for actor_id, r in provenance.items()
-            if r.get('origin') == 'user'}
+            if r.get('origin') == 'user' and world.get_snapshot().find(int(actor_id)) is not None}
     created, moved = [], []
     previous_weather, previous_view = world.get_weather(), world.get_spectator().get_transform()
     # Validate native properties before the first spawn, move or material edit.
@@ -1154,7 +1154,13 @@ def delete_actor(actor_id: int) -> dict:
     if not actor:
         raise RuntimeError(f"Actor {actor_id} is not running")
     type_id = actor.type_id
-    actor.destroy()
+    if actor.destroy() is False:
+        raise RuntimeError(f'Actor {actor_id} destruction was rejected')
+    # Actor lookup uses the client's last world snapshot. Do not acknowledge a
+    # deletion while an immediate scene restore can still reuse that old actor.
+    snapshot = world.wait_for_tick(5.0)
+    if snapshot.find(actor_id) is not None:
+        raise RuntimeError(f'Actor {actor_id} deletion not confirmed in the world snapshot')
     _actor_object_names.pop(actor_id, None)
     _generated_actor_assets.pop(actor_id, None)
     _editor_actors.discard(actor_id)

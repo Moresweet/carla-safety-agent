@@ -104,3 +104,42 @@ class ExperimentQueue:
                 raise ValueError('Attempt limit reached')
             job['state'] = 'pending'
             self.write(state)
+
+    def reconcile(self, job_id, attempt_id, journal):
+        """Accept only a bound, terminal journal record with no live owner.
+
+        This does not launch work or infer simulator recovery from PID absence.
+        The session must already have completed its own recovery lifecycle.
+        """
+        from .session import process_identity
+        with self.locked():
+            state = self.read()
+            job = next((j for j in state['jobs'] if j['job_id'] == job_id), None)
+            if not job or not job['attempts']:
+                raise ValueError('Unknown queue job')
+            attempt = job['attempts'][-1]
+            if attempt['attempt_id'] != attempt_id or job['state'] != 'running':
+                raise ValueError('Only the current running attempt can reconcile')
+            execution = journal.read_execution(attempt['execution_id'])
+            if execution.get('run_id') != attempt['execution_id']:
+                raise ValueError('Execution identity mismatch')
+            terminal = execution.get('state')
+            if terminal not in ('completed', 'failed', 'stopped'):
+                return {'reconciled': False, 'state': terminal}
+            identity = execution.get('process')
+            if identity and process_identity(identity['pid']) == identity:
+                return {'reconciled': False, 'state': 'process_still_alive'}
+            if execution.get('ended_at') is None:
+                raise ValueError('Terminal execution has no end timestamp')
+            if terminal == 'completed' and (execution.get('error') or execution.get('returncode') != 0):
+                raise ValueError('Completed execution has inconsistent exit evidence')
+            result = {'execution': execution, 'source': 'session_journal',
+                      'benchmark_passed': None}
+            # Execution completion is not a claim of safe driving performance.
+            outcome = execution.get('outcome') or {}
+            if outcome.get('benchmark_failed') is True:
+                result['benchmark_passed'] = False
+            attempt.update(state=terminal, ended_at=time.time(), result=result)
+            job['state'] = terminal
+            self.write(state)
+            return {'reconciled': True, 'state': terminal}

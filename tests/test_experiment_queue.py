@@ -50,3 +50,25 @@ def test_competing_queue_clients_cannot_reserve_twice(tmp_path):
         claims = list(pool.map(lambda _: claim(), range(4)))
     assert sum(c is not None for c in claims) == 1
     assert len(ExperimentQueue(tmp_path).read()['jobs'][0]['attempts']) == 1
+
+
+@pytest.mark.parametrize('status,live,expected', [('running', False, False),
+    ('recovering', False, False), ('completed', True, False), ('completed', False, True),
+    ('failed', False, True), ('stopped', False, True)])
+def test_reconcile_requires_terminal_session_and_dead_process(tmp_path, monkeypatch, status, live, expected):
+    from types import SimpleNamespace
+    from carla_safety_agent import session
+    identity = {'pid': 123, 'start_ticks': '456'}
+    monkeypatch.setattr(session, 'process_identity', lambda pid: identity if live else None)
+    q = ExperimentQueue(tmp_path); q.create(dimensions()); c = q.claim()
+    job, attempt = c['job_id'], c['attempt']['attempt_id']
+    q.update_attempt(job, attempt, execution_id='run')
+    record = {'run_id': 'run', 'state': status, 'process': identity, 'ended_at': 12,
+              'returncode': 0, 'error': None, 'outcome': {'benchmark_failed': True}}
+    journal = SimpleNamespace(read_execution=lambda run: record)
+    result = q.reconcile(job, attempt, journal)
+    assert result['reconciled'] is expected
+    saved = q.read()['jobs'][0]
+    assert saved['state'] == (status if expected else 'running')
+    if expected:
+        assert saved['attempts'][0]['result']['benchmark_passed'] is False

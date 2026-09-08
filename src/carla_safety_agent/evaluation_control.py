@@ -181,6 +181,15 @@ class EvaluationControl:
         for path in sorted((self.root / "commands").glob("*.json"))[:8]:
             command = None
             observed_frame = world.get_snapshot().frame if getattr(self,'audit_dir',None) else None
+            audit = None
+            if getattr(self,'audit_dir',None):
+                audit = {'schema_version':'carla-editor-command/1', 'command_id':path.stem,
+                         'execution_id':os.environ.get('CSA_EXECUTION_ID'),
+                         'observed_frame_before':observed_frame, 'recorded_at':time.time(),
+                         'state':'attempting', 'request_text':path.read_text(encoding='utf-8'),
+                         'semantics':'Unfinished attempt may have changed world; do not automatically retry'}
+                # Refuse mutation if its intent cannot first be persisted.
+                self._atomic_json(self.audit_dir/path.name, audit)
             try:
                 command = json.loads(path.read_text(encoding="utf-8"))
                 result = self._execute(world, command["action"], command.get("payload", {}))
@@ -189,6 +198,7 @@ class EvaluationControl:
                 response = {"ok": False, "error": str(exc)}
             if getattr(self,'audit_dir',None):
                 self._atomic_json(self.audit_dir/path.name, {
+                    **audit, 'state':'responded',
                     'schema_version':'carla-editor-command/1', 'command_id':path.stem,
                     'execution_id':os.environ.get('CSA_EXECUTION_ID'),
                     'observed_frame_before':observed_frame,

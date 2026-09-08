@@ -1,4 +1,5 @@
 import json
+import pytest
 from pathlib import Path
 
 from carla_safety_agent.dataset import DatasetRecorder, list_datasets
@@ -10,6 +11,21 @@ def scenario() -> ScenarioSpec:
         scenario_id="dataset-test", family="lead_vehicle", map_name="Town04", seed=9,
         ego=ActorSpec("ego", "vehicle.tesla.model3", 0, 8.0), adversaries=(),
         environment=EnvironmentSpec(), oracle=OracleSpec(), provenance={"source": "test"})
+
+
+def test_recorder_never_reuses_existing_directory(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import carla_safety_agent.dataset as module
+    from datetime import datetime, timezone
+    fixed=datetime(2026,9,8,tzinfo=timezone.utc)
+    monkeypatch.setattr(module,'datetime',SimpleNamespace(now=lambda _:fixed))
+    monkeypatch.setattr(module.uuid,'uuid4',lambda:SimpleNamespace(hex='fixed'))
+    first=DatasetRecorder(tmp_path,scenario(),.05)
+    first.record({'frame':42})
+    first.finalize(None)
+    before=(first.root/'state.jsonl').read_bytes()
+    with pytest.raises(FileExistsError): DatasetRecorder(tmp_path,scenario(),.05)
+    assert (first.root/'state.jsonl').read_bytes()==before
 
 
 def test_recorder_writes_portable_manifest_and_state(tmp_path: Path):

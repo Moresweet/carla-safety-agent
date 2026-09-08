@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
@@ -43,9 +44,9 @@ class DatasetRecorder:
 
     def __init__(self, root: Path, scenario: ScenarioSpec, fixed_delta_seconds: float):
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        self.run_id = f"{scenario.scenario_id}-{timestamp}"
+        self.run_id = f"{scenario.scenario_id}-{timestamp}-{uuid.uuid4().hex}"
         self.root = root / self.run_id
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.root.mkdir(parents=True, exist_ok=False)
         self.scenario = scenario
         self.fixed_delta_seconds = fixed_delta_seconds
         self.started_at = _utc_now()

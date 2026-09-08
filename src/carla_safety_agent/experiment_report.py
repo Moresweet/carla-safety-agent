@@ -1,10 +1,45 @@
 """Read-only batch accounting; unknown driving/data outcomes stay unknown."""
 from collections import Counter
 import hashlib
+import json
+import math
+from pathlib import Path
 from .experiment_matrix import canonical, compile_matrix
 
 
-def summarize_queue(state):
+def verified_rule_metrics(execution, results_root):
+    if execution.get('kind') != 'rule-run' or execution.get('state') != 'completed':
+        raise ValueError('Metrics require a completed rule execution')
+    config = execution['configuration']
+    root = Path(results_root).resolve()
+    raw = Path(config['results'])
+    path = raw.resolve()
+    if raw.is_symlink() or path.parent != root or path.stat().st_size > 8*1024*1024:
+        raise ValueError('Invalid rule result path or size')
+    result = json.loads(path.read_text())
+    if result.get('execution_id') != execution['run_id'] or result.get('scenario_sha256') != config['scenario_sha256']:
+        raise ValueError('Rule result execution/scenario identity mismatch')
+    if hashlib.sha256(canonical(result['scenario'])).hexdigest() != config['scenario_sha256']:
+        raise ValueError('Rule result scenario contents changed')
+    if result.get('status') not in ('passed', 'failed') or not isinstance(result.get('collision'), bool):
+        raise ValueError('Invalid driving outcome')
+    metrics = {}
+    for key in ('min_ttc_s', 'min_distance_m', 'elapsed_s', 'risk_score'):
+        value = result[key]
+        if value is None and key in ('min_ttc_s', 'min_distance_m'):
+            metrics[key] = None
+            continue
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            raise ValueError('Invalid driving metric')
+        metrics[key] = value
+    reasons = result.get('failure_reasons')
+    if not isinstance(reasons, list) or not all(isinstance(v, str) for v in reasons):
+        raise ValueError('Invalid driving failure reasons')
+    return {**metrics, 'collision': result['collision'], 'failure_reasons': reasons,
+            'benchmark_passed': result['status'] == 'passed', 'source': str(path)}
+
+
+def summarize_queue(state, results_root=None):
     plan = state['plan']
     if compile_matrix(plan['dimensions']) != plan or hashlib.sha256(canonical(plan)).hexdigest() != state['plan_sha256']:
         raise ValueError('Queue plan identity mismatch')
@@ -36,6 +71,12 @@ def summarize_queue(state):
             'error': execution.get('error') or result.get('error'),
             'result_reference': (execution.get('configuration') or {}).get('results'),
             'attempt_ids': [a['attempt_id'] for a in attempts]})
+        if results_root is not None and execution.get('kind') == 'rule-run' and status == 'completed':
+            try:
+                metrics = verified_rule_metrics(execution, results_root)
+                rows[-1].update(metrics=metrics, benchmark_passed=metrics['benchmark_passed'])
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                rows[-1].update(metrics_error=str(exc), benchmark_passed=None)
     counts = dict(Counter(r['execution_state'] for r in rows))
     return {'schema_version': 'carla-experiment-report/1', 'plan_sha256': state['plan_sha256'],
             'paused': state.get('paused', False), 'job_count': len(rows), 'state_counts': counts,

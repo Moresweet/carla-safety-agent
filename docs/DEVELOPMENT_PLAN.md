@@ -1138,3 +1138,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 新增 regression_bundle_actor.py：空闲预检、保存基线、创建广告牌道具并打包，删除后通过 restore-bundle 重新生成；读取原生位置、重复恢复核对零新增，最后按稳定ID清理测试对象并恢复基线。
 - 真实 bundle_id 30518ade3be74a4cb01c5dac0f14a415，stable_id 131efd328ad04257b8288c84200810db，Actor1621→1622，位置误差小于0.02米；第二次恢复 spawned=0 且绑定相同Actor。测试对象已删除，清理后稳定对象ID集合与原基线相等。报告 runs/validation/bundle-actor-30518ade3be74a4cb01c5dac0f14a415.json。
 - 本次验证已有原生Blueprint的同地图恢复，不覆盖Blender自定义资产安装、跨地图、碰撞失败或弱网恢复矩阵；整体计划仍未完成。
+
+### 2026-09-08 自定义资产迁移前的导入保护
+
+- 审查 BlenderPipeline 与 Unreal 导入器发现：replace_existing=True 会隐式覆盖同名资产；固定 unreal-import.json 可能让失败的后续导入读取旧成功记录。修正为首次写入前拒绝已有目标目录、FBX/纹理导入均禁止覆盖，每次导入独立请求与结果UUID文件。
+- 358项测试通过，新增假Unreal环境检查已有目录时未进入导入操作，以及旧成功结果不能掩盖连续两次失败且不写注册表。
+- 未运行新的Unreal导入或修改引擎资产；非零退出但写出新结果的既有警告语义保持不变，部分失败资产的清理、目录并发竞态及完整资产包尚需继续。迁移功能不因此标记完成。

@@ -16,6 +16,11 @@ mesh_name = "SM_" + asset_id
 if not fbx_path.is_file():
     raise RuntimeError("FBX does not exist: " + str(fbx_path))
 
+# Migration/import creates new assets only. An existing destination may contain
+# user-authored materials or another version; never replace it implicitly.
+if unreal.EditorAssetLibrary.does_directory_exist(destination):
+    raise RuntimeError("Asset destination already exists; choose a new asset name: " + destination)
+
 options = unreal.FbxImportUI()
 options.set_editor_property("import_mesh", True)
 options.set_editor_property("import_as_skeletal", False)
@@ -30,7 +35,7 @@ task.set_editor_property("filename", str(fbx_path))
 task.set_editor_property("destination_path", destination)
 task.set_editor_property("destination_name", mesh_name)
 task.set_editor_property("automated", True)
-task.set_editor_property("replace_existing", True)
+task.set_editor_property("replace_existing", False)
 task.set_editor_property("save", True)
 task.set_editor_property("options", options)
 unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
@@ -61,7 +66,7 @@ if texture_path and Path(texture_path).is_file():
     texture_task.set_editor_property("destination_path", destination)
     texture_task.set_editor_property("destination_name", "T_" + asset_id)
     texture_task.set_editor_property("automated", True)
-    texture_task.set_editor_property("replace_existing", True)
+    texture_task.set_editor_property("replace_existing", False)
     texture_task.set_editor_property("save", True)
     unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([texture_task])
     texture = unreal.load_asset(destination + "/T_" + asset_id)

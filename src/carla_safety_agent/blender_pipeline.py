@@ -70,8 +70,9 @@ class BlenderPipeline:
             asset_name or blender_manifest.get("name") or job_id)).strip("_")[:48]
         if not safe_name:
             safe_name = "Generated_" + job_id
-        result_path = job / "unreal-import.json"
-        request_path = job / "unreal-request.json"
+        attempt_id = uuid.uuid4().hex
+        result_path = job / ("unreal-import-" + attempt_id + ".json")
+        request_path = job / ("unreal-request-" + attempt_id + ".json")
         try:
             blender_request = json.loads((job / "request.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):

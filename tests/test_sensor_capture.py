@@ -122,3 +122,10 @@ def test_standalone_capture_records_real_rig_arrays_without_model_claim(tmp_path
     np.savez(folder/'sensor_input.npz',**arrays)
     result = subprocess.run([sys.executable,str(checker),str(capture.run)],capture_output=True,text=True)
     assert result.returncode != 0 and 'Missing raw input arrays' in result.stderr
+    arrays['CAM_FRONT']=image
+    np.savez(folder/'sensor_input.npz',**arrays)
+    specs=json.loads((capture.run/'calibration.json').read_text())
+    specs['CAM_FRONT'].update(sensor_to_ego=np.eye(4).tolist(),ego_to_sensor=np.zeros((4,4)).tolist())
+    (capture.run/'calibration.json').write_text(json.dumps(specs))
+    result=subprocess.run([sys.executable,str(checker),str(capture.run)],capture_output=True,text=True)
+    assert result.returncode != 0 and 'Extrinsics are not inverse' in result.stderr

@@ -11,6 +11,20 @@ archive = manifest.get('input_archive', 'model_input.npz')
 assert archive in ('model_input.npz', 'sensor_input.npz'), 'Unknown input archive'
 index = json.loads((root/'index.json').read_text())['frames']
 calibration = json.loads((root/'calibration.json').read_text())
+extrinsics_checked = 0
+for name, spec in calibration.items():
+    if 'sensor_to_ego' not in spec and 'ego_to_sensor' not in spec:
+        continue  # Legacy data remains readable; do not claim it has verified extrinsics.
+    forward = np.asarray(spec['sensor_to_ego'],dtype=float)
+    inverse = np.asarray(spec['ego_to_sensor'],dtype=float)
+    assert forward.shape == inverse.shape == (4,4), 'Invalid extrinsic shape'
+    assert np.isfinite(forward).all() and np.isfinite(inverse).all(), 'Non-finite extrinsics'
+    assert np.allclose(forward[3],[0,0,0,1]), 'Invalid homogeneous transform'
+    assert np.allclose(forward @ inverse,np.eye(4),atol=1e-6), 'Extrinsics are not inverse'
+    rotation=forward[:3,:3]
+    assert np.allclose(rotation.T @ rotation,np.eye(3),atol=1e-6), 'Non-rigid extrinsics'
+    assert np.isclose(np.linalg.det(rotation),1,atol=1e-6), 'Invalid rotation determinant'
+    extrinsics_checked += 1
 assert index, 'No recorded samples'
 previous = -1
 for entry in index:
@@ -48,3 +62,4 @@ for entry in index:
     for name in ('BEV_POINTS', 'BEV_RGB'):
         Image.open(folder/(name+'.png')).verify()
 print(f'PASS: {len(index)} synchronized samples, {archive} RGB verified, metric depth, XYZI, BEV: {root.name}')
+print(f'Extrinsics verified: {extrinsics_checked}/{len(calibration)} sensors (legacy missing extrinsics are not verified)')

@@ -15,6 +15,31 @@ from regression_scene_versions import ROOT, request
 from regression_rule_move import ACTIVE, wait_terminal
 
 
+def restore_test_weather(queue_state, session, journal, world):
+    attempts = [a for j in queue_state['jobs'] for a in j['attempts']]
+    owned = {a['attempt_id'] for a in attempts}
+    current = session.get('configuration', {}).get('request', {})
+    if current.get('batch_attempt_id') not in owned:
+        raise RuntimeError('Session ownership changed; refusing weather restoration')
+    if session['state'] in ACTIVE or world.get_settings().synchronous_mode:
+        raise RuntimeError('World is not idle; refusing weather restoration')
+    executions = [a['execution_id'] for a in attempts if a.get('execution_id')]
+    if not executions:
+        return False
+    original = journal.read_execution(executions[0])['configuration']['starting_scene']
+    if world.get_map().name != original['map']:
+        raise RuntimeError('Map changed; refusing weather restoration')
+    weather = world.get_weather()
+    for key, value in original['weather'].items():
+        if not hasattr(weather, key):
+            raise RuntimeError('Unsupported saved weather property')
+        setattr(weather, key, value)
+    world.set_weather(weather)
+    observed = world.get_weather()
+    assert all(abs(getattr(observed, key)-value) < 1e-4 for key, value in original['weather'].items())
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--weather-ab', action='store_true')
@@ -91,8 +116,6 @@ def main():
             assert comparison['comparable_count'] == 1, comparison
             report['comparison'] = comparison
             (root/'summary.json').write_text(json.dumps(summary, indent=2))
-        (root/'report.json').write_text(json.dumps(report, indent=2))
-        print(json.dumps(report), flush=True)
     finally:
         session = request('session/status')['session']
         request_data = session.get('configuration', {}).get('request', {})
@@ -100,6 +123,13 @@ def main():
         if request_data.get('batch_attempt_id') in attempts and session['state'] in ACTIVE:
             request('scenario/stop', {'run_id': session['run_id']})
             wait_terminal(session['run_id'])
+        if args.weather_ab and request_data.get('batch_attempt_id') in attempts:
+            import carla
+            client = carla.Client('127.0.0.1', 2000); client.set_timeout(10)
+            restored = restore_test_weather(q.read(), request('session/status')['session'], journal, client.get_world())
+            print(json.dumps({'test_weather_restored': restored}), flush=True)
+    (root/'report.json').write_text(json.dumps(report, indent=2))
+    print(json.dumps(report), flush=True)
 
 
 if __name__ == '__main__': main()

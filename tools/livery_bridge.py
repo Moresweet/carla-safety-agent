@@ -227,7 +227,7 @@ def _finish_e2e(process):
         except OSError as exc:
             # Journal storage failure must not prevent restoring the simulator.
             cleanup_error = f'Session journal: {exc}'
-    if _e2e_process is process and _e2e_job.get("kind") in ("run", "preset-run", "sensor-rig"):
+    if _e2e_process is process and _e2e_job.get("kind") in ("run", "preset-run", "sensor-rig", "rule-run"):
         try:
             restore_editor_world()
         except Exception as exc:
@@ -312,18 +312,18 @@ def e2e_status() -> dict:
 def start_e2e(data: dict) -> dict:
     global _e2e_process
     action = str(data.get("action", "doctor"))
-    if action not in ("doctor", "model-smoke", "run", "preset-run", "sensor-rig"):
+    if action not in ("doctor", "model-smoke", "run", "preset-run", "sensor-rig", "rule-run"):
         raise RuntimeError(f"Unknown UniAD action: {action}")
-    if action != 'sensor-rig' and not UNIAD_PYTHON.is_file():
+    if action not in ('sensor-rig','rule-run') and not UNIAD_PYTHON.is_file():
         raise RuntimeError(f"UniAD environment is missing: {UNIAD_PYTHON}")
     if evaluation_active():
         raise RuntimeError("An evaluation is already running or stopping")
-    if action in ("run", "preset-run", "sensor-rig"):
+    if action in ("run", "preset-run", "sensor-rig", "rule-run"):
         if shutil.disk_usage(PROJECT_ROOT).free < 1024**3:
             raise RuntimeError('At least 1 GiB free disk space is required before evaluation')
         # Fail promptly instead of launching a model against a crashed server.
         settings = connect_world().get_settings()
-        if action == 'sensor-rig' and settings.synchronous_mode:
+        if action in ('sensor-rig','rule-run') and settings.synchronous_mode:
             raise RuntimeError('Another synchronous owner is active')
     if action in ("run", "model-smoke") and data.get("algorithm", "uniad-tiny") != "uniad-tiny":
         raise RuntimeError("This action supports UniAD-Tiny only; use preset closed-loop testing for other models")
@@ -335,13 +335,16 @@ def start_e2e(data: dict) -> dict:
                        "--root", str(E2E_ROOT), "--carla-port", str(CARLA_PORT)]
         elif action == "model-smoke":
             command = [str(UNIAD_PYTHON), str(PROJECT_ROOT / "integration/uniad/model_smoke.py")]
-        elif action == "run":
+        elif action in ("run", "rule-run"):
             route = Path(str(data.get("route", ""))).resolve()
             allowed = {Path(item["path"]).resolve() for item in e2e_routes()}
             if route not in allowed:
                 raise RuntimeError("Select a generated ScenarioSpec from the local catalog")
             _, scenario_digest = read_verified_scenario(route, data.get('scenario_sha256'))
-            command = [str(PROJECT_ROOT / "scripts/run_uniad_target.sh")]
+            if action == 'rule-run' and not isinstance(data.get('unified_capture',False),bool):
+                raise ValueError('unified_capture must be boolean')
+            command = ([sys.executable, str(PROJECT_ROOT/'tools/run_rule_scenario.py')]
+                       if action == 'rule-run' else [str(PROJECT_ROOT / "scripts/run_uniad_target.sh")])
         elif action == 'sensor-rig':
             mode, frames = str(data.get('mode','stationary')), data.get('frames',200)
             if mode not in ('stationary','autopilot','manual') or isinstance(frames,bool) or not isinstance(frames,int) or not 10 <= frames <= 100000:
@@ -372,7 +375,7 @@ def start_e2e(data: dict) -> dict:
         # Capture the editor state before clearing previews or starting a worker.
         # Preset routes may subsequently rebuild the world: this is not the
         # benchmark's instantiated scene, and does not imply automatic restore.
-        starting_scene = capture_scene_document() if action in ('run', 'preset-run', 'sensor-rig') else None
+        starting_scene = capture_scene_document() if action in ('run', 'preset-run', 'sensor-rig', 'rule-run') else None
         _e2e_log.parent.mkdir(parents=True, exist_ok=True)
         log_stream = _e2e_log.open("wb")
         env = os.environ.copy()
@@ -380,12 +383,12 @@ def start_e2e(data: dict) -> dict:
         env.update(E2E_ROOT=str(E2E_ROOT), UNIAD_PYTHON=str(UNIAD_PYTHON),
                    CSA_EVALUATION_CONTROL_DIR=str(_evaluation_control_dir),
                    CSA_SENSOR_CAPTURE="1", CSA_DATASET_ROOT=str(DATASET_ROOT))
-        if action == 'sensor-rig':
+        if action in ('sensor-rig','rule-run'):
             env['PYTHONPATH'] = os.pathsep.join((str(PROJECT_ROOT/'src'),os.environ.get('PYTHONPATH','')))
-        if action in ("run", "preset-run", "sensor-rig"):
+        if action in ("run", "preset-run", "sensor-rig", "rule-run"):
             _hero_lock.clear()
             collection_request({'recording': False})
-            results_path = None if action == 'sensor-rig' else (PROJECT_ROOT / "runs/uniad" / f"{route.stem}-{uuid.uuid4().hex}.json"
+            results_path = (PROJECT_ROOT/'runs/rule'/f'{route.stem}-{uuid.uuid4().hex}.json') if action == 'rule-run' else None if action == 'sensor-rig' else (PROJECT_ROOT / "runs/uniad" / f"{route.stem}-{uuid.uuid4().hex}.json"
                             if action == "run" else PROJECT_ROOT / "runs/benchmark" /
                             f"{algorithm}-{route.stem}-{route_id}-{uuid.uuid4().hex[:8]}.json")
             (_evaluation_control_dir / "state.json").unlink(missing_ok=True)
@@ -402,10 +405,12 @@ def start_e2e(data: dict) -> dict:
             for stale in telemetry_dir.glob("*"):
                 if stale.is_file():
                     stale.unlink()
-        if action == "run":
+        if action in ("run","rule-run"):
             env["SCENARIO"] = str(route)
             env['CSA_SCENARIO_SHA256'] = scenario_digest
             env["RESULTS"] = str(results_path)
+            env["CARLA_PORT"] = str(CARLA_PORT)
+            env["CSA_RULE_CAPTURE"] = "1" if data.get("unified_capture",False) else "0"
         elif action == "preset-run":
             env.update(ROUTES=str(route), ROUTE_ID=route_id, RESULTS=str(results_path),
                        ALGORITHM=algorithm,
@@ -414,17 +419,17 @@ def start_e2e(data: dict) -> dict:
                        BENCH2DRIVE_TCP_ZOO=str(BENCH2DRIVE_TCP_ZOO))
         execution_id = SESSION.begin(action, {'request': data, 'command': command,
                               'starting_scene': starting_scene,
-                              'scenario_sha256': scenario_digest if action == 'run' else None,
-                              'python': sys.executable if action == 'sensor-rig' else str(UNIAD_PYTHON), 'carla_port': CARLA_PORT,
-                              'results': str(results_path) if action in ('run', 'preset-run') else None})
+                              'scenario_sha256': scenario_digest if action in ('run','rule-run') else None,
+                              'python': sys.executable if action in ('sensor-rig','rule-run') else str(UNIAD_PYTHON), 'carla_port': CARLA_PORT,
+                              'results': str(results_path) if action in ('run', 'preset-run', 'rule-run') else None})
         env['CSA_EXECUTION_ID'] = execution_id
         _e2e_job.clear()
         _e2e_job.update(state="running", kind=action, started_at=time.time(),
                         ended_at=None, returncode=None, command=command,
-                        algorithm=algorithm if action == "preset-run" else None if action == 'sensor-rig' else "uniad-tiny",
+                        algorithm=algorithm if action == "preset-run" else None if action in ('sensor-rig','rule-run') else "uniad-tiny",
                         collection=str(route) if action == "preset-run" else None,
                         route_id=route_id if action == "preset-run" else None,
-                        results=str(results_path) if action in ("run", "preset-run") else None)
+                        results=str(results_path) if action in ("run", "preset-run", "rule-run") else None)
         launched = None
         try:
             _e2e_process = subprocess.Popen(
@@ -432,6 +437,8 @@ def start_e2e(data: dict) -> dict:
                 stderr=subprocess.STDOUT, start_new_session=True)
             launched = _e2e_process
             SESSION.attach(_e2e_process.pid)
+            if action == 'rule-run' and data.get('unified_capture',False):
+                collection_request({'recording':True,'every':1,'max_frames':2000})
             if action == 'sensor-rig':
                 collection_request({'recording':data.get('recording',True),
                                     'every':data.get('every',1),'max_frames':data.get('max_frames',2000)})
@@ -513,7 +520,7 @@ def resume_session():
         except OSError:
             pass
     try:
-        if previous.get('kind') in ('run', 'preset-run', 'sensor-rig'):
+        if previous.get('kind') in ('run', 'preset-run', 'sensor-rig', 'rule-run'):
             restore_editor_world()
         SESSION.transition('failed', error='Bridge restarted during execution; result requires review')
     except Exception as exc:

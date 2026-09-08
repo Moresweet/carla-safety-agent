@@ -490,7 +490,7 @@ def test_starting_scene_snapshot_includes_managed_state_without_saving_version()
 
 
 @pytest.mark.parametrize('action,expected', [('run', True), ('preset-run', True),
-                                           ('sensor-rig', True), ('doctor', False), ('model-smoke', False)])
+                                           ('sensor-rig', True), ('rule-run', True), ('doctor', False), ('model-smoke', False)])
 def test_all_world_executions_capture_editor_scene_before_mutation(action, expected):
     source = Path(__file__).resolve().parents[1]/'tools/livery_bridge.py'
     tree = ast.parse(source.read_text())

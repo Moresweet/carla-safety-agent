@@ -30,9 +30,11 @@ class ActorProvenance:
             records = data.setdefault(str(episode), {})
             for actor in actors:
                 previous = records.get(str(actor.id), {})
-                if overwrite or str(actor.id) not in records:
-                    records[str(actor.id)] = {'type_id': actor.type_id, 'origin': origin,
-                        'stable_id': previous.get('stable_id', uuid.uuid4().hex)}
+                same_type = previous.get('type_id') == actor.type_id
+                if overwrite or not same_type:
+                    records[str(actor.id)] = {**(previous if same_type else {}),
+                        'type_id': actor.type_id, 'origin': origin,
+                        'stable_id': previous.get('stable_id', uuid.uuid4().hex) if same_type else uuid.uuid4().hex}
                 records[str(actor.id)].setdefault('stable_id', uuid.uuid4().hex)
             temporary = self.path.with_suffix('.tmp')
             temporary.write_text(json.dumps(data))

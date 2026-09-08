@@ -22,8 +22,25 @@ def atomic(path, payload):
     temporary.replace(path)
 
 
+def finite_number(value):
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value)
+
+
+def validate_transform(transform):
+    if not isinstance(transform, dict): raise ValueError('Transform must be an object')
+    for group, keys in [('location', ('x','y','z')), ('rotation', ('pitch','yaw','roll'))]:
+        values = transform.get(group)
+        if not isinstance(values, dict) or set(values) != set(keys):
+            raise ValueError('Transform requires complete location and rotation')
+        if not all(finite_number(value) for value in values.values()):
+            raise ValueError('Transforms must contain finite numbers')
+
+
 def validate_scene(document):
+    if not isinstance(document, dict): raise ValueError('Scene must be an object')
     document = copy.deepcopy(document)
+    if document.get('schema_version', 'carla-scene/1') != 'carla-scene/1':
+        raise ValueError('Unsupported scene schema version')
     if not isinstance(document.get('map'), str) or not document['map']:
         raise ValueError('Scene map is required')
     objects = document.get('objects', [])
@@ -31,15 +48,26 @@ def validate_scene(document):
         raise ValueError('Scene supports at most 2000 managed objects')
     seen = set()
     for obj in objects:
-        stable = identifier(obj['stable_id'])
+        if not isinstance(obj, dict): raise ValueError('Invalid scene object')
+        stable = identifier(obj.get('stable_id'))
         if stable in seen: raise ValueError('Duplicate stable object ID')
         seen.add(stable)
-        if not isinstance(obj.get('blueprint_id'), str): raise ValueError('Blueprint is required')
-        for group, keys in [('location', ('x','y','z')), ('rotation', ('pitch','yaw','roll'))]:
-            for key in keys:
-                value = obj['transform'][group][key]
-                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-                    raise ValueError('Transforms must contain finite numbers')
+        if not isinstance(obj.get('blueprint_id'), str) or not obj['blueprint_id']:
+            raise ValueError('Blueprint is required')
+        validate_transform(obj.get('transform'))
+        options = obj.get('spawn_options', {})
+        if not isinstance(options, dict) or set(options) - {'mass', 'scale'}:
+            raise ValueError('Unsupported spawn options')
+        for key, value in options.items():
+            if not finite_number(value) or value < 0 or (key == 'scale' and value == 0):
+                raise ValueError('Invalid mass or scale')
+    document['objects'] = objects
+    if 'spectator' in document: validate_transform(document['spectator'])
+    weather = document.get('weather', {})
+    if not isinstance(weather, dict) or not all(
+            isinstance(key, str) and re.fullmatch(r'[a-z][a-z_]*', key) and finite_number(value)
+            for key, value in weather.items()):
+        raise ValueError('Invalid weather properties')
     json.dumps(document, allow_nan=False)
     document['schema_version'] = 'carla-scene/1'
     return document

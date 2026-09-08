@@ -32,3 +32,23 @@ def test_validation_and_branch_keep_old_versions(tmp_path):
     branch = store.save(document(3), 'branch', first['scene_id'], first['version'])['head']
     assert second['version'] not in branch['history']
     assert store.read(first['scene_id'], second['version'])['document']['name'] == 'second'
+
+
+@pytest.mark.parametrize('field,value', [('weather',{'wetness':True}), ('weather',[]),
+    ('weather',{'wetness':float('inf')}), ('spectator',{'location':{}}),
+    ('schema_version','carla-scene/999')])
+def test_full_scene_preflight_rejects_malformed_metadata(field, value):
+    scene = document()
+    scene[field] = value
+    with pytest.raises(ValueError): validate_scene(scene)
+
+
+@pytest.mark.parametrize('options', [{'scale':0}, {'scale':True}, {'mass':-1}, {'arbitrary':'value'}])
+def test_spawn_options_are_checked_before_restore(options):
+    scene = document()
+    scene['objects'][0]['spawn_options'] = options
+    with pytest.raises(ValueError): validate_scene(scene)
+
+
+def test_empty_scene_normalizes_objects():
+    assert validate_scene({'map':'Town04'})['objects'] == []

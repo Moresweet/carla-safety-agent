@@ -267,3 +267,24 @@ def test_evaluation_visibility_uses_same_durable_store(tmp_path):
     with pytest.raises(ValueError):
         controller._execute(world,'environment_visibility',{'object_id':17,'visible':'false'})
     assert calls == [({17},False)]
+
+
+def test_restore_unknown_weather_is_rejected_before_any_world_mutation():
+    from carla_safety_agent.scene_store import validate_scene
+    calls = []
+    world = SimpleNamespace(id=1, get_map=lambda:SimpleNamespace(name='Town04'),
+        get_blueprint_library=lambda:SimpleNamespace(find=lambda _: None),
+        get_weather=lambda:SimpleNamespace(wetness=0),
+        get_spectator=lambda:SimpleNamespace(get_transform=lambda:None),
+        set_weather=lambda _:calls.append('weather'))
+    document = {'map':'Town04','objects':[{'stable_id':'new','blueprint_id':'static.prop.box01',
+        'transform':{'location':{'x':1,'y':1,'z':1},'rotation':{'yaw':0,'pitch':0,'roll':0}}}],
+        'weather':{'unsupported_weather':1}}
+    env = functions('restore_scene', connect_world=lambda:world,
+        SCENES=SimpleNamespace(read=lambda *args:{'document':document}), validate_scene=validate_scene,
+        BLENDER=SimpleNamespace(registry=lambda:{}), _provenance=SimpleNamespace(records=lambda _:{}),
+        prepare_scene_materials=lambda *args:None, prepare_scene_visibility=lambda *args:None,
+        spawn_object=lambda *args:calls.append('spawn'), update_actor=lambda *args:calls.append('move'))
+    with pytest.raises(ValueError, match='Unsupported weather'):
+        env['restore_scene']({'scene_id':'test'})
+    assert calls == []

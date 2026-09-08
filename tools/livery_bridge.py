@@ -895,6 +895,19 @@ def restore_scene(data):
             if r.get('origin') == 'user'}
     created, moved = [], []
     previous_weather, previous_view = world.get_weather(), world.get_spectator().get_transform()
+    # Validate native properties before the first spawn, move or material edit.
+    weather = world.get_weather()
+    for key, value in document.get('weather', {}).items():
+        if not hasattr(weather, key): raise ValueError(f'Unsupported weather property: {key}')
+        setattr(weather, key, value)
+    view = document.get('spectator')
+    restored_view = carla.Transform(carla.Location(**view['location']), carla.Rotation(**view['rotation'])) if view else None
+    for obj in document['objects']:
+        actor = live.get(obj['stable_id'])
+        if actor is not None:
+            old = provenance[str(actor.id)]
+            if old.get('type_id') != actor.type_id or old.get('blueprint_id', actor.type_id) != obj['blueprint_id']:
+                raise RuntimeError('Stable ID blueprint mismatch; refusing to update another object')
     try:
         for obj in document['objects']:
             actor = live.get(obj['stable_id'])
@@ -911,19 +924,13 @@ def restore_scene(data):
                 _provenance.bind(world.id, actor, obj['stable_id'], blueprint_id=obj['blueprint_id'],
                                  spawn_options=obj.get('spawn_options', {}))
                 live[obj['stable_id']] = actor
-        weather = world.get_weather()
-        for key, value in document.get('weather', {}).items():
-            if not hasattr(weather, key) or not isinstance(value, (int,float)) or not math.isfinite(value):
-                raise ValueError('Invalid weather property')
-            setattr(weather, key, value)
         world.set_weather(weather)
         if material_transaction:
             material_transaction.apply()
         if visibility_transaction:
             visibility_transaction.apply()
-        view = document.get('spectator')
-        if view:
-            world.get_spectator().set_transform(carla.Transform(carla.Location(**view['location']), carla.Rotation(**view['rotation'])))
+        if restored_view:
+            world.get_spectator().set_transform(restored_view)
     except Exception as original:
         recovery_errors = []
         if visibility_transaction:

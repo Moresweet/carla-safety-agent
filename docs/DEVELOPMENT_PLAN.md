@@ -82,3 +82,11 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - `tools/regression_scene_visibility.py` 实机通过：隐藏加油站、保存、桥接重启、撤销显示、重做隐藏；已人工查看三张实景图片，最后恢复原场景。证据 `runs/validation/scene-visibility-20260908/`，scene_id `f0e55d25f54f4f23905245d2d4f31ec9`。
 - 浏览器点击 Hide object 后刷新页面，仍显示 `[hidden]` 与 Restore object；点击恢复后隐藏标记清除。TypeScript 和生产构建通过。闭环可见性共享代码已有单测，但修改后尚未重新实跑闭环隐藏命令。
 - S2 仍未完成：旧式车辆/行人纹理持久化、逐对象编辑命令撤销、跨地图恢复以及相关失败矩阵仍待实现/验收。
+
+### 2026-09-08 场景恢复预检与逻辑身份保护
+
+- 场景校验覆盖完整观察视角、天气数值、schema 版本、空对象列表及生成参数；拒绝布尔数值、非有限数、零缩放和未知生成参数。
+- 原生天气属性、相机变换与所有已有对象的类型一致性在首个世界修改之前检查；单测确认未知天气字段时没有 spawn/move/weather 写入。此项不能外推为 CARLA 进程异常退出时的完整事务保证。
+- 来源重新分类保留同一对象的 Blender blueprint、缩放参数与稳定 ID；运行时 ID 被不同类型复用时分配新逻辑 ID，避免继承旧资产信息。同类型 ID 复用仍依赖 CARLA episode 生命周期隔离。
+- 86 项 Python 测试通过。实机 `tools/regression_scene_versions.py` 通过，actor 188→189，stable_id `1e71ed50286347e7bcf04d5e34813483`，位置保持 x=393.098 / y=-228.088 / z=2.5。证据 `runs/validation/scene-versions-20260908.json`；测试 actor 已清理。
+- 后续继续 S2 剩余恢复能力及 S4 不依赖端到端模型的统一采集；阶段验收门槛保持不变。

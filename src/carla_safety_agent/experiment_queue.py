@@ -134,6 +134,9 @@ class ExperimentQueue:
             execution = journal.read_execution(attempt['execution_id'])
             if execution.get('run_id') != attempt['execution_id']:
                 raise ValueError('Execution identity mismatch')
+            request = execution.get('configuration', {}).get('request', {})
+            if request.get('batch_job_id') != job_id or request.get('batch_attempt_id') != attempt_id:
+                raise ValueError('Execution does not belong to this batch attempt')
             terminal = execution.get('state')
             if terminal not in ('completed', 'failed', 'stopped'):
                 return {'reconciled': False, 'state': terminal}

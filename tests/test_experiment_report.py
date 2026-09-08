@@ -28,6 +28,19 @@ def test_pending_retry_does_not_inherit_old_failure(tmp_path):
     assert row['execution_state'] == 'pending'
 
 
+@pytest.mark.parametrize('wrong', ['job', 'attempt'])
+def test_valid_execution_cannot_be_assigned_to_wrong_queue_job(tmp_path, wrong):
+    q = ExperimentQueue(tmp_path)
+    q.create({**{a: [{'id': 'base', 'configuration': {}}] for a in ('scenes','models','weather','textures')}, 'seeds': [1]})
+    c = q.claim(); job, attempt = c['job_id'], c['attempt']['attempt_id']
+    q.update_attempt(job, attempt, execution_id='run')
+    request = {'batch_job_id': 'other' if wrong == 'job' else job,
+               'batch_attempt_id': 'other' if wrong == 'attempt' else attempt}
+    q.update_attempt(job, attempt, execution_id='run', outcome='completed', result={
+        'source': 'session_journal', 'execution': {'run_id': 'run', 'configuration': {'request': request}}})
+    with pytest.raises(ValueError, match='another batch'): summarize_queue(q.read())
+
+
 @pytest.mark.parametrize('defect', [None, 'execution', 'scenario', 'metric', 'outside'])
 def test_verified_metrics_identity_and_values(tmp_path, defect):
     import json

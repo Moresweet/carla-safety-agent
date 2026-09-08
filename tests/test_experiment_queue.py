@@ -64,6 +64,7 @@ def test_reconcile_requires_terminal_session_and_dead_process(tmp_path, monkeypa
     job, attempt = c['job_id'], c['attempt']['attempt_id']
     q.update_attempt(job, attempt, execution_id='run')
     record = {'run_id': 'run', 'state': status, 'process': identity, 'ended_at': 12,
+              'configuration': {'request': {'batch_job_id': job, 'batch_attempt_id': attempt}},
               'returncode': 0, 'error': None, 'outcome': {'benchmark_failed': True}}
     journal = SimpleNamespace(read_execution=lambda run: record)
     result = q.reconcile(job, attempt, journal)
@@ -84,6 +85,7 @@ def test_reconcile_observation_failure_retains_running_attempt(tmp_path, monkeyp
     job, attempt = c['job_id'], c['attempt']['attempt_id']
     q.update_attempt(job, attempt, execution_id='run')
     journal = SimpleNamespace(read_execution=lambda _: {'run_id': 'run', 'state': 'completed',
+        'configuration': {'request': {'batch_job_id': job, 'batch_attempt_id': attempt}},
         'process': {'pid': 123, 'start_ticks': '4'}, 'ended_at': 1, 'returncode': 0})
     with pytest.raises(PermissionError): q.reconcile(job, attempt, journal)
     assert q.read()['jobs'][0]['state'] == 'running'

@@ -104,6 +104,11 @@ def summarize_queue(state, results_root=None):
         execution = result.get('execution') or {}
         if execution and execution.get('run_id') != latest.get('execution_id'):
             raise ValueError('Report execution identity mismatch')
+        if execution:
+            request = execution.get('configuration', {}).get('request', {})
+            if (request.get('batch_job_id') != job['job_id'] or
+                    request.get('batch_attempt_id') != latest['attempt_id']):
+                raise ValueError('Execution belongs to another batch job or attempt')
         rows.append({'job_id': job['job_id'],
             'variants': {axis: config[axis]['id'] for axis in ('scenes','models','weather','textures')},
             'seed': config['seeds'], 'execution_state': status, 'attempt_count': len(attempts),

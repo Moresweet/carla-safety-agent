@@ -2,6 +2,7 @@
 import copy
 import threading
 import time
+import uuid
 from .batch_runner import run_batch
 from .scene_store import identifier
 
@@ -26,14 +27,15 @@ class BatchService:
                 raise ValueError('A batch scheduler is already active')
             self.cancelled = threading.Event()
             self.record = {'state': 'running', 'batch_id': batch_id,
+                           'scheduler_id': uuid.uuid4().hex,
                            'started_at': time.time(), 'last_step': None}
             self.worker = threading.Thread(target=self._run, args=(batch_id,), daemon=True)
             self.worker.start()
             return copy.deepcopy(self.record)
 
-    def cancel(self, batch_id):
+    def cancel(self, batch_id, scheduler_id):
         with self.lock:
-            if self.record['batch_id'] != batch_id:
+            if self.record['batch_id'] != batch_id or self.record.get('scheduler_id') != scheduler_id or not scheduler_id:
                 raise ValueError('Scheduler batch ownership changed')
             if self.worker is not None and self.worker.is_alive():
                 self.cancelled.set()

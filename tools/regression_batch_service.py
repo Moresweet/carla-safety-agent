@@ -37,7 +37,8 @@ def main():
         started = request('batches/scheduler', {'batch_id': batch_id, 'action': 'start'})
         assert started['scheduler']['batch_id'] == batch_id
         for payload in ({'batch_id': batch_id, 'action': 'start'},
-                        {'batch_id': 'wrong-owner', 'action': 'cancel'}):
+                        {'batch_id': 'wrong-owner', 'action': 'cancel',
+                         'scheduler_id': started['scheduler']['scheduler_id']}):
             try:
                 request('batches/scheduler', payload)
             except HTTPError as exc:
@@ -72,7 +73,8 @@ def main():
     finally:
         status = request('batches/scheduler')['scheduler']
         if status['batch_id'] == batch_id and status['state'] == 'running':
-            request('batches/scheduler', {'batch_id': batch_id, 'action': 'cancel'})
+            request('batches/scheduler', {'batch_id': batch_id, 'action': 'cancel',
+                                         'scheduler_id': status['scheduler_id']})
             deadline = time.monotonic()+40
             while time.monotonic() < deadline:
                 if request('batches/scheduler')['scheduler']['state'] != 'running':

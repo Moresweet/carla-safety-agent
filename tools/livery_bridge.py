@@ -495,10 +495,13 @@ BATCH_SERVICE = BatchService(lambda batch_id: batch_control({'batch_id': batch_i
 
 
 def batch_scheduler_control(data):
-    if not isinstance(data, dict) or set(data) != {'batch_id', 'action'}:
-        raise ValueError('Scheduler control requires batch_id and action')
+    if not isinstance(data, dict):
+        raise ValueError('Scheduler control must be an object')
+    required = {'batch_id', 'action'} | ({'scheduler_id'} if data.get('action') == 'cancel' else set())
+    if set(data) != required:
+        raise ValueError('Scheduler control fields are missing or unexpected')
     if data['action'] == 'cancel':
-        return {'ok': True, 'scheduler': BATCH_SERVICE.cancel(data['batch_id'])}
+        return {'ok': True, 'scheduler': BATCH_SERVICE.cancel(data['batch_id'], data['scheduler_id'])}
     if data['action'] != 'start':
         raise ValueError('Unknown scheduler action')
     BATCHES.read(data['batch_id'])

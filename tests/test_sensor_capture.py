@@ -140,6 +140,14 @@ def test_standalone_capture_records_real_rig_arrays_without_model_claim(tmp_path
     from pathlib import Path
     checker = Path(__file__).resolve().parents[1]/'tools/validate_capture_dataset.py'
     subprocess.run([sys.executable,str(checker),str(capture.run)],check=True)
+    run_path=capture.run
+    capture.request=lambda:{'recording':True,'id':'record','every':1,'max_frames':1}
+    capture.samples={name:{13:value} for name,value in samples.items()}
+    capture.process_frame(13,SimpleNamespace(steer=0,throttle=0,brake=1))
+    assert capture.run is None and capture.stop_reason=='frame_limit'
+    bounded_manifest=json.loads((run_path/'manifest.json').read_text())
+    assert bounded_manifest['status']=='saved_limit' and bounded_manifest['frame_count']==1
+    capture.run=run_path  # Continue corruption tests against the committed sample.
     # The validator must reject a raw archive missing a camera, even if its PNG exists.
     with np.load(folder/'sensor_input.npz') as archive:
         arrays = {name:archive[name] for name in archive.files if name != 'CAM_FRONT'}

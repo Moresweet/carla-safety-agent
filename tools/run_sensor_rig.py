@@ -75,6 +75,9 @@ def main():
             report.update(frames=report['frames']+1,recorded_frames=capture.count,
                           run_id=getattr(capture,'run_id',None),error=capture.error)
             atomic_json(runtime/'sensor-rig-status.json',report)
+            if getattr(capture,'stop_reason',None):
+                report['stop_reason']=capture.stop_reason
+                break  # Valid samples reached an explicit recording bound, not a process failure.
             if capture.error: raise RuntimeError(capture.error)
         report['stopped'] = stopped
     finally:

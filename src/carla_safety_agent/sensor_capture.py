@@ -167,6 +167,7 @@ class SensorCapture:
         self.started = time.time()
         self.last_request = request['id']
         self.sampling_every = int(request.get('every',5))
+        self.stop_reason = None
         self.execution_id = os.environ.get('CSA_EXECUTION_ID') or None
         atomic_json(self.run/'calibration.json', self.specs)
         self.manifest('recording')
@@ -186,6 +187,7 @@ class SensorCapture:
             sampling_every_frames=self.sampling_every,
             execution_id=self.execution_id,
             cleanup_errors=getattr(self,'cleanup_errors',[]),
+            stop_reason=getattr(self,'stop_reason',None),
             notes=[('model_input.npz contains exact pre-model arrays; RGB PNG is lossless RGB conversion'
                     if self.source == 'model-input' else
                     'sensor_input.npz contains raw rig RGB BGRA arrays; no model was invoked'),
@@ -284,6 +286,8 @@ class SensorCapture:
             self.skipped += 1
             return
         if self.count >= int(req.get('max_frames', 2000)) or self.bytes > 20*1024**3 or shutil.disk_usage(self.run).free < 1024**3:
+            self.stop_reason = ('frame_limit' if self.count >= int(req.get('max_frames',2000)) else
+                                'storage_limit' if self.bytes > 20*1024**3 else 'disk_reserve')
             self.error = 'Recording stopped at frame/storage limit; existing samples preserved'
             self.manifest('saved_limit')
             self.run = None

@@ -256,3 +256,8 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - SensorCapture.close 汇总 stop/destroy 异常及 destroy=false，继续清理其余传感器并保留失败句柄，清单记录 cleanup_errors / saved_cleanup_error；清单保存失败也返回错误并保留已写样本。
 - 独立采集进程将传感器清理错误和车辆 destroy=false 纳入退出失败报告，不再只凭 finally 执行完成宣称清理成功。模型包装路径仍继续其既有退出流程，清理问题写日志/清单，不以此证明模型全生命周期恢复完整。
 - 120 项 Python 测试通过，覆盖单个销毁失败不阻止其他清理和清单写入失败。真实传感器销毁故障注入、失败句柄重试与进程强杀残留恢复仍待验收。
+
+### 2026-09-08 采集容量上限退出分类
+
+- 检查确认 saved_limit 后 run=None，普通 close 不会覆盖上限清单；实际问题是独立采集把上限提示当作异常抛出。新增 stop_reason（frame_limit/storage_limit/disk_reserve），worker 达到明确边界后正常退出并保留原因，真实处理错误仍异常退出。
+- 120 项测试通过，新增同一录制达到一帧上限后的断言：只保留一个样本、状态 saved_limit、原因 frame_limit，不续写第二帧。保留既有提示字段以兼容页面；正常限额退出实机验证仍待完成。

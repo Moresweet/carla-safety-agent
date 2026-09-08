@@ -13,6 +13,8 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('archive',type=Path)
     parser.add_argument('--registered-job',help='Resume spawn verification without repeating asset import')
+    parser.add_argument('--expected-size',nargs=3,type=float,metavar=('X','Y','Z'),
+                        help='Optional expected native bounding-box dimensions in metres')
     args=parser.parse_args()
     assert request('/system/preflight')['ready']
     assert request('/batches/scheduler')['scheduler']['state']!='running'
@@ -49,11 +51,16 @@ def main():
         assert abs(actor.get_location().x-393.098)<.02
         bounds={key:float(getattr(actor.bounding_box.extent,key))*2 for key in ('x','y','z')}
         print(json.dumps({'phase':'native_bounds','dimensions_m':bounds,'attributes':actor.attributes}),flush=True)
+        if args.expected_size:
+            assert all(abs(bounds[axis]-size)<.01 for axis,size in zip(('x','y','z'),args.expected_size)), bounds
         request('/focus/actor',{'actor_id':actor_id})
         (output/'spawned.jpg').write_bytes(request('/scene/preview',raw=True))
         result={'passed':True,'job_id':job['job_id'],'blueprint_id':imported['blueprint_id'],
             'mesh_path':imported['mesh_path'],'actor_id':actor_id,'import_warning':imported.get('warning'),
             'import_exit_rechecked':not bool(args.registered_job),
+            'import_returncode':imported.get('import_returncode'),
+            'import_clean_exit_verified':not bool(args.registered_job) and imported.get('import_returncode')==0,
+            'expected_dimensions_m':args.expected_size,
             'scope':'Native actor identity, position and cleanup only; visual rendering not verified',
             'dimensions_m':bounds,
             'retained_unreal_asset':True,'visual_review_required':True}

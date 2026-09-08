@@ -1181,3 +1181,16 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 扩展probe_commandlet.py支持CSA_PROBE_ASSET指定已有网格，只加载不保存。GDB设置__cxa_pure_virtual断点，加载CSA_MigratedBarrier_16367e2f69，UE子进程3811719正常退出，未触发断点。CarlaUE4_2.log第632/633行记录资产加载和探针完成。
 - GDB工具最终返回1来自退出后bt显示No stack，不是UE子进程失败。未向正在运行的CARLA附加调试器、未新增或覆盖资产。
 - 本次单次对照未复现仅加载触发退出崩溃；问题仍需在FBX导入/材质构建/保存操作中抓栈，不能排除时序相关。无根因修复声明，完整目标继续进行。
+
+### 2026-09-08 FBX退出释放调用栈与修复候选
+
+- 独立新资产CSA_DebugImport_fbc7b31c4b真实导入在__cxa_pure_virtual断点停住；栈为FBX FunctionRegistry注销 → FbxManager销毁 → FFbxImporter::CleanUp/析构 → UnrealEd共享库__cxa_finalize。证据 runs/validation/debug-import-fbc7b31c4b6747998280914df3d71edd/gdb.log。资产已保存但未注册，保留检查；未附加或切换正在运行的CARLA世界。
+- 本机源码中Load/UnloadFBxLibraries调用均被注释；新增可迁移fbx-importer-preexit.patch，在首次GetInstance时一次注册OnPreExit回调，提前调用现有DeleteInstance，避免依赖跨共享库静态析构顺序。已应用到此前干净的引擎源文件，补丁反向检查与diff检查通过。
+- 导入安全3项单测通过；正在增量编译UnrealEd，尚未以新二进制完成真实导入退出验证。当前只确认故障路径和修复候选，不标记崩溃已解决，也不将其等同于VAD历史崩溃。
+
+### 2026-09-08 FBX提前释放修复的原生验收
+
+- 单模块编译成功但缺失完整依赖链接，任务ed4da142a45d410986f7aae6878a6c7b启动即报FbxAMatrix析构符号缺失；随后完整UE4Editor构建成功（622动作），任务470495287674479087582d163a0a55d2因旧Carla模块不匹配未进入导入。再完成CarlaUE4Editor项目构建（24动作），未手改Build ID或忽略兼容检查。失败任务未注册、未生成测试Actor。
+- 匹配构建后两次独立导入任务1e21c11f01f04a568ed04d04f5c19f66、25bead6b5bc643a9af2d3c2b454e74e0均真实退出0、无import_warning，注册并生成成功。报告目录分别为runs/validation/blender-package-1e21c11f01f04a568ed04d04f5c19f66-2ed8fc40、blender-package-25bead6b5bc643a9af2d3c2b454e74e0-7c9ea41f。两次尺寸断言2.4×0.35×0.8米通过，Actor1635/1639均清理。
+- 已查看第一轮即时截图，护栏灰色；同一资产复用报告blender-package-1e21c11f01f04a568ed04d04f5c19f66-cee9e1d6截图显示蓝色护栏，Actor1637清理。观察与首次材质尚未就绪一致，但未独立证明原因；不能将首次即时视觉验收标为通过，后续需明确材质就绪机制。新资产留存可恢复使用，未覆盖旧资产。
+- 全部362项Python测试通过。本轮验证了已复现的FBX导入退出故障修复；当前运行世界未重启，预检Town04异步空闲。未覆盖纹理FBX、所有模型、重启后完整CARLA流程或跨场景压力测试，S1/S8及整体计划仍未完成。

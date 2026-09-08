@@ -1,0 +1,23 @@
+diff --git a/Engine/Source/Editor/UnrealEd/Private/Fbx/FbxMainImport.cpp b/Engine/Source/Editor/UnrealEd/Private/Fbx/FbxMainImport.cpp
+--- a/Engine/Source/Editor/UnrealEd/Private/Fbx/FbxMainImport.cpp
++++ b/Engine/Source/Editor/UnrealEd/Private/Fbx/FbxMainImport.cpp
+@@ -6,5 +6,6 @@
+ 
+ #include "CoreMinimal.h"
++#include "Misc/CoreDelegates.h"
+ #include "Misc/Paths.h"
+ #include "Misc/FeedbackContext.h"
+ #include "Modules/ModuleManager.h"
+@@ -556,6 +557,12 @@
+ //-------------------------------------------------------------------------
+ FFbxImporter* FFbxImporter::GetInstance()
+ {
++	// Destroy the SDK manager before shared-library static destructors run.
++	// FBX function creators may already be destroyed during that late phase.
++	static const FDelegateHandle PreExitHandle =
++		FCoreDelegates::OnPreExit.AddStatic(&FFbxImporter::DeleteInstance);
++	(void)PreExitHandle;
++
+ 	if (!StaticInstance.IsValid())
+ 	{
+ 		StaticInstance = MakeShareable( new FFbxImporter() );

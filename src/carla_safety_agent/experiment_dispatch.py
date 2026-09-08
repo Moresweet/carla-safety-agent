@@ -34,7 +34,8 @@ def _advance(queue, journal, scenario_root, request):
     try:
         config = claim['configuration']
         model = config['models']['configuration']
-        if model not in ({'action': 'rule-run'}, {'action': 'run', 'algorithm': 'uniad-tiny'}):
+        if model not in ({'action': 'rule-run'}, {'action': 'run', 'algorithm': 'uniad-tiny'},
+                         {'action': 'run', 'algorithm': 'vad'}):
             raise ValueError('Batch dispatcher model adapter is not implemented for this configuration')
         if config['textures']['configuration']:
             raise ValueError('Batch texture application adapter is not implemented')

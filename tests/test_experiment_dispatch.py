@@ -23,6 +23,17 @@ def test_unavailable_adapter_fails_without_starting(tmp_path):
     assert q.read()['jobs'][0]['state'] == 'failed'
 
 
+def test_vad_batch_rejects_unrecognized_launch_options(tmp_path):
+    q = queue(tmp_path, {'action': 'run', 'algorithm': 'vad', 'command': 'untrusted'})
+    calls = []
+    def request(path, data=None):
+        calls.append(path)
+        return {'ready': True}
+    result = advance_queue(q, None, tmp_path/'scenarios', request)
+    assert result['action'] == 'preparation_failed'
+    assert calls == ['system/preflight']
+
+
 def test_reserved_attempt_never_redispatches(tmp_path):
     q = queue(tmp_path, {'action': 'rule-run'}); q.claim()
     journal = SimpleNamespace(find_batch_attempt=lambda *args: None)
@@ -59,9 +70,10 @@ def test_pause_preserves_recovery_of_current_attempt(tmp_path):
     assert q.read()['paused'] is True
 
 
-def test_uniad_dispatch_preserves_model_and_capture_request(tmp_path, monkeypatch):
+@pytest.mark.parametrize('algorithm', ['uniad-tiny', 'vad'])
+def test_model_dispatch_preserves_model_and_capture_request(tmp_path, monkeypatch, algorithm):
     from carla_safety_agent import experiment_dispatch
-    model = {'action': 'run', 'algorithm': 'uniad-tiny'}
+    model = {'action': 'run', 'algorithm': algorithm}
     q = queue(tmp_path, model)
     monkeypatch.setattr(experiment_dispatch, 'materialize_scenario', lambda *args: {
         'scenario_path': '/local/plan.json', 'scenario_sha256': 'sha'})
@@ -72,6 +84,6 @@ def test_uniad_dispatch_preserves_model_and_capture_request(tmp_path, monkeypatc
         return {'execution_id': 'model-run'}
     journal = SimpleNamespace(find_batch_attempt=lambda *args: {'run_id': 'model-run'})
     assert advance_queue(q, journal, tmp_path, request)['action'] == 'started'
-    assert requests[0]['action'] == 'run' and requests[0]['algorithm'] == 'uniad-tiny'
+    assert requests[0]['action'] == 'run' and requests[0]['algorithm'] == algorithm
     assert requests[0]['unified_capture'] is True
     assert q.read()['jobs'][0]['attempts'][0]['execution_id'] == 'model-run'

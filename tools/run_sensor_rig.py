@@ -76,6 +76,11 @@ def main():
         if capture:
             try: capture.close()
             except Exception as exc: errors.append(str(exc))
+        if ego and manager:
+            # Unregister before destruction: TM's worker may otherwise dereference
+            # the destroyed actor during asynchronous shutdown and abort natively.
+            try: ego.set_autopilot(False,8050)
+            except Exception as exc: errors.append(str(exc))
         if ego:
             try: ego.destroy()
             except Exception as exc: errors.append(str(exc))

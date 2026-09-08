@@ -1,6 +1,7 @@
 """One resumable scheduler step; no hidden background loop or automatic retry."""
 import fcntl
 from .experiment_scenario import materialize_scenario
+from .batch_capabilities import supported_configuration
 
 
 def advance_queue(queue, journal, scenario_root, request):
@@ -34,9 +35,7 @@ def _advance(queue, journal, scenario_root, request):
     try:
         config = claim['configuration']
         model = config['models']['configuration']
-        if model not in ({'action': 'rule-run'}, {'action': 'run', 'algorithm': 'uniad-tiny'},
-                         {'action': 'run', 'algorithm': 'vad'}, {'action': 'run', 'algorithm': 'tcp'},
-                         {'action': 'run', 'algorithm': 'admlp'}, {'action': 'run', 'algorithm': 'uniad-base'}):
+        if not supported_configuration(model):
             raise ValueError('Batch dispatcher model adapter is not implemented for this configuration')
         if config['textures']['configuration']:
             raise ValueError('Batch texture application adapter is not implemented')

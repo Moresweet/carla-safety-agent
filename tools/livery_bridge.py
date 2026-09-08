@@ -39,6 +39,7 @@ from carla_safety_agent.session import SessionJournal
 from carla_safety_agent.batch_catalog import BatchCatalog
 from carla_safety_agent.batch_control import control_batch
 from carla_safety_agent.batch_service import BatchService
+from carla_safety_agent.batch_capabilities import batch_capabilities
 from carla_safety_agent.experiment_report import summarize_queue, compare_variants
 from carla_safety_agent.scene_store import SceneStore, validate_scene
 from carla_safety_agent.material_library import MaterialLibrary, MaterialTransaction, exact_environment_target
@@ -1755,6 +1756,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         request = urlparse(self.path)
         params = parse_qs(request.query)
+        if request.path == '/batches/capabilities':
+            self._headers()
+            self.wfile.write(json.dumps({'ok': True, **batch_capabilities(
+                algorithm_catalog(BENCH2DRIVE_ZOO, BENCH2DRIVE_TCP_ZOO))}).encode())
+            return
         if request.path == '/batches/scheduler':
             self._headers()
             self.wfile.write(json.dumps({'ok': True, 'scheduler': BATCH_SERVICE.status()}).encode())

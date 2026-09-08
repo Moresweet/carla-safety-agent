@@ -48,6 +48,7 @@ def test_batch_http_create_list_report_and_invalid_id(tmp_path):
     from urllib.parse import urlparse, parse_qs
     from carla_safety_agent.experiment_report import summarize_queue, compare_variants
     from carla_safety_agent.batch_control import control_batch
+    from carla_safety_agent.batch_capabilities import batch_capabilities
     source = Path(__file__).resolve().parents[1]/'tools/livery_bridge.py'
     node = next(n for n in ast.parse(source.read_text()).body
                 if isinstance(n, ast.ClassDef) and n.name == 'Handler')
@@ -55,6 +56,9 @@ def test_batch_http_create_list_report_and_invalid_id(tmp_path):
     env = {'BaseHTTPRequestHandler': object, 'urlparse': urlparse, 'parse_qs': parse_qs,
            'json': json, 'BATCHES': catalog, 'PROJECT_ROOT': tmp_path,
            'summarize_queue': summarize_queue, 'compare_variants': compare_variants}
+    env.update(batch_capabilities=batch_capabilities, BENCH2DRIVE_ZOO=tmp_path,
+               BENCH2DRIVE_TCP_ZOO=tmp_path,
+               algorithm_catalog=lambda *args: [{'id': 'vad', 'status': 'available'}])
     env['batch_control'] = lambda data: control_batch(
         catalog, data, None, tmp_path/'scenarios',
         lambda *args: pytest.fail('Pause/resume must not dispatch'))
@@ -73,6 +77,10 @@ def test_batch_http_create_list_report_and_invalid_id(tmp_path):
             handler.rfile = io.BytesIO(payload)
             handler.do_POST()
         return json.loads(handler.wfile.getvalue())
+    capabilities = request('/batches/capabilities')
+    assert capabilities['ok'] and len(capabilities['models']) == 6
+    assert capabilities['preflight_required'] is True
+    assert not catalog.root.exists()
     created = request('/batches/create', dimensions())
     assert created['ok'] and created['dispatched'] is False
     batch_id = created['batch_id']

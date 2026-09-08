@@ -1018,8 +1018,13 @@ def _spawn_editor_object(blueprint_id: str, transform_data: dict) -> dict:
     if generated:
         blueprint.set_attribute("mesh_path", generated["mesh_path"])
         blueprint.set_attribute("mass", str(float(transform_data.get("mass", 0))))
-        blueprint.set_attribute("scale", str(float(
-            transform_data.get("scale", generated.get("default_scale", 100.0)))))
+        scale = str(float(transform_data.get("scale", generated.get("default_scale", 100.0))))
+        blueprint.set_attribute("scale", scale)
+        # Axis attributes have explicit defaults in the patched mesh factory;
+        # they otherwise shadow the legacy uniform scale value.
+        for axis in ('scale_x', 'scale_y', 'scale_z'):
+            if blueprint.has_attribute(axis):
+                blueprint.set_attribute(axis, scale)
     if not generated and not blueprint_id.startswith(("vehicle.", "walker.", "static.prop.")):
         raise RuntimeError("Only vehicle, walker, and static.prop blueprints are spawnable")
     location = transform_data.get("location", {})

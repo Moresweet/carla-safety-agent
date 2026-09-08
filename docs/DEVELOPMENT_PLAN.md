@@ -1156,3 +1156,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 真实源包导入任务7848ba817eae4e3fb2855185be7a897e，新资产CSA_MigratedBarrier_f9e6111014，生成generated.prop.csa_migratedbarrier_f9e6111014注册记录。没有覆盖原资产，新Unreal资产保留供后续验证。导入进程写出新结果后非零退出，警告必须保留，不算干净退出。
 - 回归脚本初次和首次复用检查在旧客户端get_actor缓存处失败；新客户端确认无实际残留。改用新世界snapshot.find与全新客户端Actor集合后，复用同一注册资产验证通过（没有再次导入）。最终测试Actor1627已清理；报告 runs/validation/blender-package-7848ba817eae4e3fb2855185be7a897e-9f426f62/report.json。复用报告的import_warning=null不推翻首次导入警告，后续脚本新增import_exit_rechecked字段标明未重测退出。
 - 已查看spawned.jpg：未清晰显示预期护栏，原生Actor网格路径与位置存在仅证明接口链路，不能证明尺度/渲染正确。下一步必须排查尺寸、包导入后渲染与导入退出警告；360项单测通过不替代这些视觉验收，整体计划未完成。
+
+### 2026-09-08 迁移资产过小的缩放覆盖修复
+
+- 真实测量发现护栏尺寸仅0.024×0.0035×0.008米；Actor的scale=100但scale_x/y/z均为1。源码StaticMeshFactory优先读取显式三轴属性，其默认值覆盖旧统一缩放。桥接生成自定义资产时现同步设置可用三轴属性，兼容无这些属性的旧Blueprint。
+- 空闲重载桥接PID3796831后复用同一资产，无再次Unreal导入。实机尺寸变为2.4000001×0.3500001×0.8000001米，三个轴均100；Actor1631清理确认通过。证据 runs/validation/blender-package-7848ba817eae4e3fb2855185be7a897e-935cdcf8/report.json。
+- 已查看spawned.jpg，蓝色长方体护栏清晰可见，黑色外框是聚焦调试框。361项测试通过，新增三轴缩放设置回归。此轮解决当前生成路径尺寸问题，首次Unreal导入非零退出警告仍待排查，未宣称完整资产迁移全部通过。

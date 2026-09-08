@@ -47,12 +47,15 @@ def main():
         assert actor is not None
         assert actor.attributes.get('mesh_path')==imported['mesh_path']
         assert abs(actor.get_location().x-393.098)<.02
+        bounds={key:float(getattr(actor.bounding_box.extent,key))*2 for key in ('x','y','z')}
+        print(json.dumps({'phase':'native_bounds','dimensions_m':bounds,'attributes':actor.attributes}),flush=True)
         request('/focus/actor',{'actor_id':actor_id})
         (output/'spawned.jpg').write_bytes(request('/scene/preview',raw=True))
         result={'passed':True,'job_id':job['job_id'],'blueprint_id':imported['blueprint_id'],
             'mesh_path':imported['mesh_path'],'actor_id':actor_id,'import_warning':imported.get('warning'),
             'import_exit_rechecked':not bool(args.registered_job),
             'scope':'Native actor identity, position and cleanup only; visual rendering not verified',
+            'dimensions_m':bounds,
             'retained_unreal_asset':True,'visual_review_required':True}
     finally:
         if actor_id is not None:request('/objects/delete',{'actor_id':actor_id})

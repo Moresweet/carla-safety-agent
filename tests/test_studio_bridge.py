@@ -18,6 +18,20 @@ def functions(*names, **environment):
     return environment
 
 
+def test_generated_mesh_uniform_scale_sets_axis_overrides():
+    attributes = {}
+    blueprint = SimpleNamespace(set_attribute=lambda key,value:attributes.update({key:value}),
+                                has_attribute=lambda key:True)
+    world = SimpleNamespace(get_blueprint_library=lambda:SimpleNamespace(find=lambda _:blueprint))
+    def stop_before_spawn(**kwargs): raise RuntimeError('parameters observed')
+    env = functions('_spawn_editor_object', connect_world=lambda:world,
+        BLENDER=SimpleNamespace(registry=lambda:{'generated.prop.test':{'mesh_path':'/Game/Test','default_scale':100}}),
+        carla=SimpleNamespace(Location=stop_before_spawn))
+    with pytest.raises(RuntimeError,match='parameters observed'):
+        env['_spawn_editor_object']('generated.prop.test',{})
+    assert all(attributes[key]=='100.0' for key in ('scale','scale_x','scale_y','scale_z'))
+
+
 def test_invalid_actor_update_does_not_query_or_mutate_world():
     def forbidden(*args,**kwargs):
         pytest.fail('Invalid transform must be rejected before native or worker access')

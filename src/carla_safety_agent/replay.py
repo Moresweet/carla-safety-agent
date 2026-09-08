@@ -56,3 +56,35 @@ def replay_projection(root, run_id, frame, camera):
             'pixels':result['pixels'][::stride].tolist(),'depth':result['depth'][::stride].tolist(),
             'point_indices':result['indices'][::stride].tolist(),
             'occlusion_checked':False,'sample_stride':stride}
+
+
+def replay_trajectory(root, run_id, frame, horizon_s=5.0):
+    """Recorded ego positions, not predictions or interpolated future ground truth."""
+    import numpy as np
+    if isinstance(horizon_s,bool) or not isinstance(horizon_s,(int,float)) or not 0<horizon_s<=30:
+        raise ValueError('Trajectory horizon must be 0..30 seconds')
+    entries=replay_index(root,run_id)['frames']
+    current=next((e for e in entries if e['frame']==int(frame)),None)
+    if current is None: raise ValueError('Unknown frame')
+    metadata=json.loads(replay_file(root,run_id,frame,'frame.json').read_text())
+    pose=np.asarray(metadata['ego']['matrix'],dtype=float)
+    if pose.shape!=(4,4) or not np.isfinite(pose).all(): raise ValueError('Invalid ego pose')
+    try: inverse=np.linalg.inv(pose)
+    except np.linalg.LinAlgError as exc: raise ValueError('Invalid ego pose') from exc
+    timestamp=float(metadata['timestamp'])
+    if not np.isfinite(timestamp): raise ValueError('Invalid timestamp')
+    selected=[e for e in entries if abs(float(e['timestamp'])-timestamp)<=horizon_s]
+    if len(selected)>2000: raise ValueError('Trajectory window exceeds 2000 samples')
+    history,future=[],[]
+    for entry in selected:
+        record=json.loads(replay_file(root,run_id,entry['frame'],'frame.json').read_text())
+        matrix=np.asarray(record['ego']['matrix'],dtype=float)
+        if matrix.shape!=(4,4) or not np.isfinite(matrix).all(): raise ValueError('Invalid recorded ego pose')
+        dt=float(record['timestamp'])-timestamp
+        if not np.isfinite(dt) or abs(dt)>horizon_s: raise ValueError('Index timestamp mismatch')
+        xyz=(inverse @ matrix[:,3])[:3].tolist()
+        point={'frame':entry['frame'],'dt_s':dt,'xyz_m':xyz}
+        (history if dt<=0 else future).append(point)
+    return {'frame':int(frame),'history':history,'future':future,'source':'recorded_ego_pose',
+            'coordinates':'current ego CARLA x forward, y right, z up',
+            'interpolated':False,'horizon_s':horizon_s}

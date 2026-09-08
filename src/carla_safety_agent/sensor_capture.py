@@ -30,6 +30,21 @@ def atomic_json(path, value):
     tmp.replace(path)
 
 
+def actor_ground_truth(actor):
+    """Preserve native box offsets/rotation; extent alone is not a world box."""
+    transform = actor.get_transform()
+    box = actor.bounding_box
+    return {'id': actor.id, 'type': actor.type_id, 'matrix': transform.get_matrix(),
+            'extent': vars_vector(box.extent),
+            'bounding_box': {
+                'location': vars_vector(box.location),
+                'rotation': {key: float(getattr(box.rotation, key))
+                             for key in ('pitch', 'yaw', 'roll')},
+                'extent': vars_vector(box.extent),
+                'world_vertices': [vars_vector(v) for v in box.get_world_vertices(transform)],
+                'coordinates': 'CARLA world, metres; local box pose relative to actor'}}
+
+
 def depth_meters(bgra):
     a = np.asarray(bgra, dtype=np.float32)
     return ((a[..., 2] + 256*a[..., 1] + 65536*a[..., 0]) * (1000.0/16777215.0)).astype(np.float32)
@@ -345,8 +360,7 @@ class SensorCapture:
             Image.fromarray(bev_preview(aux['LIDAR'])).save(folder/'BEV_POINTS.png')
         if 'BEV_RGB' in aux:
             Image.fromarray(aux['BEV_RGB'][:, :, :3][:, :, ::-1]).save(folder/'BEV_RGB.png')
-        metadata['actors'] = [{'id': a.id, 'type': a.type_id, 'matrix': a.get_transform().get_matrix(),
-            'extent': vars_vector(a.bounding_box.extent)} for a in self.world.get_actors()
+        metadata['actors'] = [actor_ground_truth(a) for a in self.world.get_actors()
             if a.type_id.startswith(('vehicle.', 'walker.', 'static.prop.')) and a.get_location().distance(self.ego.get_location()) < 80]
         atomic_json(folder/'frame.json', metadata)
         self.frame_index.append({'frame': frame, 'timestamp': metadata['timestamp'], 'path': str(folder.relative_to(self.run))})

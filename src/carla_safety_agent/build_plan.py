@@ -37,13 +37,17 @@ def build_plan(spec: ScenarioSpec) -> BuildPlan:
         scenario_id=spec.scenario_id,
         interaction=spec.family,
         map_name=spec.map_name,
-        actors=(spec.ego.__dict__,) + ((adversary.__dict__,) if adversary else ()),
-        generated_assets=tuple(asset.__dict__ for asset in spec.generated_assets),
+        actors=tuple(asdict(actor) for actor in (spec.ego, *spec.adversaries)),
+        generated_assets=tuple(asdict(asset) for asset in spec.generated_assets),
         generated_map=asdict(spec.generated_map) if spec.generated_map else None,
         trigger={
             "type": "distance",
             "threshold_m": adversary.trigger_distance_m if adversary else None,
             "action": adversary.behavior if adversary else "static_hazard",
+            "actors": [
+                {"role": actor.role, "threshold_m": actor.trigger_distance_m,
+                 "action": actor.behavior} for actor in spec.adversaries
+            ],
         },
         render={"camera": "ego_chase_rgb", "width": 1280, "height": 720, "every_n_frames": 5},
         diagnostics=tuple(diagnostics),

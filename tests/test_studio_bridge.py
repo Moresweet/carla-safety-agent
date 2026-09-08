@@ -591,3 +591,21 @@ def test_generated_run_results_are_distinct_for_identical_routes(tmp_path):
     assert env['results_path']!=first
     assert env['results_path'].parent==tmp_path/'runs/uniad'
     assert first.read_text()=='previous result'
+
+
+def test_compile_exposes_review_of_exact_archived_configuration(tmp_path):
+    from dataclasses import replace
+    from carla_safety_agent.natural_language import NaturalLanguageCompiler
+    from carla_safety_agent.scenario_archive import archive_scenario, read_verified_scenario
+    from carla_safety_agent.build_plan import build_plan
+    env=functions('compile_scenario',NaturalLanguageCompiler=NaturalLanguageCompiler,
+                  replace=replace,PROJECT_ROOT=tmp_path,archive_scenario=archive_scenario,build_plan=build_plan)
+    result=env['compile_scenario']({'description':'Town04 前车急刹，自车 5 m/s','max_duration_s':2})
+    document,digest=read_verified_scenario(result['scenario_path'])
+    assert result['plan_review']['scenario_sha256']==digest
+    assert result['plan_review']['oracle']==document['oracle']
+    assert result['plan_review']['environment']==document['environment']
+    assert result['plan_review']['oracle']['max_duration_s']==2
+    assert result['build_plan']['map_name']==document['map_name']
+    assert result['build_plan']['trigger']['action']=='hard_brake'
+    assert result['plan_review']['limitations']

@@ -34,6 +34,7 @@ from carla_safety_agent.uv_audit import audit_uv
 from carla_safety_agent.replay import replay_index, replay_file, replay_projection, replay_trajectory, replay_events
 from carla_safety_agent.natural_language import NaturalLanguageCompiler
 from carla_safety_agent.scenario_archive import archive_scenario, read_verified_scenario
+from carla_safety_agent.build_plan import build_plan
 from carla_safety_agent.session import SessionJournal
 from carla_safety_agent.scene_store import SceneStore, validate_scene
 from carla_safety_agent.material_library import MaterialLibrary, MaterialTransaction, exact_environment_target
@@ -568,6 +569,18 @@ def compile_scenario(data: dict, execute: bool = False) -> dict:
     scenario_path, digest = archive_scenario(catalog, scenario.to_dict())
     response["scenario_path"] = str(scenario_path)
     response["scenario_sha256"] = digest
+    response['build_plan'] = build_plan(scenario).to_dict()
+    response['plan_review'] = {
+        'scenario_sha256': digest,
+        'scope': 'compiled_scenario',
+        'environment': scenario.to_dict()['environment'],
+        'oracle': scenario.to_dict()['oracle'],
+        'limitations': [
+            'Deterministic supported-description compiler, not arbitrary 3D scene generation',
+            'Generated assets describe procedural geometry; this response does not perform a Blender import',
+            'Build-plan render settings describe the preview, not the selected model sensor contract',
+        ],
+    }
     if execute:
         output = PROJECT_ROOT / ".runtime" / "generated-scenarios"
         result = CarlaAdapter(HOST, CARLA_PORT, 120.0).run(

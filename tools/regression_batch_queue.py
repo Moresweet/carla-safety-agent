@@ -124,10 +124,10 @@ def main():
             request('scenario/stop', {'run_id': session['run_id']})
             wait_terminal(session['run_id'])
         if args.weather_ab and request_data.get('batch_attempt_id') in attempts:
-            import carla
-            client = carla.Client('127.0.0.1', 2000); client.set_timeout(10)
-            restored = restore_test_weather(q.read(), request('session/status')['session'], journal, client.get_world())
-            print(json.dumps({'test_weather_restored': restored}), flush=True)
+            executions = [a['execution_id'] for j in q.read()['jobs'] for a in j['attempts'] if a.get('execution_id')]
+            restored = request('session/restore-weather', {'run_id': session['run_id'], 'source_run_id': executions[0]})
+            assert restored['weather_restored'] is True
+            print(json.dumps({'test_weather_restored': True}), flush=True)
     (root/'report.json').write_text(json.dumps(report, indent=2))
     print(json.dumps(report), flush=True)
 

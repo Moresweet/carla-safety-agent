@@ -460,6 +460,33 @@ def start_e2e(data: dict) -> dict:
         return {"ok": True, "job": dict(_e2e_job), 'execution_id': execution_id, 'replayed': False}
 
 
+@simulation_operation
+def restore_execution_weather(data):
+    from carla_safety_agent.scene_store import identifier, finite_number
+    expected = identifier(data.get('run_id'))
+    source = identifier(data.get('source_run_id'))
+    current = SESSION.snapshot()
+    if current.get('run_id') != expected or current.get('state') not in ('completed', 'failed', 'stopped'):
+        raise ValueError('Current execution changed or is not terminal')
+    if evaluation_active():
+        raise ValueError('An evaluation still owns the world')
+    original = SESSION.read_execution(source)['configuration']['starting_scene']
+    world = connect_world()
+    if world.get_settings().synchronous_mode or world.get_map().name != original['map']:
+        raise ValueError('World is synchronous or map differs from saved weather')
+    values = original['weather']
+    weather = world.get_weather()
+    if not isinstance(values, dict) or not values or any(not hasattr(weather, k) or not finite_number(v) for k, v in values.items()):
+        raise ValueError('Invalid saved weather')
+    for key, value in values.items():
+        setattr(weather, key, value)
+    world.set_weather(weather)
+    observed = world.get_weather()
+    if any(abs(getattr(observed, k)-v) >= 1e-4 for k, v in values.items()):
+        raise RuntimeError('Weather restoration not confirmed')
+    return {'ok': True, 'run_id': expected, 'source_run_id': source, 'weather_restored': True}
+
+
 def stop_sensor_rig(data):
     with _e2e_lock:
         current = SESSION.snapshot()
@@ -1905,7 +1932,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "/scenario/compile", "/scenario/run", "/scenario/evaluate", '/scenario/execute-plan',
                                 "/blender/create", "/blender/retexture",
                                 "/blender/import", "/blender/spawn",
-                                "/e2e/start", "/e2e/stop", "/scenario/stop", "/collection/control", '/session/recover',
+                                "/e2e/start", "/e2e/stop", "/scenario/stop", "/collection/control", '/session/recover', '/session/restore-weather',
                                 '/scenes/save', '/scenes/restore', '/scenes/history', '/scenes/from-experiment',
                                 '/materials/apply', '/materials/restore', '/collection/start', '/collection/stop', '/collection/control'):
             self._headers(404)
@@ -1944,6 +1971,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = start_e2e(json.loads(payload or b"{}"))
             elif request.path == '/scenario/stop':
                 result = stop_rule_run(json.loads(payload or b'{}'))
+            elif request.path == '/session/restore-weather':
+                result = restore_execution_weather(json.loads(payload or b'{}'))
             elif request.path == "/e2e/stop":
                 result = stop_e2e()
             elif request.path == '/scenario/execute-plan':

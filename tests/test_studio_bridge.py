@@ -35,6 +35,25 @@ def test_repeated_batch_start_returns_before_native_access():
     assert result['replayed'] is True and result['execution_id'] == 'original'
 
 
+def test_weather_restore_rejects_stale_execution_before_rpc():
+    def forbidden(*args): pytest.fail('Stale weather restore touched world')
+    env = functions('restore_execution_weather', SESSION=SimpleNamespace(snapshot=lambda: {'run_id': 'new', 'state': 'completed'}),
+                    evaluation_active=forbidden, connect_world=forbidden)
+    with pytest.raises(ValueError): env['restore_execution_weather']({'run_id': 'old', 'source_run_id': 'source'})
+
+
+def test_weather_restore_uses_saved_values():
+    writes = []; weather = SimpleNamespace(precipitation=75.)
+    world = SimpleNamespace(get_settings=lambda: SimpleNamespace(synchronous_mode=False),
+        get_map=lambda: SimpleNamespace(name='Town04'), get_weather=lambda: weather,
+        set_weather=lambda w: writes.append(w.precipitation))
+    journal = SimpleNamespace(snapshot=lambda: {'run_id': 'current', 'state': 'completed'},
+        read_execution=lambda _: {'configuration': {'starting_scene': {'map': 'Town04', 'weather': {'precipitation': 0.}}}})
+    env = functions('restore_execution_weather', SESSION=journal, evaluation_active=lambda: False, connect_world=lambda: world)
+    assert env['restore_execution_weather']({'run_id': 'current', 'source_run_id': 'source'})['weather_restored']
+    assert writes == [0.]
+
+
 def test_texture_identity_rejects_same_model_ambiguity():
     env = functions('runtime_name_for_actor', _actor_object_names={})
     world = SimpleNamespace(get_names_of_all_objects=lambda:['BP_TeslaM3_C_1','BP_TeslaM3_C_2'])

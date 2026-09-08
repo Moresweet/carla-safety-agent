@@ -44,7 +44,7 @@ def replay_projection(root, run_id, frame, camera):
         raise ValueError('Calibration is outside dataset')
     calibration=json.loads(path.read_text())
     points=np.load(replay_file(root,run_id,frame,'LIDAR.npy'),allow_pickle=False,mmap_mode='r')
-    if points.ndim != 2 or points.shape[1] != 4 or len(points)>1000000:
+    if points.ndim != 2 or points.shape[1] != 4 or points.dtype.kind not in 'fiu' or len(points)>1000000:
         raise ValueError('Invalid or oversized point cloud')
     if 'LIDAR' not in calibration or camera not in calibration:
         raise ValueError('Missing recorded sensor calibration')

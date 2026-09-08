@@ -31,6 +31,18 @@ def test_projection_rejects_missing_extrinsics_and_accepts_empty_cloud():
     assert project_points(np.empty((0,4)),camera(),camera())['pixels'].shape==(0,2)
 
 
+@pytest.mark.parametrize('key,value', [('K',[[0,0,320],[0,320,180],[0,0,1]]),
+    ('ego_to_sensor',np.zeros((4,4)).tolist()),
+    ('sensor_to_optical',np.full((4,4),np.nan).tolist())])
+def test_projection_rejects_corrupt_calibration(key,value):
+    c=camera(); c[key]=value
+    with pytest.raises(ValueError): project_points([[10,0,0]],camera(),c)
+
+
+def test_projection_rejects_non_numeric_cloud():
+    with pytest.raises(ValueError): project_points([['x','y','z']],camera(),camera())
+
+
 def test_replay_projection_is_bounded_and_frame_confined(tmp_path):
     import json
     from carla_safety_agent.replay import replay_projection

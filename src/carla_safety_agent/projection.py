@@ -8,7 +8,7 @@ import numpy as np
 
 def project_points(points, source, camera):
     points = np.asarray(points)
-    if points.ndim != 2 or points.shape[1] < 3:
+    if points.ndim != 2 or points.shape[1] not in (3,4) or points.dtype.kind not in 'fiu':
         raise ValueError('Expected N x 3 or N x 4 points')
     matrices = []
     for spec, key, shape in ((source,'sensor_to_ego',(4,4)),
@@ -20,6 +20,14 @@ def project_points(points, source, camera):
         matrix = np.asarray(spec[key],dtype=float)
         if matrix.shape != shape or not np.isfinite(matrix).all():
             raise ValueError(f'Invalid calibration: {key}')
+        if shape == (4,4):
+            rotation=matrix[:3,:3]
+            if (not np.allclose(matrix[3],[0,0,0,1]) or
+                not np.allclose(rotation.T @ rotation,np.eye(3),atol=1e-6) or
+                not np.isclose(np.linalg.det(rotation),-1 if key=='sensor_to_optical' else 1,atol=1e-6)):
+                raise ValueError(f'Non-rigid calibration: {key}')
+        elif matrix[0,0]<=0 or matrix[1,1]<=0 or not np.allclose(matrix[2],[0,0,1]):
+            raise ValueError('Invalid camera intrinsic matrix')
         matrices.append(matrix)
     width,height = camera.get('width'),camera.get('height')
     if any(isinstance(v,bool) or not isinstance(v,int) or v <= 0 for v in (width,height)):

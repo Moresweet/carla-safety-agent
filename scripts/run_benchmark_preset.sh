@@ -8,8 +8,16 @@ TCP_ZOO="${BENCH2DRIVE_TCP_ZOO:-$E2E_ROOT/Bench2DriveZoo-tcp-admlp}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CARLA_ROOT="${CARLA_ROOT:-/home/moresweet/carla}"
 UNIAD_PYTHON="${UNIAD_PYTHON:-$E2E_ROOT/miniconda3/envs/uniad-cu128/bin/python}"
-ROUTES="${ROUTES:?ROUTES is required}"
-ROUTE_ID="${ROUTE_ID:?ROUTE_ID is required}"
+EXECUTION_MODE="${E2E_EXECUTION_MODE:-preset}"
+if [[ "$EXECUTION_MODE" == scenario ]]; then
+  ROUTES="${SCENARIO:?SCENARIO is required}"
+  ROUTE_ID=generated
+elif [[ "$EXECUTION_MODE" == preset ]]; then
+  ROUTES="${ROUTES:?ROUTES is required}"
+  ROUTE_ID="${ROUTE_ID:?ROUTE_ID is required}"
+else
+  echo 'Unsupported execution mode' >&2; exit 2
+fi
 ALGORITHM="${ALGORITHM:-uniad-tiny}"
 RESULTS="${RESULTS:-$REPO_ROOT/runs/benchmark/preset.json}"
 RUN_NAME="preset-${ROUTE_ID}-$(date +%Y%m%d-%H%M%S)"
@@ -62,6 +70,12 @@ export SCENARIO_RUNNER_ROOT="$B2D/scenario_runner"
 export SAVE_PATH="$REPO_ROOT/runs/benchmark/sensors"
 
 cd "$B2D"
+if [[ "$EXECUTION_MODE" == scenario ]]; then
+  [[ -f "$SCENARIO" ]] || { echo 'Missing scenario archive' >&2; exit 2; }
+  exec "$UNIAD_PYTHON" -m carla_safety_agent.native_executor \
+    --scenario "$SCENARIO" --agent "$AGENT" --agent-config "$CONFIG" \
+    --output "$RESULTS" --port="${CARLA_PORT:-2000}"
+fi
 exec "$UNIAD_PYTHON" "$REPO_ROOT/integration/bench2drive/leaderboard_evaluator.py" \
   --routes="$ROUTES" --routes-subset="$ROUTE_ID" --repetitions=1 --track=SENSORS \
   --checkpoint="$RESULTS" --debug-checkpoint="${RESULTS%.json}.txt" \

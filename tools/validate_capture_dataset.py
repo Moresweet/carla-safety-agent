@@ -6,6 +6,9 @@ import numpy as np
 from PIL import Image
 
 root = Path(sys.argv[1]).resolve()
+manifest = json.loads((root/'manifest.json').read_text())
+archive = manifest.get('input_archive', 'model_input.npz')
+assert archive in ('model_input.npz', 'sensor_input.npz'), 'Unknown input archive'
 index = json.loads((root/'index.json').read_text())['frames']
 assert index, 'No recorded samples'
 previous = -1
@@ -15,7 +18,9 @@ for entry in index:
     assert meta['synchronized'] and not meta['missing']
     assert meta['frame'] > previous
     previous = meta['frame']
-    with np.load(folder/'model_input.npz', allow_pickle=False) as model:
+    with np.load(folder/archive, allow_pickle=False) as model:
+        if archive == 'sensor_input.npz':
+            assert meta['model'] is None and meta['actual_model_inputs']==[]
         for name in ('CAM_FRONT','CAM_FRONT_LEFT','CAM_FRONT_RIGHT','CAM_BACK','CAM_BACK_LEFT','CAM_BACK_RIGHT'):
             rgb = np.asarray(Image.open(folder/(name+'.png')))
             if name in model:
@@ -28,4 +33,4 @@ for entry in index:
     assert lidar.ndim == 2 and lidar.shape[1] == 4 and np.isfinite(lidar).all()
     for name in ('BEV_POINTS', 'BEV_RGB'):
         Image.open(folder/(name+'.png')).verify()
-print(f'PASS: {len(index)} synchronized samples, exact model RGB, metric depth, XYZI, BEV: {root.name}')
+print(f'PASS: {len(index)} synchronized samples, {archive} RGB verified, metric depth, XYZI, BEV: {root.name}')

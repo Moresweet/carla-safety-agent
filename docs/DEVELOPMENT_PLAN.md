@@ -90,3 +90,10 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 来源重新分类保留同一对象的 Blender blueprint、缩放参数与稳定 ID；运行时 ID 被不同类型复用时分配新逻辑 ID，避免继承旧资产信息。同类型 ID 复用仍依赖 CARLA episode 生命周期隔离。
 - 86 项 Python 测试通过。实机 `tools/regression_scene_versions.py` 通过，actor 188→189，stable_id `1e71ed50286347e7bcf04d5e34813483`，位置保持 x=393.098 / y=-228.088 / z=2.5。证据 `runs/validation/scene-versions-20260908.json`；测试 actor 已清理。
 - 后续继续 S2 剩余恢复能力及 S4 不依赖端到端模型的统一采集；阶段验收门槛保持不变。
+
+### 2026-09-08 独立采集数据契约
+
+- `SensorCapture` 新增显式 `sensor-rig` 来源与 `process_frame` 接口，可直接接收仿真所有者给出的帧号，不需要模型相机输入触发采集。六 RGB、六深度、LiDAR、BEV 沿用同一帧匹配与落盘路径。
+- 独立采集使用 `sensor_input.npz`，清楚标记 model=null / actual_model_inputs=[]；模型模式仍使用精确 `model_input.npz`，不把独立传感器输出冒充模型真实输入。
+- 数据校验器识别两类输入档案；测试执行完整采集器落盘和校验程序，确认六路原始 BGRA 与 PNG 转换一致、深度/点云/BEV 文件有效。测试数据为合成传感器回调，不是独立采集实机验收。
+- 独立采集启动入口、独占仿真生命周期、人工/规则驾驶控制、自然语言入口仍未接通；S4 保持未完成，不以本次契约测试替代端到端验收。

@@ -1,6 +1,6 @@
 """Exact model-input recording plus frame-matched auxiliary depth/LiDAR.
 
-Runs only in the evaluator process. It never ticks or loads the CARLA world.
+Runs in the process that owns simulation ticks. It never ticks or loads the world.
 """
 from __future__ import annotations
 import io
@@ -67,8 +67,13 @@ def calibration(spec):
 
 
 class SensorCapture:
-    def __init__(self, world, ego, specs, runtime):
+    def __init__(self, world, ego, specs, runtime, source='model-input'):
         import carla
+        if source not in ('model-input', 'sensor-rig'):
+            raise ValueError('Unknown capture source')
+        if source == 'sensor-rig' and specs:
+            raise ValueError('Standalone rig owns its complete sensor configuration')
+        self.source = source
         self.world, self.ego = world, ego
         self.map_name = world.get_map().name
         self.root = Path(runtime)
@@ -154,18 +159,29 @@ class SensorCapture:
         if self.run is None:
             return
         atomic_json(self.run/'manifest.json', dict(schema_version='carla-safety-dataset/0.2',
-            run_id=self.run_id, scenario_id=os.environ.get('CSA_ALGORITHM_LABEL', 'model')+' closed-loop',
-            map=self.map_name, family='model-input', status=status, started_at=self.started,
+            run_id=self.run_id, scenario_id=(os.environ.get('CSA_ALGORITHM_LABEL', 'model')+' closed-loop'
+                                           if self.source == 'model-input' else 'standalone sensor rig'),
+            map=self.map_name, family=self.source, status=status, started_at=self.started,
             completed_at=time.strftime('%Y-%m-%dT%H:%M:%S'), frame_count=self.count, skipped_frames=self.skipped,
-            bytes=self.bytes, replay=True, model=os.environ.get('CSA_ALGORITHM_LABEL'),
+            bytes=self.bytes, replay=True, model=os.environ.get('CSA_ALGORITHM_LABEL') if self.source == 'model-input' else None,
             sensors={name: {'samples': self.count, 'format': 'png/npy/npz', 'path': 'samples'} for name in self.specs},
             files={'calibration': 'calibration.json', 'index': 'index.json'}, error=self.error,
-            notes=['model_input.npz contains exact pre-model arrays; RGB PNG is lossless RGB conversion',
+            input_archive='model_input.npz' if self.source == 'model-input' else 'sensor_input.npz',
+            notes=[('model_input.npz contains exact pre-model arrays; RGB PNG is lossless RGB conversion'
+                    if self.source == 'model-input' else
+                    'sensor_input.npz contains raw rig RGB BGRA arrays; no model was invoked'),
                    'Depth is auxiliary 640px-wide float32 metres with source camera aspect ratio; LiDAR XYZI is auxiliary, not claimed model input',
                    'BEV point projection is derived, BEV_RGB is rendered top-down, not semantic ground truth']))
         atomic_json(self.run/'index.json', {'frames': self.frame_index})
 
-    def process(self, input_data, agent, control):
+    def process_frame(self, frame, control):
+        """Record an owner-supplied CARLA tick without fabricating model input."""
+        if self.source != 'sensor-rig': raise ValueError('process_frame requires sensor-rig mode')
+        if isinstance(frame, bool) or not isinstance(frame, int) or frame < 0:
+            raise ValueError('Frame must be a non-negative integer')
+        return self.process({}, None, control, frame_id=frame)
+
+    def process(self, input_data, agent, control, frame_id=None):
         if self.closed:
             return
         req = self.request()
@@ -176,6 +192,10 @@ class SensorCapture:
             self.begin(req)
         self.sequence += 1
         camera_frames = [int(input_data[n][0]) for n in CAMERAS if n in input_data]
+        if frame_id is not None:
+            if self.source != 'sensor-rig' or input_data:
+                raise ValueError('Explicit frame is only valid for standalone sensor rig')
+            camera_frames = [frame_id]
         if not camera_frames:
             return
         frame = max(camera_frames)
@@ -187,6 +207,8 @@ class SensorCapture:
         arrays = {n: np.asarray(v[1]).copy() for n, v in input_data.items() if not isinstance(v[1], dict)}
         arrays = {n: a for n, a in arrays.items() if a.dtype != object}
         rgb = {n: (arrays[n] if n in arrays else aux.get(n)) for n in CAMERAS}
+        if self.source == 'sensor-rig':
+            arrays = {n: value for n, value in rgb.items() if value is not None}
         outputs = getattr(agent, 'pid_metadata', {})
         def safe(value):
             if isinstance(value, dict): return {k: safe(v) for k, v in value.items()}
@@ -198,7 +220,8 @@ class SensorCapture:
         transform = self.ego.get_transform()
         snapshot = self.world.get_snapshot()
         metadata = dict(frame=frame, model_step=getattr(agent, 'step', None), timestamp=snapshot.timestamp.elapsed_seconds,
-            model=os.environ.get('CSA_ALGORITHM_LABEL', type(agent).__name__),
+            source=self.source,
+            model=os.environ.get('CSA_ALGORITHM_LABEL', type(agent).__name__) if self.source == 'model-input' else None,
             sensor_frames={n: int(v[0]) for n, v in input_data.items()},
             auxiliary_frames={n: frame for n in aux}, missing=missing,
             synchronized=not missing and len(set(camera_frames)) == 1,
@@ -248,7 +271,9 @@ class SensorCapture:
             return
         folder = self.run/'samples'/f'{frame:010d}'
         folder.mkdir(parents=True, exist_ok=False)
-        np.savez(folder/'model_input.npz', **arrays)
+        archive = 'model_input.npz' if self.source == 'model-input' else 'sensor_input.npz'
+        metadata['input_archive'] = archive
+        np.savez(folder/archive, **arrays)
         metadata['input_scalars'] = safe({n: v[1] for n, v in input_data.items() if isinstance(v[1], dict)})
         for name, data in rgb.items():
             Image.fromarray(data[:, :, :3][:, :, ::-1]).save(folder/(name+'.png'))

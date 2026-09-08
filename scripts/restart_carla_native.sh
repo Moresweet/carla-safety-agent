@@ -5,13 +5,14 @@ cd "$STUDIO_ROOT"
 if [[ "${1:-}" != '' && "${1:-}" != '--after-crash' ]]; then
   echo 'Usage: restart_carla_native.sh [--after-crash]' >&2; exit 1
 fi
-python3 -c 'import json,urllib.request; s=json.load(urllib.request.urlopen("http://127.0.0.1:8765/e2e/status")); assert s["job"]["state"] not in ("running","stopping"), "Stop evaluation first"'
 if [[ "${1:-}" == '--after-crash' ]]; then
+  PYTHONPATH=src python3 -c 'from carla_safety_agent.session import SessionJournal; assert SessionJournal("data").owned_pid() is None, "Stop live evaluation worker first"'
   if pgrep -x UE4Editor > /dev/null; then
     echo 'A native editor is still alive; refusing crash-recovery mode' >&2; exit 1
   fi
   echo 'Native process absent: current in-memory scene cannot be saved; retaining existing scene versions and datasets.'
 else
+  python3 -c 'import json,urllib.request; s=json.load(urllib.request.urlopen("http://127.0.0.1:8765/e2e/status",timeout=10)); assert s["job"]["state"] not in ("running","stopping"), "Stop evaluation first"'
   curl --fail -s -X POST http://127.0.0.1:8765/scenes/save -H 'Content-Type: application/json' -d '{"name":"原生服务升级前快照"}' > /dev/null
 fi
 # Release the native client before its server goes away. Browser polling against
@@ -30,12 +31,27 @@ if [[ -f .runtime/carla.pid ]]; then
     if kill -0 "$CARLA_NATIVE_PID" 2>/dev/null; then echo 'Old server has not exited' >&2; exit 1; fi
   fi
 fi
-setsid /home/moresweet/UnrealEngine_4.26/Engine/Binaries/Linux/UE4Editor \
+NATIVE_LAUNCH=()
+if [[ "${CSA_NATIVE_DEBUG:-0}" == '1' ]]; then
+  NATIVE_LAUNCH=(gdb -q -batch -ex 'set pagination off' -ex 'set debuginfod enabled off'
+    -ex 'handle SIGPIPE nostop noprint pass' -ex 'handle SIGTRAP nostop noprint nopass'
+    -ex run -ex 'thread apply all bt 20' --args)
+fi
+setsid "${NATIVE_LAUNCH[@]}" /home/moresweet/UnrealEngine_4.26/Engine/Binaries/Linux/UE4Editor \
   /home/moresweet/carla/Unreal/CarlaUE4/CarlaUE4.uproject /Game/Carla/Maps/Town04 \
   -game -windowed -ResX=1280 -ResY=720 -carla-server -carla-port=2000 \
   -quality-level=Low '-ExecCmds=r.GPUScene 0' >> .runtime/carla.log 2>&1 < /dev/null &
-echo "$!" > .runtime/carla.pid
+NATIVE_LAUNCH_PID="$!"
+if [[ "${CSA_NATIVE_DEBUG:-0}" != '1' ]]; then echo "$NATIVE_LAUNCH_PID" > .runtime/carla.pid; fi
 for attempt in {1..60}; do
+  if ! kill -0 "$NATIVE_LAUNCH_PID" 2>/dev/null; then
+    echo 'Native launcher exited before readiness; inspect .runtime/carla.log' >&2; exit 1
+  fi
+  if [[ "${CSA_NATIVE_DEBUG:-0}" == '1' ]]; then
+    # The managed PID must be the inferior, never the debugger parent.
+    NATIVE_INFERIOR_PID="$(pgrep -P "$NATIVE_LAUNCH_PID" -x UE4Editor || true)"
+    if [[ "$NATIVE_INFERIOR_PID" =~ ^[0-9]+$ ]]; then echo "$NATIVE_INFERIOR_PID" > .runtime/carla.pid; fi
+  fi
   if PYTHONPATH=/home/moresweet/carla/.venv/lib/python3.14/site-packages python3 -c 'import carla; c=carla.Client("127.0.0.1",2000); c.set_timeout(2); print(c.get_world().get_map().name)' 2>/dev/null; then
     bash scripts/restart_studio_bridge.sh
     exit 0

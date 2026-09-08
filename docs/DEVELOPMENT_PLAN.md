@@ -361,3 +361,10 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 检查原生 CollisionSensor 源码发现 SetOwner 留有未解绑旧 owner 的 TODO，EndPlay 无派生处理。新增 integration/carla/collision-sensor-lifecycle.patch：主动解绑 hit delegate、EndPlay 前关闭回调入口、无效组件/销毁期回调拒绝。只修改两个原生文件，补丁检查和 CarlaUE4Editor 完整编译通过（105.86 秒）；144 项 Python 测试通过。
 - 新增 restart_carla_native.sh --after-crash：仅在宿主 UE4Editor 不存在时允许跳过现场保存；保留已有场景/数据，不能恢复已丢失的内存世界。已启动 Town04 并重启桥接，旧失败执行保留失败状态。
 - **修复不足，仍未通过**：加载补丁后完整碰撞采集执行 908a0bab80634b06a23f3dfabf59c2cd 再次进入 recovering/world_recovery（worker 返回 0，服务器超时），测试车辆 140 清理 RPC 失败。该反证说明不能把解绑缺口直接认定为本次崩溃的充分根因；后续需原生调试栈进一步定位。不得称本补丁已修复退出崩溃。
+
+### 2026-09-08 GDB 捕获渲染线程崩溃栈
+
+- 附加现有进程被系统 ptrace 限制拒绝；无副作用子进程探测通过后，新增 CSA_NATIVE_DEBUG=1 原生启动模式。PID 文件记录 Unreal 子进程而非 GDB。首次被 VulkanDevice.cpp:182 的已有非致命 ensure/SIGTRAP 截停，非目标故障；调试模式跳过 SIGTRAP 后正常启动，仍捕获 SIGSEGV。不修改系统 ptrace 设置。
+- 崩溃恢复改为从本地 SessionJournal 核验活 worker，不依赖失去模拟器后可能阻塞的桥接 HTTP；普通重启仍先检查并保存现场。新启动就绪检查会在 launcher 退出时提早报错。shell 语法及 diff 检查通过。
+- 同一完整碰撞回归 a09191ddf8f54807bcfdebabe7cdfdd7 再次失败，但取得权威原生栈：`.runtime/carla.log:60405` Thread 168 RenderThread 1 SIGSEGV，PC=0x0000000400000004；调用方 FScene::UpdateAllPrimitiveSceneInfos（RendererScene.cpp:4139，PrimitiveSceneProxy->SetTransform），随后 FDeferredShadingSceneRenderer::Render_CARLA、RenderViewFamily_RenderThread。紧前日志为销毁 vehicle.lincoln.mkz_2020 actor 124。
+- 这将定位方向转向车辆/语义网格渲染代理生命周期；尚不能仅凭坏虚调用地址认定具体对象或唯一根因。原生服务再次退出，目标崩溃未修复；已有失败数据与日志保留，后续需检查代理释放同步并重跑。

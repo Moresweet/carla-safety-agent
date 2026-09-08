@@ -52,6 +52,13 @@ For an already-dead native editor, `scripts/restart_carla_native.sh --after-cras
 refuses a live UE4Editor and skips the impossible live scene save. It retains
 persisted scenes and datasets but cannot recover unsaved in-memory state.
 
+`CSA_NATIVE_DEBUG=1 scripts/restart_carla_native.sh --after-crash` launches the
+native editor as a GDB child when attaching is restricted. It records thread
+backtraces in `.runtime/carla.log` on a stop, skips the known nonfatal startup
+SIGTRAP ensures, and retains the actual inferior PID for lifecycle management.
+Crash recovery checks the local journal's live worker identity without relying
+on an HTTP bridge that may itself be waiting on the dead simulator.
+
 These binary assets live in the CARLA content tree and are generated rather
 than copied into this repository:
 

@@ -401,8 +401,10 @@ def test_manual_control_rejects_other_sessions_and_uses_server_time(tmp_path):
 
 
 def test_starting_scene_snapshot_includes_managed_state_without_saving_version():
-    weather=SimpleNamespace(**{k:0 for k in ('cloudiness','precipitation','precipitation_deposits',
-        'wind_intensity','sun_azimuth_angle','sun_altitude_angle','fog_density','fog_distance','wetness')})
+    weather=SimpleNamespace(**{k:float(i) for i,k in enumerate(('cloudiness','precipitation','precipitation_deposits',
+        'wind_intensity','sun_azimuth_angle','sun_altitude_angle','fog_density','fog_distance',
+        'fog_falloff','wetness','scattering_intensity','mie_scattering_scale',
+        'rayleigh_scattering_scale','dust_storm'))})
     world=SimpleNamespace(id=7,get_actors=lambda:[],get_weather=lambda:weather,
         get_map=lambda:SimpleNamespace(name='Town04'),
         get_spectator=lambda:SimpleNamespace(get_transform=lambda:'pose'))
@@ -416,3 +418,4 @@ def test_starting_scene_snapshot_includes_managed_state_without_saving_version()
     assert result['environment_materials']==[{'texture':'hash'}]
     assert result['hidden_environment'][0]['object_id']=='1'
     assert result['limitations'] and 'version' not in result
+    assert result['weather']==vars(weather)

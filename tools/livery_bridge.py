@@ -944,7 +944,9 @@ def capture_scene_document():
                         'spawn_options': record.get('spawn_options', {})})
     weather = world.get_weather()
     weather_keys = ('cloudiness','precipitation','precipitation_deposits','wind_intensity',
-                    'sun_azimuth_angle','sun_altitude_angle','fog_density','fog_distance','wetness')
+                    'sun_azimuth_angle','sun_altitude_angle','fog_density','fog_distance',
+                    'fog_falloff','wetness','scattering_intensity','mie_scattering_scale',
+                    'rayleigh_scattering_scale','dust_storm')
     document = {'map': world.get_map().name, 'objects': objects,
                 'environment_materials': list(MATERIALS.overrides(world.id).values()),
                 'hidden_environment': VISIBILITY.records(world.id),

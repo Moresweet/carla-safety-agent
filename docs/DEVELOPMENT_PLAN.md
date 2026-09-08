@@ -283,3 +283,8 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 
 - 空闲后重启桥接加载快照功能；`capture-20260908T133208-05e8bc71` 的 execution_id 指向 `c8ae53a112cc40199b88820e9161b8f4`，执行日志包含 starting_scene，地图与数据集一致为 Carla/Maps/Town04，对象/材质/可见性/天气/相机及限制字段齐全。
 - 短采集三帧后按 frame_limit 正常 completed，异步世界、无采集车辆或传感器残留。122 项测试通过。当前纳管新增对象数量为 0，本次不证明非空复杂场景复现或版本恢复已完成。
+
+### 2026-09-08 补齐天气快照字段
+
+- 对照本机 LibCarla WeatherParameters.h 的 14 个天气字段，补齐 fog_falloff、scattering_intensity、mie_scattering_scale、rayleigh_scattering_scale、dust_storm；场景保存和采集启动快照共享此修正。本机版本没有积雪字段，不虚构支持。
+- 122 项测试通过，快照测试逐字段比较非统一值，检查字段遗漏和数值丢失。此次未重启桥接、未进行非默认天气实机恢复验证；开发计划整体仍未完成。

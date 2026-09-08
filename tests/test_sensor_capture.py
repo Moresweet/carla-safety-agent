@@ -160,6 +160,26 @@ def test_standalone_capture_records_real_rig_arrays_without_model_claim(tmp_path
     from pathlib import Path
     checker = Path(__file__).resolve().parents[1]/'tools/validate_capture_dataset.py'
     subprocess.run([sys.executable,str(checker),str(capture.run)],check=True)
+    # Exercise the CLI validator across both actual input storage formats.
+    # These are synthetic test samples, never rewrite a user's recording.
+    model_manifest = dict(manifest, input_archive='model_input.npz')
+    (capture.run/'manifest.json').write_text(json.dumps(model_manifest))
+    model_meta = dict(meta, model='test-model', actual_model_inputs=[*CAMERAS, 'SPEED'],
+                      input_scalars={'SPEED': {'speed': 12.5}})
+    (folder/'frame.json').write_text(json.dumps(model_meta))
+    np.savez(folder/'model_input.npz', **{name:image for name in CAMERAS})
+    subprocess.run([sys.executable,str(checker),str(capture.run)],check=True)
+    model_meta['input_scalars'] = {}
+    (folder/'frame.json').write_text(json.dumps(model_meta))
+    result = subprocess.run([sys.executable,str(checker),str(capture.run)],capture_output=True,text=True)
+    assert result.returncode != 0 and 'coverage mismatch' in result.stderr
+    model_meta['input_scalars'] = {'SPEED': {'speed': 12.5}}
+    (folder/'frame.json').write_text(json.dumps(model_meta))
+    np.savez(folder/'model_input.npz', **{name:image for name in CAMERAS if name != 'CAM_FRONT'})
+    result = subprocess.run([sys.executable,str(checker),str(capture.run)],capture_output=True,text=True)
+    assert result.returncode != 0 and 'coverage mismatch' in result.stderr
+    (folder/'frame.json').write_text(json.dumps(meta))
+    (capture.run/'manifest.json').write_text(json.dumps(manifest))
     run_path=capture.run
     capture.request=lambda:{'recording':True,'id':'record','every':1,'max_frames':1}
     capture.samples={name:{13:value} for name,value in samples.items()}

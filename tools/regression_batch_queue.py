@@ -25,18 +25,35 @@ def main():
     root = ROOT/'runs/validation'/('batch-queue-'+uuid.uuid4().hex)
     q = ExperimentQueue(root); q.create(dimensions)
     journal = SessionJournal(ROOT/'data')
+    paused_once = resumed_once = False
     try:
         deadline = time.monotonic()+180
         while time.monotonic() < deadline:
             # Reconstruct clients each step to test persisted state, not memory.
             result = advance_queue(ExperimentQueue(root), journal,
                                    ROOT/'.runtime/generated-scenarios', request)
+            if result['action'] == 'started' and not paused_once:
+                q.set_paused(True)
+                paused_once = True
+            if result['action'] == 'paused' and not resumed_once:
+                snapshot = q.read()
+                assert snapshot['jobs'][0]['state'] == 'completed'
+                assert snapshot['jobs'][1]['state'] == 'pending'
+                assert snapshot['jobs'][1]['attempts'] == []
+                session = request('session/status')['session']
+                for _ in range(3):
+                    assert advance_queue(ExperimentQueue(root), journal,
+                        ROOT/'.runtime/generated-scenarios', request)['action'] == 'paused'
+                    assert request('session/status')['session']['run_id'] == session['run_id']
+                q.set_paused(False)
+                resumed_once = True
             if result['action'] == 'no_pending_jobs':
                 break
             if result['action'] in ('started', 'preparation_failed'):
                 print(json.dumps(result), flush=True)
             time.sleep(.5)
         jobs = q.read()['jobs']
+        assert paused_once and resumed_once
         assert all(j['state'] == 'completed' and len(j['attempts']) == 1 for j in jobs), jobs
         executions = [j['attempts'][0]['execution_id'] for j in jobs]
         assert len(set(executions)) == 2
@@ -55,7 +72,8 @@ def main():
         world = client.get_world()
         assert not world.get_settings().synchronous_mode
         assert not list(world.get_actors().filter('sensor.*'))
-        report = {'executions': executions, 'datasets': datasets, 'queue': str(root), 'passed': True}
+        report = {'executions': executions, 'datasets': datasets, 'queue': str(root), 'passed': True,
+                  'paused_after_first_start': paused_once, 'resumed_after_first_completed': resumed_once}
         (root/'report.json').write_text(json.dumps(report, indent=2))
         print(json.dumps(report), flush=True)
     finally:

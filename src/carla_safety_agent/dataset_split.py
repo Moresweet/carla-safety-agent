@@ -1,6 +1,45 @@
 """Deterministic scene-grouped dataset splits without copying source samples."""
 import hashlib
+import json
 import math
+
+
+def verified_split(runs, dataset_root, ratios=(0.8, 0.1, 0.1), seed=7):
+    """Bind explicit grouping to finalized index metadata, not full sample validation."""
+    from .replay import dataset_path
+    from .data_quality import temporal_quality
+    result = split_runs(runs, ratios, seed)
+    evidence = {}
+    for run in runs:
+        run_id = run['run_id']
+        folder = dataset_path(dataset_root, run_id)
+        payloads = {}
+        for name in ('manifest.json', 'index.json'):
+            path = (folder / name).resolve()
+            if path.parent != folder:
+                raise ValueError(f'{run_id}: metadata outside dataset')
+            payloads[name] = path.read_bytes()
+        manifest = json.loads(payloads['manifest.json'])
+        index = json.loads(payloads['index.json'])
+        if manifest.get('run_id') != run_id or manifest.get('status') not in ('saved', 'saved_limit'):
+            raise ValueError(f'{run_id}: dataset identity mismatch or recording not successfully finalized')
+        frames = index.get('frames')
+        count = manifest.get('frame_count')
+        if (not isinstance(frames, list) or not frames or
+                not all(isinstance(entry, dict) for entry in frames) or
+                isinstance(count, bool) or not isinstance(count, int) or count != len(frames)):
+            raise ValueError(f'{run_id}: invalid or inconsistent frame count')
+        quality = temporal_quality(frames, manifest.get('sampling_every_frames'))
+        if not quality['temporal_order_valid']:
+            raise ValueError(f'{run_id}: invalid temporal index')
+        evidence[run_id] = {'scene_group': run['scene_group'], 'frame_count': count,
+            'execution_id': manifest.get('execution_id'), 'map': manifest.get('map'),
+            'sha256': {name: hashlib.sha256(raw).hexdigest() for name, raw in payloads.items()},
+            'temporal_quality': quality}
+    result['datasets'] = evidence
+    result['verification'] = 'finalized_manifest_and_temporal_index'
+    result['notes'].append('Metadata hashes do not validate raw sensor files or prove scene independence.')
+    return result
 
 
 def split_runs(runs, ratios=(0.8,0.1,0.1), seed=7):

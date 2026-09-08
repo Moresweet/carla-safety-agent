@@ -2,6 +2,37 @@ import pytest
 from carla_safety_agent.dataset_split import split_runs
 
 
+@pytest.mark.parametrize('fault', [None, 'running', 'count', 'identity', 'time', 'symlink'])
+def test_verified_split_binds_only_finalized_consistent_metadata(tmp_path, fault):
+    import json
+    import hashlib
+    from carla_safety_agent.dataset_split import verified_split
+    folder = tmp_path / 'run'
+    folder.mkdir()
+    manifest = {'run_id':'run', 'status':'saved', 'frame_count':2, 'execution_id':'execution',
+                'map':'Town04', 'sampling_every_frames':3}
+    index = {'frames':[{'frame':1, 'timestamp':0.05}, {'frame':4, 'timestamp':0.2}]}
+    if fault == 'running': manifest['status'] = 'recording'
+    if fault == 'count': manifest['frame_count'] = 3
+    if fault == 'identity': manifest['run_id'] = 'other'
+    if fault == 'time': index['frames'][1]['timestamp'] = 0.01
+    (folder / 'manifest.json').write_text(json.dumps(manifest))
+    (folder / 'index.json').write_text(json.dumps(index))
+    if fault == 'symlink':
+        (folder / 'index.json').rename(tmp_path / 'outside.json')
+        (folder / 'index.json').symlink_to(tmp_path / 'outside.json')
+    runs = [{'run_id':'run', 'scene_group':'related-variants'}]
+    if fault:
+        with pytest.raises(ValueError): verified_split(runs, tmp_path)
+    else:
+        result = verified_split(runs, tmp_path)
+        record = result['datasets']['run']
+        assert record['execution_id'] == 'execution'
+        assert record['frame_count'] == 2
+        assert record['sha256']['index.json'] == hashlib.sha256((folder / 'index.json').read_bytes()).hexdigest()
+        assert result['assignments'] == split_runs(runs)['assignments']
+
+
 def test_related_runs_never_cross_splits_and_order_does_not_matter():
     runs=[{'run_id':str(i),'scene_group':str(i//3)} for i in range(90)]
     result=split_runs(runs)

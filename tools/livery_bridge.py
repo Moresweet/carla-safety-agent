@@ -404,7 +404,9 @@ def start_e2e(data: dict) -> dict:
                        BENCH2DRIVE_ROOT=str(BENCH2DRIVE_ROOT),
                        BENCH2DRIVE_ZOO=str(BENCH2DRIVE_ZOO),
                        BENCH2DRIVE_TCP_ZOO=str(BENCH2DRIVE_TCP_ZOO))
+        starting_scene = capture_scene_document() if action == 'sensor-rig' else None
         execution_id = SESSION.begin(action, {'request': data, 'command': command,
+                              'starting_scene': starting_scene,
                               'python': sys.executable if action == 'sensor-rig' else str(UNIAD_PYTHON), 'carla_port': CARLA_PORT,
                               'results': str(results_path) if action in ('run', 'preset-run') else None})
         env['CSA_EXECUTION_ID'] = execution_id
@@ -923,6 +925,12 @@ def transform_record(transform):
 
 @simulation_operation
 def save_scene(data):
+    document=capture_scene_document()
+    return {'ok': True, **SCENES.save(document, data.get('name',''), data.get('scene_id'), data.get('expected_version'))}
+
+
+def capture_scene_document():
+    """Caller holds simulation ownership lock; snapshot only managed editor state."""
     world = connect_world()
     provenance = _provenance.records(world.id)
     objects = []
@@ -943,7 +951,7 @@ def save_scene(data):
                 'weather': {k: float(getattr(weather,k)) for k in weather_keys},
                 'spectator': transform_record(world.get_spectator().get_transform()),
                 'limitations': ['Managed user actors, exact environment material slots and studio-managed visibility; legacy actor textures and external visibility changes not captured']}
-    return {'ok': True, **SCENES.save(document, data.get('name',''), data.get('scene_id'), data.get('expected_version'))}
+    return document
 
 
 @simulation_operation

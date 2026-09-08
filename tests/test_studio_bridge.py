@@ -398,3 +398,21 @@ def test_manual_control_rejects_other_sessions_and_uses_server_time(tmp_path):
     for mode in ('autopilot','stationary'):
         current['configuration']['request']['mode']=mode
         with pytest.raises(ValueError): env['manual_sensor_control']({'run_id':'run','control':{}})
+
+
+def test_starting_scene_snapshot_includes_managed_state_without_saving_version():
+    weather=SimpleNamespace(**{k:0 for k in ('cloudiness','precipitation','precipitation_deposits',
+        'wind_intensity','sun_azimuth_angle','sun_altitude_angle','fog_density','fog_distance','wetness')})
+    world=SimpleNamespace(id=7,get_actors=lambda:[],get_weather=lambda:weather,
+        get_map=lambda:SimpleNamespace(name='Town04'),
+        get_spectator=lambda:SimpleNamespace(get_transform=lambda:'pose'))
+    env=functions('capture_scene_document',connect_world=lambda:world,
+        _provenance=SimpleNamespace(records=lambda _:{}),
+        MATERIALS=SimpleNamespace(overrides=lambda _:{'slot':{'texture':'hash'}}),
+        VISIBILITY=SimpleNamespace(records=lambda _:[{'object_id':'1','name':'wall'}]),
+        transform_record=lambda value:value)
+    result=env['capture_scene_document']()
+    assert result['map']=='Town04' and result['spectator']=='pose'
+    assert result['environment_materials']==[{'texture':'hash'}]
+    assert result['hidden_environment'][0]['object_id']=='1'
+    assert result['limitations'] and 'version' not in result

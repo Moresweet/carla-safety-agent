@@ -16,6 +16,15 @@ def functions(*names, **environment):
     return environment
 
 
+def test_invalid_actor_update_does_not_query_or_mutate_world():
+    def forbidden(*args,**kwargs):
+        pytest.fail('Invalid transform must be rejected before native or worker access')
+    env=functions('update_actor', evaluation_active=forbidden,connect_world=forbidden,
+                  evaluation_command=forbidden)
+    with pytest.raises(ValueError):
+        env['update_actor'](0,{'location':{'x':float('nan')}})
+
+
 def test_texture_identity_rejects_same_model_ambiguity():
     env = functions('runtime_name_for_actor', _actor_object_names={})
     world = SimpleNamespace(get_names_of_all_objects=lambda:['BP_TeslaM3_C_1','BP_TeslaM3_C_2'])

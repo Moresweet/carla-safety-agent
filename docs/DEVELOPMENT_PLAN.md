@@ -689,3 +689,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 新增部分变换校验，桥接 update_actor 和运行中 update 均拒绝非有限数、布尔/字符串坐标、未知分组及未知轴；保留省略分量语义，避免 float 自动转换把非法输入送入原生层。
 - 运行中移动响应改从稳定来源记录读取 origin，不再将本次 worker 启动前创建的用户对象误标为 evaluation；缺记录明确 unknown。
 - 219 项测试通过，新增 8 类非法变换和合法部分更新测试。尚未重启桥接进行 HTTP/原生移动回归，不宣称移动后的图像与位姿一致性已经验收。
+
+### 2026-09-08 移动参数 HTTP 拒绝验收
+
+- 空闲时加载桥接，新增 regression_transform_contract.py，通过真实 /objects/update 对 actor_id=0 提交 8 类非法变换，均返回 400 和变换校验错误而非原生对象查询错误；运行 ID 与会话状态不变。
+- 补充真实 update_actor 函数测试，非法坐标输入时 evaluation_active/connect_world/evaluation_command 均不得被调用。220 项测试通过。
+- 本轮没有生成或移动原生对象，证明范围仅为非法参数拒绝与会话不变；有效移动、来源保持及图像/位姿一致性仍待实机验收。

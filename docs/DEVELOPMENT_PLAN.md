@@ -1009,3 +1009,11 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 确認限制位于自然语言 run 启动分支：仅调用写死 UniAD-Tiny 的脚本；VAD/UniAD-Base/TCP/AD-MLP 已有预设路线适配器，尚未与 native_executor 场景链路验证兼容。
 - run_benchmark_preset.sh 增加显式 E2E_EXECUTION_MODE=scenario，使用 SCENARIO 档案与已有五模型配置选择，转入 native_executor；默认 preset 行为保留。非法模式拒绝。桥接和批次白名单暂不放开，防止把配置选择通过冒充模型已接入。
 - 328 项测试通过，包括五模型适配器/检查点选择的隔离检查，不加载权重、不启动 CARLA。后续须分别完成真实 ScenarioSpec 加载、输入、控制、采集与清理验收，才能开放对应批次模型。
+
+### 2026-09-08 VAD 自然语言场景闭环接入与兼容修复
+
+- 桥接 run 分支按已安装模型目录选择统一场景启动脚本，保留 UniAD-Tiny 原路径；model-smoke 仍仅 Tiny。任务标签改为实际算法。前端和批次白名单尚未放开全部模型。
+- 实测暴露并修复标准 RoadOption 导入、完整代理所需世界上下文和 ROUTES 保存目录变量；完整 Leaderboard 路径混入原生执行器后未进入循环，停止该次测试并确认异步恢复，再令 scenario 模式优先使用项目内原生代理/同步传感器接口，preset 模式加载顺序保持原样。
+- 前序执行 0b54bea99eef4e22a7447fb7c6b4c70f、f66a0657ae56472d97e3d7de7942ef9c、4f5911b0e8304001b3927ac830589063 为 Python 初始化错误；b235f3b57d984338ab21db7462316cb3 显式停止，不计通过。没有把观察超时当成进程退出。
+- 最终 VAD 执行 16256f7f461f473499fb01a81a9d2ad5 completed/退出码 0，真实 vad_b2d_base.pth 推理，一秒 20 步，结果 passed、无碰撞，min TTC 5.02355830759031、min distance 18.87042458404955、risk 2.043614。
+- capture-20260908T190538-4623c606 的 20 帧模型输入、米制深度、XYZI、BEV 全校验通过，外参 17/18，采集场景哈希与执行记录一致；原生世界异步零传感器。本轮代码回归 328 项通过，不代表其他模型及长时间/跨地图验收完成。

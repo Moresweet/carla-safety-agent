@@ -334,8 +334,14 @@ def start_e2e(data: dict) -> dict:
         settings = connect_world().get_settings()
         if action in ('sensor-rig','rule-run') and settings.synchronous_mode:
             raise RuntimeError('Another synchronous owner is active')
-    if action in ("run", "model-smoke") and data.get("algorithm", "uniad-tiny") != "uniad-tiny":
-        raise RuntimeError("This action supports UniAD-Tiny only; use preset closed-loop testing for other models")
+    if action == 'model-smoke' and data.get('algorithm', 'uniad-tiny') != 'uniad-tiny':
+        raise RuntimeError('Model smoke supports UniAD-Tiny only')
+    if action == 'run':
+        algorithm = str(data.get('algorithm', 'uniad-tiny'))
+        available = {item['id'] for item in algorithm_catalog(BENCH2DRIVE_ZOO, BENCH2DRIVE_TCP_ZOO)
+                     if item['status'] == 'available'}
+        if algorithm not in available:
+            raise RuntimeError('Selected generated-scenario model is not installed')
     with _e2e_lock:
         if _e2e_process is not None and _e2e_process.poll() is None:
             raise RuntimeError("A UniAD task is already running")
@@ -354,6 +360,8 @@ def start_e2e(data: dict) -> dict:
                 raise ValueError('unified_capture must be boolean')
             command = ([sys.executable, str(PROJECT_ROOT/'tools/run_rule_scenario.py')]
                        if action == 'rule-run' else [str(PROJECT_ROOT / "scripts/run_uniad_target.sh")])
+            if action == 'run' and algorithm != 'uniad-tiny':
+                command = [str(PROJECT_ROOT/'scripts/run_benchmark_preset.sh')]
         elif action == 'sensor-rig':
             mode, frames = str(data.get('mode','stationary')), data.get('frames',200)
             if mode not in ('stationary','autopilot','manual') or isinstance(frames,bool) or not isinstance(frames,int) or not 10 <= frames <= 100000:
@@ -420,6 +428,11 @@ def start_e2e(data: dict) -> dict:
             env["RESULTS"] = str(results_path)
             env["CARLA_PORT"] = str(CARLA_PORT)
             env["CSA_RULE_CAPTURE"] = "1" if data.get("unified_capture",False) else "0"
+            if action == 'run' and algorithm != 'uniad-tiny':
+                env.update(E2E_EXECUTION_MODE='scenario', ALGORITHM=algorithm,
+                           BENCH2DRIVE_ROOT=str(BENCH2DRIVE_ROOT),
+                           BENCH2DRIVE_ZOO=str(BENCH2DRIVE_ZOO),
+                           BENCH2DRIVE_TCP_ZOO=str(BENCH2DRIVE_TCP_ZOO))
         elif action == "preset-run":
             env.update(ROUTES=str(route), ROUTE_ID=route_id, RESULTS=str(results_path),
                        ALGORITHM=algorithm,
@@ -435,7 +448,7 @@ def start_e2e(data: dict) -> dict:
         _e2e_job.clear()
         _e2e_job.update(state="running", kind=action, started_at=time.time(),
                         ended_at=None, returncode=None, command=command,
-                        algorithm=algorithm if action == "preset-run" else None if action in ('sensor-rig','rule-run') else "uniad-tiny",
+                        algorithm=algorithm if action in ('run', 'preset-run') else None if action in ('sensor-rig','rule-run') else "uniad-tiny",
                         collection=str(route) if action == "preset-run" else None,
                         route_id=route_id if action == "preset-run" else None,
                         results=str(results_path) if action in ("run", "preset-run", "rule-run") else None)

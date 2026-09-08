@@ -63,9 +63,13 @@ if [[ "${E2E_CHECK_ONLY:-0}" == 1 ]]; then
 fi
 
 export PYTHONPATH="$B2D/leaderboard:$B2D/scenario_runner:$REPO_ROOT/src:$CARLA_ROOT/PythonAPI/carla:$E2E_ROOT:$MODEL_ROOT"
+if [[ "$EXECUTION_MODE" == scenario ]]; then
+  export PYTHONPATH="$REPO_ROOT/src:$CARLA_ROOT/PythonAPI/carla:$E2E_ROOT:$MODEL_ROOT:$B2D/scenario_runner:$B2D/leaderboard"
+fi
 export CARLA_ROOT CARLA_SERVER="$CARLA_ROOT/CarlaUE4.sh"
 export BENCH2DRIVE_EXISTING_SERVER=1 IS_BENCH2DRIVE=True PLANNER_TYPE=only_traj
 export CSA_ALGORITHM_LABEL="$ALGORITHM"
+export ROUTES ROUTE_ID
 export SCENARIO_RUNNER_ROOT="$B2D/scenario_runner"
 export SAVE_PATH="$REPO_ROOT/runs/benchmark/sensors"
 

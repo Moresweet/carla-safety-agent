@@ -18,7 +18,7 @@ from .io import scenario_from_dict
 from .scenario_archive import read_verified_scenario
 from .metrics import distance, evaluate, ttc
 from .opendrive import build_opendrive
-from leaderboard.autoagents.autonomous_agent import RoadOption
+from agents.navigation.local_planner import RoadOption
 
 
 class NativeSensorRig:
@@ -165,6 +165,10 @@ class NativeScenarioExecutor:
             module = importlib.util.module_from_spec(module_spec)
             module_spec.loader.exec_module(module)
             agent_class = getattr(module, module.get_entry_point())
+            if os.environ.get('E2E_EXECUTION_MODE') == 'scenario':
+                from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
+                CarlaDataProvider.set_client(client)
+                CarlaDataProvider.set_world(world)
             agent = agent_class(self.host, self.port, False)
             gps_plan, world_plan = self._global_plan(world, ego)
             agent.set_global_plan(gps_plan, world_plan)

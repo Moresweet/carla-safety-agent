@@ -1144,3 +1144,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 审查 BlenderPipeline 与 Unreal 导入器发现：replace_existing=True 会隐式覆盖同名资产；固定 unreal-import.json 可能让失败的后续导入读取旧成功记录。修正为首次写入前拒绝已有目标目录、FBX/纹理导入均禁止覆盖，每次导入独立请求与结果UUID文件。
 - 358项测试通过，新增假Unreal环境检查已有目录时未进入导入操作，以及旧成功结果不能掩盖连续两次失败且不写注册表。
 - 未运行新的Unreal导入或修改引擎资产；非零退出但写出新结果的既有警告语义保持不变，部分失败资产的清理、目录并发竞态及完整资产包尚需继续。迁移功能不因此标记完成。
+
+### 2026-09-08 Blender源资产包与路径迁移
+
+- 新增 blender_package 模块及CLI export/inspect/import；白名单FBX/Blend/GLB/可选texture.png，显式RGBA/粗糙度，256MiB上限及逐文件SHA-256。导入校验后分配独立任务目录，生成现有BlenderPipeline可读取的manifest/request并重写路径，不执行资产、不写Unreal注册表。
+- 用真实 .runtime/blender-smoke-output3 安全护栏文件及历史unreal-request.json参数导出 runs/validation/blender-safetybarrier-source.zip，导入任务87f209da9a524121b8024e35123950e5位于 runs/validation/blender-source-target。FBX/Blend/GLB逐文件cmp一致；原颜色0.15/0.55/0.85/1与粗糙度0.45显式携带。
+- 360项测试通过，包括路径重写、原始字节保留、无执行/无注册表及篡改拒绝。未验证FBX/Blend内部外链完整性，未将源资产包合入场景一键包，未执行目标Unreal导入注册；磁盘中途写入失败可能留下未完成任务目录，S8仍未完成。

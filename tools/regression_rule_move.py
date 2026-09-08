@@ -8,6 +8,32 @@ from regression_scene_versions import ROOT, request
 ACTIVE = ('preparing', 'running', 'stopping', 'recovering')
 
 
+def verify_recorded_move(dataset, execution, actor_id, command_id, boundary):
+    from carla_safety_agent.editor_events import editor_events
+    index = json.loads((dataset/'index.json').read_text())['frames']
+    archive = json.loads((dataset/'editor-events.json').read_text())
+    assert archive['execution_id'] == execution
+    events = editor_events(archive['records'], [e['frame'] for e in index], execution)
+    assert events == archive['events']
+    event = next(e for e in events if e['command_id'] == command_id)
+    assert event['action'] == 'update' and event['outcome'] == 'acknowledged'
+    assert event['boundary_frame'] == boundary and event['seek_frame'] is not None
+    positions = []
+    for entry in index:
+        metadata = json.loads((dataset/entry['path']/'frame.json').read_text())
+        actors = [a for a in metadata['actors'] if a['id'] == actor_id]
+        assert len(actors) == 1, 'Test prop missing from recorded ground truth'
+        positions.append((entry['frame'], actors[0]['matrix'][0][3]))
+    before = [(f, x) for f, x in positions if f <= boundary]
+    after = [(f, x) for f, x in positions if f > boundary]
+    assert before and after, 'Need samples on both sides of the edit'
+    assert all(abs(x-240.) < .02 for _, x in before), before
+    assert all(abs(x-245.) < .02 for _, x in after), after
+    assert event['seek_frame'] == after[0][0]
+    return {'samples_before': len(before), 'samples_after': len(after),
+            'seek_frame': event['seek_frame'], 'recorded_pose_transition_verified': True}
+
+
 def wait_terminal(execution):
     deadline = time.monotonic() + 120
     while time.monotonic() < deadline:
@@ -72,11 +98,13 @@ def main():
         event = updates[0]
         assert event['execution_id'] == execution
         assert event['observed_frame_before'] == event['observed_frame_after']
+        recorded = verify_recorded_move(dataset, execution, prop_id,
+                                        event['command_id'], event['observed_frame_before'])
         assert not world.get_settings().synchronous_mode
         assert not list(world.get_actors().filter('sensor.*'))
         report = {'execution_id': execution, 'dataset': str(dataset), 'actor_id': prop_id,
                   'origin': moved['object']['origin'], 'native_x': location.x,
-                  'boundary_frame': event['observed_frame_before'], 'passed': True,
+                  'boundary_frame': event['observed_frame_before'], 'passed': True, **recorded,
                   'limitations': ['Does not prove rendered texture or image/pose alignment']}
     finally:
         if execution:

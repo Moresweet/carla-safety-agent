@@ -6,7 +6,10 @@ export default function SurfaceTextureEditor({image,output,onRender,label,note,b
  const preview=useRef<HTMLCanvasElement>(null),drag=useRef<{x:number;y:number;ox:number;oy:number}|null>(null);
  const [mode,setMode]=useState<"decal"|"tile"|"cover">("decal"),[scale,setScale]=useState(46),[rotation,setRotation]=useState(0),[offset,setOffset]=useState({x:0,y:0});
  useEffect(()=>{const canvas=preview.current;if(!canvas)return;const zoom=(event:WheelEvent)=>{event.preventDefault();event.stopPropagation();setScale(value=>Math.max(5,Math.min(300,value-event.deltaY*.08)))};canvas.addEventListener("wheel",zoom,{passive:false});return()=>canvas.removeEventListener("wheel",zoom)},[]);
+ // Canvas refs are intentional imperative render targets shared with the exporter.
+ /* eslint-disable react-hooks/immutability */
  useEffect(()=>{const visible=preview.current,out=output.current;if(!visible||!out)return;const render=(ctx:CanvasRenderingContext2D,size:number)=>{ctx.clearRect(0,0,size,size);ctx.fillStyle=baseColor;ctx.fillRect(0,0,size,size);if(!image)return;if(mode==="cover"){ctx.drawImage(image,0,0,size,size);return}const factor=scale/100,iw=image.width*factor,ih=image.height*factor;ctx.save();ctx.translate(size/2+offset.x*size/512,size/2+offset.y*size/512);ctx.rotate(rotation*Math.PI/180);if(mode==="decal")ctx.drawImage(image,-iw/2,-ih/2,iw,ih);else{const tw=Math.max(24,iw),th=Math.max(24,ih);for(let y=-size*2;y<size*2;y+=th)for(let x=-size*2;x<size*2;x+=tw)ctx.drawImage(image,x,y,tw,th)}ctx.restore()};render(visible.getContext("2d")!,visible.width);render(out.getContext("2d")!,out.width);onRender()},[baseColor,image,mode,onRender,offset,output,rotation,scale]);
+ /* eslint-enable react-hooks/immutability */
  function down(e:PointerEvent<HTMLCanvasElement>){e.currentTarget.setPointerCapture(e.pointerId);drag.current={x:e.clientX,y:e.clientY,ox:offset.x,oy:offset.y}}
  function move(e:PointerEvent<HTMLCanvasElement>){if(!drag.current)return;setOffset({x:drag.current.ox+e.clientX-drag.current.x,y:drag.current.oy+e.clientY-drag.current.y})}
  function up(){drag.current=null}

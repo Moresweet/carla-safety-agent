@@ -124,6 +124,7 @@ class NativeScenarioExecutor:
         actors: list[Any] = []
         agent = None
         rig = None
+        capture = None
         collision = {"hit": False}
         trace: list[dict[str, Any]] = []
         min_distance, min_ttc = math.inf, None
@@ -168,6 +169,9 @@ class NativeScenarioExecutor:
             agent.setup(agent_config)
             rig = NativeSensorRig(carla, world, ego, agent.sensor_interface)
             rig.setup(agent.sensors())
+            if os.environ.get('CSA_SENSOR_CAPTURE') == '1':
+                from .sensor_capture import SensorCapture
+                capture = SensorCapture(world, ego, agent.sensors(), os.environ['CSA_EVALUATION_CONTROL_DIR'])
             rig.warmup()
             self._focus_spectator(carla, world, ego)
             world.tick()
@@ -180,7 +184,16 @@ class NativeScenarioExecutor:
                 rig.add_speed(frame)
                 sensor_data = agent.sensor_interface.get_data(frame)
                 elapsed = (step + 1) * settings.fixed_delta_seconds
+                exact_input = {k: (v[0], v[1].copy() if hasattr(v[1], 'copy') else v[1]) for k, v in sensor_data.items()} if capture else None
                 control = agent.run_step(sensor_data, elapsed)
+                if capture:
+                    try:
+                        capture.process(exact_input, agent, control)
+                    except Exception as exc:
+                        print(f'Recording failed, model remains running: {exc}', flush=True)
+                        capture.error = str(exc)
+                        capture.close()
+                        capture = None
                 self._publish_telemetry(sensor_data, agent, control, frame, elapsed)
                 control.manual_gear_shift = False
                 ego.apply_control(control)
@@ -227,6 +240,8 @@ class NativeScenarioExecutor:
                 time.sleep(preview_hold)
             return payload
         finally:
+            if capture:
+                capture.close()
             if rig:
                 rig.destroy()
             if agent:

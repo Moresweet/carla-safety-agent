@@ -1,0 +1,267 @@
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
+index bca9d1064..f2c9d7009 100644
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
+@@ -11,6 +11,8 @@
+ #include "Carla/Game/CarlaStaticDelegates.h"
+ #include "Carla/Traffic/RoadSpline.h"
+ #include "Carla/Lights/CarlaLight.h"
++#include "Components/MeshComponent.h"
++#include "Components/SkeletalMeshComponent.h"
+ #include "Engine/DecalActor.h"
+ #include "Engine/LevelStreaming.h"
+ #include "Engine/LocalPlayer.h"
+@@ -262,7 +264,9 @@ TArray<FString> ACarlaGameModeBase::GetNamesOfAllActors()
+   {
+     TArray<UStaticMeshComponent*> StaticMeshes;
+     Actor->GetComponents(StaticMeshes);
+-    if (StaticMeshes.Num())
++    TArray<USkeletalMeshComponent*> SkeletalMeshes;
++    Actor->GetComponents(SkeletalMeshes);
++    if (StaticMeshes.Num() || SkeletalMeshes.Num())
+     {
+       Names.Add(Actor->GetName());
+     }
+@@ -331,34 +335,181 @@ UTexture2D* ACarlaGameModeBase::CreateUETexture(const carla::rpc::TextureFloatCo
+   return UETexture;
+ }
+ 
++bool ACarlaGameModeBase::ApplyTextureToActorSlot(
++    AActor* Actor, UTexture2D* Texture, const FString& ComponentName,
++    int32 Slot, bool bRestore)
++{
++  if (!Actor || Slot < 0) return false;
++  TArray<UMeshComponent*> Meshes;
++  Actor->GetComponents(Meshes);
++  UMeshComponent* Selected = nullptr;
++  for (UMeshComponent* Mesh : Meshes)
++  {
++    // Tagged copies are renderer internals, never user material targets.
++    if (Mesh->IsA<UTaggedComponent>()) continue;
++    if (ComponentName.IsEmpty() || Mesh->GetName() == ComponentName)
++    {
++      if (Selected) return false; // Ambiguous component selection.
++      Selected = Mesh;
++    }
++  }
++  if (!Selected || Slot >= Selected->GetNumMaterials()) return false;
++  const FString Key = Selected->GetPathName() + TEXT("::") + FString::FromInt(Slot);
++  UMaterialInterface* Material = nullptr;
++  if (bRestore)
++  {
++    UMaterialInterface** Saved = StudioOriginalMaterials.Find(Key);
++    if (!Saved) return false;
++    Material = *Saved;
++  }
++  else
++  {
++    UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr,
++        TEXT("/Game/Carla/Static/GenericMaterials/M_CarlaVehicleLiveryRuntime.M_CarlaVehicleLiveryRuntime"));
++    if (!Base || !Texture) return false;
++    UMaterialInstanceDynamic* Dynamic = UMaterialInstanceDynamic::Create(Base, Selected);
++    if (!Dynamic) return false;
++    if (!StudioOriginalMaterials.Contains(Key))
++      StudioOriginalMaterials.Add(Key, Selected->GetMaterial(Slot));
++    Dynamic->SetTextureParameterValue(TEXT("LiveryTexture"), Texture);
++    Dynamic->SetTextureParameterValue(TEXT("Diffuse"), Texture);
++    Material = Dynamic;
++  }
++  if (UTaggedComponent* Tagged = ATagger::FindTaggedComponent(Selected))
++    Tagged->WaitForParentSkeletalMesh();
++  FlushRenderingCommands();
++  Selected->SetMaterial(Slot, Material);
++  if (UTaggedComponent* Tagged = ATagger::FindTaggedComponent(Selected))
++    Tagged->MarkRenderStateDirty();
++  FlushRenderingCommands();
++  if (bRestore) StudioOriginalMaterials.Remove(Key);
++  return true;
++}
++
+ void ACarlaGameModeBase::ApplyTextureToActor(
+     AActor* Actor,
+     UTexture2D* Texture,
+     const carla::rpc::MaterialParameter& TextureParam)
+ {
+   namespace cr = carla::rpc;
+-  TArray<UStaticMeshComponent*> StaticMeshes;
+-  Actor->GetComponents(StaticMeshes);
+-  for (UStaticMeshComponent* Mesh : StaticMeshes)
++  TArray<UMeshComponent*> Meshes;
++  Actor->GetComponents(Meshes);
++  for (UMeshComponent* Mesh : Meshes)
+   {
+     for (int i = 0; i < Mesh->GetNumMaterials(); ++i)
+     {
+       UMaterialInterface* OriginalMaterial = Mesh->GetMaterial(i);
++      if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
++          Actor->GetName().StartsWith(TEXT("Road_Road_")))
++      {
++        OriginalMaterial = LoadObject<UMaterialInterface>(nullptr,
++            TEXT("/Game/Carla/Static/GenericMaterials/RoadPainterMaterials/"
++                 "M_CarlaRoadRuntime.M_CarlaRoadRuntime"));
++      }
++      if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
++          Actor->GetName().StartsWith(TEXT("BP_House16")) && i == 0)
++      {
++        OriginalMaterial = LoadObject<UMaterialInterface>(nullptr,
++            TEXT("/Game/Carla/Static/Building/Materials/"
++                 "M_CarlaBuildingRuntime.M_CarlaBuildingRuntime"));
++      }
++      if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
++          Actor->GetName().StartsWith(TEXT("BP_House16")) && i != 0)
++      {
++        continue;
++      }
++      const bool IsVerifiedWalker =
++          Actor->GetName().StartsWith(TEXT("BP_Walker_Female1_v1"));
++      const bool IsVerifiedClothing = IsVerifiedWalker && i == 14;
++      if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
++          IsVerifiedClothing)
++      {
++        OriginalMaterial = LoadObject<UMaterialInterface>(nullptr,
++            TEXT("/Game/Carla/Static/Pedestrian/Materials/"
++                 "M_CarlaPedestrianClothingRuntime."
++                 "M_CarlaPedestrianClothingRuntime"));
++      }
++      if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
++          IsVerifiedWalker && !IsVerifiedClothing)
++      {
++        continue;
++      }
++      const bool IsEuropeanHGV =
++          Actor->GetName().StartsWith(TEXT("BP_European_HGV"));
++      const bool IsHGVBodywork = IsEuropeanHGV && i == 1;
++      if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
++          IsHGVBodywork)
++      {
++        OriginalMaterial = LoadObject<UMaterialInterface>(nullptr,
++            TEXT("/Game/Carla/Static/Truck/European_HGV/"
++                 "M_CarlaHGVLiveryRuntime.M_CarlaHGVLiveryRuntime"));
++      }
++      if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
++          IsEuropeanHGV && !IsHGVBodywork)
++      {
++        continue;
++      }
++      const TArray<FName> MaterialSlotNames = Mesh->GetMaterialSlotNames();
++      const FString MaterialSlotName = MaterialSlotNames.IsValidIndex(i)
++          ? MaterialSlotNames[i].ToString().ToLower()
++          : FString();
++      const bool IsTeslaModel3 =
++          Actor->GetName().StartsWith(TEXT("BP_TeslaM3"));
++      const bool IsGenericVehicleBodywork =
++          Mesh->IsA<USkeletalMeshComponent>() &&
++          !IsVerifiedWalker &&
++          !IsEuropeanHGV &&
++          !IsTeslaModel3 &&
++          (MaterialSlotName.Contains(TEXT("bodywork")) ||
++           MaterialSlotName.Contains(TEXT("carexterior")) ||
++           MaterialSlotName.Contains(TEXT("car_exterior")) ||
++           (Actor->GetName().StartsWith(TEXT("BP_CarlaCola")) && i == 3));
++      if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
++          IsGenericVehicleBodywork)
++      {
++        OriginalMaterial = LoadObject<UMaterialInterface>(nullptr,
++            TEXT("/Game/Carla/Static/GenericMaterials/"
++                 "M_CarlaVehicleLiveryRuntime.M_CarlaVehicleLiveryRuntime"));
++      }
++      if (TextureParam == cr::MaterialParameter::Tex_Diffuse &&
++          Mesh->IsA<USkeletalMeshComponent>() &&
++          !IsVerifiedWalker &&
++          !IsEuropeanHGV &&
++          !IsGenericVehicleBodywork &&
++          !(IsTeslaModel3 && i == 5))
++      {
++        continue;
++      }
+       UMaterialInstanceDynamic* DynamicMaterial = Cast<UMaterialInstanceDynamic>(OriginalMaterial);
+       if(!DynamicMaterial)
+       {
+         DynamicMaterial = UMaterialInstanceDynamic::Create(OriginalMaterial, NULL);
++        if (USkeletalMeshComponent* SkeletalMesh = Cast<USkeletalMeshComponent>(Mesh))
++        {
++          if (UTaggedComponent* TaggedComponent = ATagger::FindTaggedComponent(SkeletalMesh))
++          {
++            TaggedComponent->WaitForParentSkeletalMesh();
++          }
++        }
+         Mesh->SetMaterial(i, DynamicMaterial);
++        if (Mesh->IsA<USkeletalMeshComponent>())
++        {
++          FlushRenderingCommands();
++        }
+       }
+ 
+       switch(TextureParam)
+       {
+         case cr::MaterialParameter::Tex_Diffuse:
+           DynamicMaterial->SetTextureParameterValue("BaseColor", Texture);
++          DynamicMaterial->SetTextureParameterValue("Diffuse", Texture);
++          DynamicMaterial->SetTextureParameterValue("LiveryTexture", Texture);
+           DynamicMaterial->SetTextureParameterValue("Difuse", Texture);
+           DynamicMaterial->SetTextureParameterValue("Difuse 2", Texture);
+           DynamicMaterial->SetTextureParameterValue("Difuse 3", Texture);
+           DynamicMaterial->SetTextureParameterValue("Difuse 4", Texture);
++          DynamicMaterial->SetVectorParameterValue("Base Color", FLinearColor::White);
++          DynamicMaterial->SetVectorParameterValue("Gain Color", FLinearColor::White);
+           break;
+         case cr::MaterialParameter::Tex_Normal:
+           DynamicMaterial->SetTextureParameterValue("Normal", Texture);
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.h b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.h
+index e6d6de80e..152cfdcf0 100644
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.h
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.h
+@@ -114,6 +114,9 @@ public:
+ 
+   TArray<FString> GetNamesOfAllActors();
+ 
++  bool ApplyTextureToActorSlot(AActor* Actor, UTexture2D* Texture,
++      const FString& ComponentName, int32 Slot, bool bRestore);
++
+   // Gravitational acceleration. Default is earth one, which is approximately 9.81 m/s^2
+   UPROPERTY(BlueprintReadOnly, EditAnywhere, Category="Sensor Gravity")
+   float IMUISensorGravity = 9.81f;
+@@ -135,6 +138,10 @@ protected:
+ 
+ private:
+ 
++  // Keep source materials alive until restoration or world teardown.
++  UPROPERTY()
++  TMap<FString, UMaterialInterface*> StudioOriginalMaterials;
++
+   void SpawnActorFactories();
+ 
+   void StoreSpawnPoints();
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Server/CarlaServer.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Server/CarlaServer.cpp
+index e64e00cfe..0549773bb 100644
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Server/CarlaServer.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Server/CarlaServer.cpp
+@@ -500,6 +500,23 @@ void FCarlaServer::FPimpl::BindActions()
+       RESPOND_ERROR("unable to find CARLA game mode");
+     }
+     TArray<AActor*> ActorsToPaint;
++    // Project protocol over the existing string target: actor|csa|component|slot|apply/restore.
++    // Old servers fail closed because this cannot name a real Unreal actor.
++    if (actors_name.size() == 1 && cr::ToFString(actors_name[0]).Contains(TEXT("|csa|")))
++    {
++      TArray<FString> Parts;
++      cr::ToFString(actors_name[0]).ParseIntoArray(Parts, TEXT("|"), false);
++      if (Parts.Num() != 5 || Parts[1] != TEXT("csa") || !Parts[3].IsNumeric() ||
++          (Parts[4] != TEXT("apply") && Parts[4] != TEXT("restore")) ||
++          parameter != cr::MaterialParameter::Tex_Diffuse)
++        RESPOND_ERROR("invalid studio material slot target");
++      AActor* Actor = GameMode->FindActorByName(Parts[0]);
++      const bool bRestore = Parts[4] == TEXT("restore");
++      UTexture2D* UETexture = bRestore ? nullptr : GameMode->CreateUETexture(Texture);
++      if (!GameMode->ApplyTextureToActorSlot(Actor, UETexture, Parts[2], FCString::Atoi(*Parts[3]), bRestore))
++        RESPOND_ERROR("studio material target unavailable or original material not recorded");
++      return R<void>::Success();
++    }
+     for(const std::string& actor_name : actors_name)
+     {
+       AActor* ActorToPaint = GameMode->FindActorByName(cr::ToFString(actor_name));
+@@ -4034,4 +4051,3 @@ carla::rpc::Response<bool> FCarlaServer::call_update_synchronization_window(
+ carla::rpc::Response<std::pair< bool , std::vector<carla::rpc::synchronization_window_participant_state> > >  FCarlaServer::call_get_synchronization_window_status() {
+   return Pimpl->call_get_synchronization_window_status();
+ }
+-

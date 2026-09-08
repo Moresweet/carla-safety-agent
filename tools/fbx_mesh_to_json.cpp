@@ -30,6 +30,8 @@ int main(int argc, char **argv) {
   FbxScene *scene = FbxScene::Create(manager, "scene");
   importer->Import(scene);
   importer->Destroy();
+  FbxGeometryConverter converter(manager);
+  converter.Triangulate(scene, true);
 
   std::vector<Vertex> vertices;
   std::vector<FbxNode *> stack{scene->GetRootNode()};
@@ -55,16 +57,21 @@ int main(int argc, char **argv) {
     FbxLayerElementMaterial *materials = mesh->GetElementMaterial();
     for (int polygon = 0; polygon < mesh->GetPolygonCount(); ++polygon) {
       int material = 0;
-      if (materials && materials->GetIndexArray().GetCount() > polygon)
-        material = materials->GetIndexArray().GetAt(polygon);
+      if (materials && materials->GetIndexArray().GetCount()) {
+        const int index = materials->GetMappingMode() == FbxLayerElement::eAllSame ? 0 : polygon;
+        if (index < materials->GetIndexArray().GetCount()) material = materials->GetIndexArray().GetAt(index);
+      }
       if (material != wanted_material || mesh->GetPolygonSize(polygon) != 3) continue;
+      std::vector<Vertex> triangle;
       for (int corner = 0; corner < 3; ++corner) {
         const int point_index = mesh->GetPolygonVertex(polygon, corner);
         const FbxVector4 point = mesh->GetControlPointAt(point_index);
         FbxVector2 uv; bool unmapped = false;
-        mesh->GetPolygonVertexUV(polygon, corner, uv_set, uv, unmapped);
-        if (!unmapped) vertices.push_back({point[0], point[1], point[2], uv[0], 1.0 - uv[1]});
+        const bool mapped = mesh->GetPolygonVertexUV(polygon, corner, uv_set, uv, unmapped);
+        if (mapped && !unmapped && std::isfinite(uv[0]) && std::isfinite(uv[1]))
+          triangle.push_back({point[0], point[1], point[2], uv[0], 1.0 - uv[1]});
       }
+      if (triangle.size() == 3) vertices.insert(vertices.end(), triangle.begin(), triangle.end());
     }
   }
   if (vertices.empty()) {

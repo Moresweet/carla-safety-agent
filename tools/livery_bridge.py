@@ -12,6 +12,9 @@ import sys
 import signal
 import subprocess
 import uuid
+import mimetypes
+import shutil
+from functools import wraps
 from dataclasses import replace
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,13 +27,22 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from carla_safety_agent.carla_adapter import CarlaAdapter
 from carla_safety_agent.benchmark_catalog import algorithm_catalog, benchmark_report, route_catalog
+from carla_safety_agent.blender_pipeline import BlenderPipeline
+from carla_safety_agent.dataset import list_datasets
+from carla_safety_agent.provenance import ActorProvenance
+from carla_safety_agent.uv_audit import audit_uv
+from carla_safety_agent.replay import replay_index, replay_file
 from carla_safety_agent.natural_language import NaturalLanguageCompiler
+from carla_safety_agent.session import SessionJournal
+from carla_safety_agent.scene_store import SceneStore, validate_scene
+from carla_safety_agent.material_library import MaterialLibrary, exact_environment_target
 
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("BRIDGE_PORT", "8765"))
 CARLA_PORT = int(os.environ.get("CARLA_PORT", "2000"))
 FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:3000")
+RUNTIME_MODE = "docker" if Path("/.dockerenv").exists() else "native"
 HIGHLIGHT_COLORS = {
     "vehicle": carla.Color(0, 170, 255),
     "walker": carla.Color(255, 200, 0),
@@ -42,21 +54,46 @@ _hero_lock = threading.Event()
 _map_cache = {}
 _environment_cache = {}
 _actor_object_names = {}
+_editor_actors = set()
+_generated_actor_assets = {}
 _thumbnail_cache = {}
 _thumbnail_lock = threading.Lock()
 _e2e_lock = threading.Lock()
+_simulation_lock = threading.RLock()
+_carla_client = None
+
+
+def simulation_operation(function):
+    """Drain editor RPC operations before handing the world to an evaluator."""
+    @wraps(function)
+    def guarded(*args, **kwargs):
+        with _simulation_lock:
+            return function(*args, **kwargs)
+    return guarded
+
 _e2e_process = None
 _e2e_job = {"state": "idle", "kind": None, "started_at": None,
             "ended_at": None, "returncode": None, "command": None}
 _scene_snapshot = None
+_world_episode = None
+_provenance = ActorProvenance(PROJECT_ROOT / '.runtime/actor-provenance.json')
+_uv_audit = audit_uv(PROJECT_ROOT / 'tools/livery-designer/public')
 _e2e_log = PROJECT_ROOT / ".runtime" / "uniad-ui.log"
 _e2e_pid = PROJECT_ROOT / ".runtime" / "uniad.pid"
 _evaluation_control_dir = PROJECT_ROOT / ".runtime" / "evaluation-control"
 E2E_ROOT = Path(os.environ.get("E2E_ROOT", "/home/moresweet/Data/e2e"))
 BENCH2DRIVE_ROOT = Path(os.environ.get("BENCH2DRIVE_ROOT", str(E2E_ROOT / "Bench2Drive")))
 BENCH2DRIVE_ZOO = Path(os.environ.get("BENCH2DRIVE_ZOO", str(E2E_ROOT / "Bench2DriveZoo")))
+BENCH2DRIVE_TCP_ZOO = Path(os.environ.get(
+    "BENCH2DRIVE_TCP_ZOO", str(E2E_ROOT / "Bench2DriveZoo-tcp-admlp")))
+DATASET_ROOT = Path(os.environ.get(
+    "CSA_DATASET_ROOT", str(PROJECT_ROOT / ".runtime" / "generated-scenarios")))
 UNIAD_PYTHON = Path(os.environ.get(
     "UNIAD_PYTHON", str(E2E_ROOT / "miniconda3/envs/uniad-cu128/bin/python")))
+BLENDER = BlenderPipeline(PROJECT_ROOT)
+SESSION = SessionJournal(PROJECT_ROOT / 'data')
+SCENES = SceneStore(PROJECT_ROOT / 'data/scenes')
+MATERIALS = MaterialLibrary(PROJECT_ROOT / 'data')
 _thumbnail_dir = os.environ.get("THUMBNAIL_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), ".runtime", "thumbnails"))
 ENVIRONMENT_CATEGORIES = {
     "buildings": (carla.CityObjectLabel.Buildings, "architecture", "building"),
@@ -100,6 +137,8 @@ def evaluation_active() -> bool:
     with _e2e_lock:
         active = _e2e_job["state"] in ("running", "stopping")
     if active:
+        return True
+    if SESSION.snapshot()['state'] in ('preparing', 'running', 'stopping', 'recovering'):
         return True
     try:
         pid = int(_e2e_pid.read_text().strip())
@@ -159,8 +198,32 @@ def evaluation_command(action: str, payload: dict, timeout: float = 30.0) -> dic
     raise RuntimeError("The evaluator did not apply the edit within 30 seconds")
 
 
+def _benchmark_result_failed(results_path: Path) -> bool:
+    if not results_path.is_file():
+        return True
+    try:
+        payload = json.loads(results_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return True
+    checkpoint = payload.get("_checkpoint", {})
+    records = checkpoint.get("records", [])
+    global_status = checkpoint.get("global_record", {}).get("status")
+    return global_status == "Failed" or any(
+        str(record.get("status", "")).lower().startswith("failed")
+        for record in records
+    )
+
+
 def _finish_e2e(process):
     returncode = process.wait()
+    cleanup_error = None
+    if _e2e_process is process:
+        SESSION.transition('recovering')
+    if _e2e_process is process and _e2e_job.get("kind") in ("run", "preset-run"):
+        try:
+            restore_editor_world()
+        except Exception as exc:
+            cleanup_error = str(exc)
     try:
         if _e2e_pid.read_text().strip() == str(process.pid):
             _e2e_pid.unlink(missing_ok=True)
@@ -168,8 +231,33 @@ def _finish_e2e(process):
         pass
     with _e2e_lock:
         if _e2e_process is process:
-            _e2e_job.update(state="succeeded" if returncode == 0 else "failed",
+            results_path = Path(_e2e_job.get("results") or "")
+            benchmark_failed = bool(_e2e_job.get("results")) and returncode == 0 and _benchmark_result_failed(results_path)
+            state = ("stopped" if _e2e_job["state"] == "stopping" else
+                     "succeeded" if returncode == 0 and not benchmark_failed else "failed")
+            _e2e_job.update(state="failed" if cleanup_error else state, cleanup_error=cleanup_error,
                             ended_at=time.time(), returncode=returncode)
+            SESSION.transition('recovering' if cleanup_error else 'failed' if state == 'failed' else
+                               'stopped' if state == 'stopped' else 'completed',
+                               returncode=returncode, error=cleanup_error,
+                               outcome={'execution': state, 'benchmark_failed': benchmark_failed,
+                                        'failure_category': 'world_recovery' if cleanup_error else
+                                            'process_exit' if returncode not in (0, 130) and state != 'stopped' else
+                                            'benchmark_result' if benchmark_failed and state != 'stopped' else None})
+
+
+def collection_request(data):
+    if data.get('recording') and not evaluation_active():
+        raise RuntimeError('请先启动闭环测试，采集会使用该模型的真实输入')
+    payload = {'id': uuid.uuid4().hex, 'recording': bool(data.get('recording')),
+               'every': max(1, min(100, int(data.get('every', 5)))),
+               'max_frames': max(1, min(10000, int(data.get('max_frames', 2000))))}
+    target = _evaluation_control_dir/'collection-request.json'
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp = target.with_suffix('.tmp')
+    temp.write_text(json.dumps(payload))
+    temp.replace(target)
+    return {'ok': True, 'request': payload}
 
 
 def e2e_status() -> dict:
@@ -189,14 +277,15 @@ def e2e_status() -> dict:
             results = json.loads(results_path.read_text())
         except (OSError, json.JSONDecodeError):
             results = {"error": "Result file is not valid JSON"}
-    algorithms = algorithm_catalog(BENCH2DRIVE_ZOO)
+    algorithms = algorithm_catalog(BENCH2DRIVE_ZOO, BENCH2DRIVE_TCP_ZOO)
     for item in algorithms:
-        item.update(framework="Native Scenario Executor", sensors="6 cameras",
+        item.update(framework="Native Scenario Executor",
                     enabled=item["status"] == "available")
-    return {"ok": True, "algorithms": algorithms, "job": job,
+    return {"ok": True, "algorithms": algorithms, "job": job, 'session': SESSION.snapshot(),
             "routes": e2e_routes(), "log": log, "results": results}
 
 
+@simulation_operation
 def start_e2e(data: dict) -> dict:
     global _e2e_process
     action = str(data.get("action", "doctor"))
@@ -204,6 +293,15 @@ def start_e2e(data: dict) -> dict:
         raise RuntimeError(f"Unknown UniAD action: {action}")
     if not UNIAD_PYTHON.is_file():
         raise RuntimeError(f"UniAD environment is missing: {UNIAD_PYTHON}")
+    if evaluation_active():
+        raise RuntimeError("An evaluation is already running or stopping")
+    if action in ("run", "preset-run"):
+        if shutil.disk_usage(PROJECT_ROOT).free < 1024**3:
+            raise RuntimeError('At least 1 GiB free disk space is required before evaluation')
+        # Fail promptly instead of launching a model against a crashed server.
+        connect_world().get_settings()
+    if action in ("run", "model-smoke") and data.get("algorithm", "uniad-tiny") != "uniad-tiny":
+        raise RuntimeError("This action supports UniAD-Tiny only; use preset closed-loop testing for other models")
     with _e2e_lock:
         if _e2e_process is not None and _e2e_process.poll() is None:
             raise RuntimeError("A UniAD task is already running")
@@ -226,7 +324,11 @@ def start_e2e(data: dict) -> dict:
                        for item in catalogs}
             if collection not in allowed or route_id not in allowed[collection]:
                 raise RuntimeError("Select a valid preset route from the external catalog")
-            if str(data.get("algorithm", "uniad-tiny")) != "uniad-tiny":
+            algorithm = str(data.get("algorithm", "uniad-tiny"))
+            available = {item["id"] for item in
+                         algorithm_catalog(BENCH2DRIVE_ZOO, BENCH2DRIVE_TCP_ZOO)
+                         if item["status"] == "available"}
+            if algorithm not in available:
                 raise RuntimeError("The selected algorithm is not installed with a runnable checkpoint")
             route = collection
             command = [str(PROJECT_ROOT / "scripts/run_benchmark_preset.sh")]
@@ -235,11 +337,14 @@ def start_e2e(data: dict) -> dict:
         env = os.environ.copy()
         env.pop("PYTHONPATH", None)
         env.update(E2E_ROOT=str(E2E_ROOT), UNIAD_PYTHON=str(UNIAD_PYTHON),
-                   CSA_EVALUATION_CONTROL_DIR=str(_evaluation_control_dir))
+                   CSA_EVALUATION_CONTROL_DIR=str(_evaluation_control_dir),
+                   CSA_SENSOR_CAPTURE="1", CSA_DATASET_ROOT=str(DATASET_ROOT))
         if action in ("run", "preset-run"):
+            _hero_lock.clear()
+            collection_request({'recording': False})
             results_path = (PROJECT_ROOT / "runs/uniad" / f"{route.stem}.json"
                             if action == "run" else PROJECT_ROOT / "runs/benchmark" /
-                            f"{route.stem}-{route_id}.json")
+                            f"{algorithm}-{route.stem}-{route_id}-{uuid.uuid4().hex[:8]}.json")
             (_evaluation_control_dir / "state.json").unlink(missing_ok=True)
             for directory in (_evaluation_control_dir / "commands",
                               _evaluation_control_dir / "results",
@@ -258,16 +363,30 @@ def start_e2e(data: dict) -> dict:
             env["RESULTS"] = str(results_path)
         elif action == "preset-run":
             env.update(ROUTES=str(route), ROUTE_ID=route_id, RESULTS=str(results_path),
+                       ALGORITHM=algorithm,
                        BENCH2DRIVE_ROOT=str(BENCH2DRIVE_ROOT),
-                       BENCH2DRIVE_ZOO=str(BENCH2DRIVE_ZOO))
-        _e2e_process = subprocess.Popen(
-            command, cwd=PROJECT_ROOT, env=env, stdout=log_stream,
-            stderr=subprocess.STDOUT, start_new_session=True)
-        log_stream.close()
+                       BENCH2DRIVE_ZOO=str(BENCH2DRIVE_ZOO),
+                       BENCH2DRIVE_TCP_ZOO=str(BENCH2DRIVE_TCP_ZOO))
+        SESSION.begin(action, {'request': data, 'command': command,
+                              'python': str(UNIAD_PYTHON), 'carla_port': CARLA_PORT,
+                              'results': str(results_path) if action in ('run', 'preset-run') else None})
+        try:
+            _e2e_process = subprocess.Popen(
+                command, cwd=PROJECT_ROOT, env=env, stdout=log_stream,
+                stderr=subprocess.STDOUT, start_new_session=True)
+            SESSION.attach(_e2e_process.pid)
+        except Exception as exc:
+            SESSION.transition('failed', error=str(exc))
+            raise
+        finally:
+            log_stream.close()
         _e2e_pid.write_text(f"{_e2e_process.pid}\n")
         _e2e_job.clear()
         _e2e_job.update(state="running", kind=action, started_at=time.time(),
                         ended_at=None, returncode=None, command=command,
+                        algorithm=algorithm if action == "preset-run" else "uniad-tiny",
+                        collection=str(route) if action == "preset-run" else None,
+                        route_id=route_id if action == "preset-run" else None,
                         results=str(results_path) if action in ("run", "preset-run") else None)
         threading.Thread(target=_finish_e2e, args=(_e2e_process,), daemon=True).start()
         return {"ok": True, "job": dict(_e2e_job)}
@@ -275,6 +394,8 @@ def start_e2e(data: dict) -> dict:
 
 def stop_e2e() -> dict:
     with _e2e_lock:
+        if _e2e_job["state"] == "stopping":
+            return {"ok": True, "state": "stopping"}
         process = _e2e_process
         if process is not None and process.poll() is None:
             pid = process.pid
@@ -286,12 +407,72 @@ def stop_e2e() -> dict:
                 return {"ok": True, "state": _e2e_job["state"]}
         # Let the evaluator run its finally blocks so synchronous mode and the
         # traffic manager are restored before the editor becomes interactive.
+        if SESSION.owned_pid() != pid:
+            raise RuntimeError('Cannot safely stop this PID: execution identity is not verified')
         os.killpg(pid, signal.SIGINT)
+        SESSION.transition('stopping')
         _e2e_job["state"] = "stopping"
         return {"ok": True, "state": "stopping"}
 
 
+def resume_session():
+    """Recover only our persisted job; never signal an unverified legacy PID."""
+    previous = SESSION.snapshot()
+    if previous['state'] not in ('preparing', 'running', 'stopping', 'recovering'):
+        return
+    while SESSION.owned_pid():
+        time.sleep(1)
+    SESSION.reconcile()
+    identity = previous.get('process')
+    if identity:
+        try:
+            if _e2e_pid.read_text().strip() == str(identity['pid']):
+                _e2e_pid.unlink()
+        except OSError:
+            pass
+    try:
+        if previous.get('kind') in ('run', 'preset-run'):
+            restore_editor_world()
+        SESSION.transition('failed', error='Bridge restarted during execution; result requires review')
+    except Exception as exc:
+        # Keep recovering to block competing RPCs; explicit retry is available.
+        SESSION.transition('recovering', error=str(exc))
+    with _e2e_lock:
+        _e2e_job.update(state='failed', ended_at=time.time())
+
+
+@simulation_operation
+def recover_session():
+    if SESSION.owned_pid() or (_e2e_process is not None and _e2e_process.poll() is None):
+        raise RuntimeError('Stop the live execution before recovering the world')
+    current = SESSION.snapshot()
+    if current['state'] == 'recovering':
+        restore_editor_world()
+        SESSION.transition('failed', error='World recovered; interrupted execution needs review')
+    return {'ok': True, 'session': SESSION.snapshot()}
+
+
+def system_preflight():
+    """Read-only local checks; never connect a second client during evaluation."""
+    checks = [{'id': 'model_environment', 'ok': UNIAD_PYTHON.is_file(), 'detail': str(UNIAD_PYTHON)},
+              {'id': 'disk_space', 'ok': shutil.disk_usage(PROJECT_ROOT).free > 1024**3,
+               'free_bytes': shutil.disk_usage(PROJECT_ROOT).free},
+              {'id': 'session_idle', 'ok': not evaluation_active(), 'detail': SESSION.snapshot()['state']}]
+    if not evaluation_active():
+        try:
+            world = connect_world()
+            checks.append({'id': 'carla', 'ok': True, 'map': world.get_map().name,
+                           'synchronous': world.get_settings().synchronous_mode})
+        except Exception as exc:
+            checks.append({'id': 'carla', 'ok': False, 'detail': str(exc)})
+    return {'ok': True, 'ready': all(c['ok'] for c in checks), 'checks': checks,
+            'session': SESSION.snapshot()}
+
+
+@simulation_operation
 def compile_scenario(data: dict, execute: bool = False) -> dict:
+    if execute and evaluation_active():
+        raise RuntimeError("Stop the closed-loop evaluation before running a generated scene")
     compilation = NaturalLanguageCompiler().compile(
         str(data.get("description", "")), int(data.get("seed", 7)))
     scenario = compilation.scenario
@@ -313,6 +494,8 @@ def compile_scenario(data: dict, execute: bool = False) -> dict:
             scenario, output, render=True)
         response["result"] = result.to_dict()
         response["output_dir"] = str(output)
+        if result.trace_path:
+            response["manifest_path"] = str(Path(result.trace_path).parent / "manifest.json")
     return response
 
 
@@ -320,7 +503,7 @@ def evaluate_scenario(data: dict) -> dict:
     """Compile a natural-language scene and launch it in the native executor."""
     response = compile_scenario(data)
     response["evaluation"] = start_e2e({
-        "action": "run", "algorithm": "uniad", "route": response["scenario_path"]})
+        "action": "run", "algorithm": "uniad-tiny", "route": response["scenario_path"]})
     return response
 
 
@@ -338,9 +521,76 @@ def decode_texture(payload: bytes, size: tuple[int, int]) -> tuple[Image.Image, 
 
 
 def connect_world():
-    client = carla.Client(HOST, CARLA_PORT)
-    client.set_timeout(20.0)
-    return client.get_world()
+    global _carla_client, _world_episode
+    with _simulation_lock:
+        if evaluation_active():
+            raise RuntimeError("Closed-loop evaluation owns CARLA; wait for it to stop")
+        if _carla_client is None:
+            _carla_client = carla.Client(HOST, CARLA_PORT)
+            _carla_client.set_timeout(5.0)
+        world = _carla_client.get_world()
+        if _world_episode != world.id:
+            _world_episode = world.id
+            _editor_actors.clear()
+            _environment_cache.clear()
+            _actor_object_names.clear()
+            _provenance.mark(world.id, [a for a in world.get_actors()
+                if a.type_id.startswith(('vehicle.', 'walker.', 'static.prop.'))], 'existing', overwrite=False)
+        return world
+
+
+def _origin_for_actor(actor):
+    return _provenance.origin(_world_episode, actor)
+
+
+@simulation_operation
+def scene_preview():
+    """Render the actual spectator view; never substitute proxy geometry."""
+    world = connect_world()
+    ready = threading.Event()
+    frames = []
+    bp = world.get_blueprint_library().find('sensor.camera.rgb')
+    bp.set_attribute('image_size_x', '960')
+    bp.set_attribute('image_size_y', '540')
+    sensor = world.spawn_actor(bp, world.get_spectator().get_transform())
+    def receive(frame):
+        if not ready.is_set():
+            frames.append(bytes(frame.raw_data))
+            ready.set()
+    try:
+        sensor.listen(receive)
+        if not ready.wait(8):
+            raise RuntimeError('CARLA 实景取景超时，请确认仿真正在推进')
+        output = io.BytesIO()
+        Image.frombytes('RGBA', (960, 540), frames[0], 'raw', 'BGRA').convert('RGB').save(output, 'JPEG', quality=90)
+        return output.getvalue()
+    finally:
+        sensor.stop()
+        sensor.destroy()
+
+
+@simulation_operation
+def restore_editor_world():
+    """The evaluator has exited: also recover an interrupt during its setup."""
+    global _carla_client
+    if _carla_client is None:
+        _carla_client = carla.Client(HOST, CARLA_PORT)
+        _carla_client.set_timeout(5.0)
+    world = _carla_client.get_world()
+    settings = world.get_settings()
+    if settings.synchronous_mode:
+        settings.synchronous_mode = False
+        settings.fixed_delta_seconds = None
+        settings.spectator_as_ego = True
+        world.apply_settings(settings)
+
+
+@simulation_operation
+def texture_targets(kind: str) -> dict:
+    prefix = {"road": "Road_Road_", "building": "BP_House"}.get(kind, "")
+    names = sorted(name for name in connect_world().get_names_of_all_objects()
+                   if prefix and name.startswith(prefix))
+    return {"ok": True, "kind": kind, "count": len(names), "objects": names}
 
 
 def vector(location) -> dict:
@@ -372,10 +622,13 @@ def actor_record(actor) -> dict:
     kind = ("walker" if actor.type_id.startswith("walker.") else
             "prop" if actor.type_id.startswith("static.prop.") else "vehicle")
     extent = actor.bounding_box.extent
+    rotation = actor.get_transform().rotation
     return {"key": f"actor:{actor.id}", "id": actor.id, "kind": kind,
             "name": actor.type_id, "label": f"{actor.type_id} · #{actor.id}",
             "location": vector(actor.get_location()),
             "extent": vector(extent),
+            "rotation": {"pitch": rotation.pitch, "yaw": rotation.yaw, "roll": rotation.roll},
+            "origin": _origin_for_actor(actor),
             "hero": actor.attributes.get("role_name") == "hero"}
 
 
@@ -396,6 +649,7 @@ def environment_record(obj, category: str) -> dict:
     location = box.location
     return {"key": f"environment:{obj.id}", "id": str(obj.id),
             "source": "environment", "category": category, "group": group,
+            "origin": "existing",
             "kind": coarse, "name": obj.name,
             "label": f"{obj.name} · {str(obj.id)[-6:]}",
             "location": vector(location), "extent": vector(box.extent),
@@ -404,6 +658,7 @@ def environment_record(obj, category: str) -> dict:
                          "roll": obj.transform.rotation.roll}}
 
 
+@simulation_operation
 def catalog_categories() -> dict:
     if evaluation_active():
         snapshot = evaluation_snapshot() or {}
@@ -436,17 +691,20 @@ def catalog_categories() -> dict:
     return {"ok": True, "map": world.get_map().name, "categories": categories}
 
 
-def catalog_objects(category: str, query: str, offset: int, limit: int) -> dict:
+@simulation_operation
+def catalog_objects(category: str, query: str, offset: int, limit: int, origin: str = "all") -> dict:
     if evaluation_active():
         if category in ENVIRONMENT_CATEGORIES:
             return evaluation_command("catalog_environment", {
-                "category": category, "query": query, "offset": offset, "limit": limit})
+                "category": category, "query": query, "offset": offset, "limit": limit, "origin": origin})
         snapshot = evaluation_snapshot() or {}
         kind = {"vehicles": "vehicle", "pedestrians": "walker",
                 "spawned_props": "prop"}.get(category)
         if not kind:
             raise RuntimeError(f"Unknown category: {category}")
         records = [item for item in snapshot.get("objects", []) if item.get("kind") == kind]
+        if origin != "all":
+            records = [item for item in records if item.get('origin', 'existing') == origin]
         if query:
             needle = query.casefold()
             records = [item for item in records if needle in item["name"].casefold()
@@ -466,6 +724,8 @@ def catalog_objects(category: str, query: str, offset: int, limit: int) -> dict:
         records = [actor_record(actor) | {"source": "actor", "category": category,
                                              "group": "dynamic"}
                    for actor in world.get_actors().filter(pattern)]
+    if origin != "all":
+        records = [item for item in records if item.get('origin', 'existing') == origin]
     if query:
         needle = query.casefold()
         records = [item for item in records
@@ -484,6 +744,7 @@ def find_environment(world, object_id: int):
     raise RuntimeError(f"Environment object {object_id} was not found")
 
 
+@simulation_operation
 def focus_environment(object_id: int) -> dict:
     if evaluation_active():
         return evaluation_command("focus_environment", {"object_id": object_id})
@@ -500,6 +761,7 @@ def focus_environment(object_id: int) -> dict:
     return {"ok": True, "object": record}
 
 
+@simulation_operation
 def set_environment_visibility(object_id: int, enabled: bool) -> dict:
     if evaluation_active():
         return evaluation_command("environment_visibility", {
@@ -511,13 +773,27 @@ def set_environment_visibility(object_id: int, enabled: bool) -> dict:
             "visible": enabled}
 
 
+@simulation_operation
 def spawn_object(blueprint_id: str, transform_data: dict) -> dict:
     if evaluation_active():
         return evaluation_command("spawn", {"blueprint_id": blueprint_id,
                                              "transform": transform_data})
+    # Thumbnail staging also creates actors; do not mix its mesh names into this delta.
+    with _thumbnail_lock:
+        return _spawn_editor_object(blueprint_id, transform_data)
+
+
+def _spawn_editor_object(blueprint_id: str, transform_data: dict) -> dict:
     world = connect_world()
-    blueprint = world.get_blueprint_library().find(blueprint_id)
-    if not blueprint_id.startswith(("vehicle.", "walker.", "static.prop.")):
+    generated = BLENDER.registry().get(blueprint_id)
+    runtime_blueprint_id = "static.prop.mesh" if generated else blueprint_id
+    blueprint = world.get_blueprint_library().find(runtime_blueprint_id)
+    if generated:
+        blueprint.set_attribute("mesh_path", generated["mesh_path"])
+        blueprint.set_attribute("mass", str(float(transform_data.get("mass", 0))))
+        blueprint.set_attribute("scale", str(float(
+            transform_data.get("scale", generated.get("default_scale", 100.0)))))
+    if not generated and not blueprint_id.startswith(("vehicle.", "walker.", "static.prop.")):
         raise RuntimeError("Only vehicle, walker, and static.prop blueprints are spawnable")
     location = transform_data.get("location", {})
     rotation = transform_data.get("rotation", {})
@@ -530,7 +806,7 @@ def spawn_object(blueprint_id: str, transform_data: dict) -> dict:
             lane_type=carla.LaneType.Driving | carla.LaneType.Sidewalk)
         if waypoint:
             spawn_location.z = waypoint.transform.location.z + (
-                3.0 if blueprint_id.startswith("vehicle.") else
+                0.3 if blueprint_id.startswith("vehicle.") else
                 1.0 if blueprint_id.startswith("walker.") else 0.5)
     transform = carla.Transform(
         spawn_location,
@@ -542,13 +818,121 @@ def spawn_object(blueprint_id: str, transform_data: dict) -> dict:
         blueprint.set_attribute("role_name", "hero")
     before = set(world.get_names_of_all_objects())
     actor = world.spawn_actor(blueprint, transform)
+    # Editor placement is static until a scenario executor explicitly takes control.
+    if blueprint_id.startswith("vehicle."):
+        actor.set_autopilot(False)
+        actor.set_simulate_physics(False)
+        actor.set_target_velocity(carla.Vector3D())
+        actor.set_target_angular_velocity(carla.Vector3D())
+    _editor_actors.add(actor.id)
+    _provenance.mark(world.id, [actor], 'user')
+    stable_id = _provenance.records(world.id)[str(actor.id)]['stable_id']
+    _provenance.bind(world.id, actor, stable_id, blueprint_id=blueprint_id,
+                     spawn_options={k: transform_data[k] for k in ('mass', 'scale') if k in transform_data})
+    if generated:
+        _generated_actor_assets[actor.id] = blueprint_id
     after = set(world.get_names_of_all_objects())
     created_names = sorted(after-before)
-    if created_names:
-        _actor_object_names[actor.id] = created_names[-1]
+    if len(created_names) == 1:
+        _actor_object_names[actor.id] = created_names[0]
     return {"ok": True, "object": actor_record(actor)}
 
 
+def transform_record(transform):
+    return {'location': {k: float(getattr(transform.location, k)) for k in ('x','y','z')},
+            'rotation': {k: float(getattr(transform.rotation, k)) for k in ('pitch','yaw','roll')}}
+
+
+@simulation_operation
+def save_scene(data):
+    world = connect_world()
+    provenance = _provenance.records(world.id)
+    objects = []
+    for actor in world.get_actors():
+        record = provenance.get(str(actor.id), {})
+        if record.get('origin') != 'user' or record.get('type_id') != actor.type_id:
+            continue
+        objects.append({'stable_id': record['stable_id'], 'origin': 'user',
+                        'blueprint_id': record.get('blueprint_id', actor.type_id),
+                        'transform': transform_record(actor.get_transform()),
+                        'spawn_options': record.get('spawn_options', {})})
+    weather = world.get_weather()
+    weather_keys = ('cloudiness','precipitation','precipitation_deposits','wind_intensity',
+                    'sun_azimuth_angle','sun_altitude_angle','fog_density','fog_distance','wetness')
+    document = {'map': world.get_map().name, 'objects': objects,
+                'weather': {k: float(getattr(weather,k)) for k in weather_keys},
+                'spectator': transform_record(world.get_spectator().get_transform()),
+                'limitations': ['Managed user actors only; material/visibility history not included yet']}
+    return {'ok': True, **SCENES.save(document, data.get('name',''), data.get('scene_id'), data.get('expected_version'))}
+
+
+@simulation_operation
+def restore_scene(data):
+    world = connect_world()
+    saved = SCENES.read(str(data['scene_id']), data.get('version'))
+    document = validate_scene(saved['document'])
+    if world.get_map().name != document['map']:
+        raise RuntimeError('Scene belongs to another map; explicit map handoff is not implemented yet')
+    registry = BLENDER.registry()
+    for obj in document['objects']:
+        blueprint = obj['blueprint_id']
+        if blueprint not in registry:
+            world.get_blueprint_library().find(blueprint)
+    provenance = _provenance.records(world.id)
+    live = {r.get('stable_id'): world.get_actor(int(actor_id)) for actor_id, r in provenance.items()
+            if r.get('origin') == 'user'}
+    created, moved = [], []
+    previous_weather, previous_view = world.get_weather(), world.get_spectator().get_transform()
+    try:
+        for obj in document['objects']:
+            actor = live.get(obj['stable_id'])
+            if actor is not None:
+                old = provenance[str(actor.id)]
+                if old.get('blueprint_id', actor.type_id) != obj['blueprint_id']:
+                    raise RuntimeError('Stable ID blueprint mismatch; refusing to update another object')
+                moved.append((actor, actor.get_transform()))
+                update_actor(actor.id, obj['transform'])
+            else:
+                result = spawn_object(obj['blueprint_id'], {**obj.get('spawn_options', {}), **obj['transform']})
+                actor = world.get_actor(result['object']['id'])
+                created.append(actor)
+                _provenance.bind(world.id, actor, obj['stable_id'], blueprint_id=obj['blueprint_id'],
+                                 spawn_options=obj.get('spawn_options', {}))
+                live[obj['stable_id']] = actor
+        weather = world.get_weather()
+        for key, value in document.get('weather', {}).items():
+            if not hasattr(weather, key) or not isinstance(value, (int,float)) or not math.isfinite(value):
+                raise ValueError('Invalid weather property')
+            setattr(weather, key, value)
+        world.set_weather(weather)
+        view = document.get('spectator')
+        if view:
+            world.get_spectator().set_transform(carla.Transform(carla.Location(**view['location']), carla.Rotation(**view['rotation'])))
+    except Exception:
+        for actor, transform in reversed(moved):
+            actor.set_transform(transform)
+        for actor in created:
+            delete_actor(actor.id)
+        world.set_weather(previous_weather)
+        world.get_spectator().set_transform(previous_view)
+        raise
+    return {'ok': True, **saved, 'restored': len(document['objects']), 'spawned': len(created),
+            'bindings': {obj['stable_id']: live[obj['stable_id']].id for obj in document['objects']},
+            'mode': 'merge', 'note': 'Unrelated objects preserved; textures and visibility are not restored yet'}
+
+
+@simulation_operation
+def scene_history(data):
+    connect_world()  # Reject during evaluation before changing the document cursor.
+    saved = SCENES.move(data['scene_id'], int(data['direction']), data['expected_version'])
+    try:
+        return restore_scene({'scene_id': data['scene_id'], 'version': saved['head']['version']})
+    except Exception:
+        SCENES.move(data['scene_id'], -int(data['direction']), saved['head']['version'])
+        raise
+
+
+@simulation_operation
 def update_actor(actor_id: int, transform_data: dict) -> dict:
     if evaluation_active():
         return evaluation_command("update", {"actor_id": actor_id,
@@ -569,6 +953,7 @@ def update_actor(actor_id: int, transform_data: dict) -> dict:
     return {"ok": True, "object": actor_record(actor)}
 
 
+@simulation_operation
 def duplicate_actor(actor_id: int) -> dict:
     if evaluation_active():
         return evaluation_command("duplicate", {"actor_id": actor_id})
@@ -577,13 +962,22 @@ def duplicate_actor(actor_id: int) -> dict:
     if not actor:
         raise RuntimeError(f"Actor {actor_id} is not running")
     transform = actor.get_transform()
-    transform.location += carla.Location(x=3.0, y=3.0, z=0.5)
-    return spawn_object(actor.type_id, {"location": vector(transform.location),
-                                        "rotation": {"pitch": transform.rotation.pitch,
-                                                     "yaw": transform.rotation.yaw,
-                                                     "roll": transform.rotation.roll}})
+    side, forward = transform.get_right_vector(), transform.get_forward_vector()
+    width, length = actor.bounding_box.extent.y * 2 + 2, actor.bounding_box.extent.x * 2 + 2
+    # A nearby wall or guardrail can obstruct one side. Try bounded alternatives.
+    for offset in (side * width, side * -width, forward * length, forward * -length):
+        try:
+            return spawn_object(_generated_actor_assets.get(actor_id, actor.type_id), {
+                "location": vector(transform.location + offset),
+                "rotation": {"pitch": transform.rotation.pitch,
+                             "yaw": transform.rotation.yaw, "roll": transform.rotation.roll}})
+        except RuntimeError as exc:
+            if "collision" not in str(exc).lower():
+                raise
+    raise RuntimeError("No collision-free position near this object; move it to an open area before duplicating")
 
 
+@simulation_operation
 def delete_actor(actor_id: int) -> dict:
     if evaluation_active():
         return evaluation_command("delete", {"actor_id": actor_id})
@@ -594,9 +988,12 @@ def delete_actor(actor_id: int) -> dict:
     type_id = actor.type_id
     actor.destroy()
     _actor_object_names.pop(actor_id, None)
+    _generated_actor_assets.pop(actor_id, None)
+    _editor_actors.discard(actor_id)
     return {"ok": True, "actor_id": actor_id, "type_id": type_id}
 
 
+@simulation_operation
 def spawnable_blueprints(query: str, limit: int) -> dict:
     if evaluation_active():
         ids = list((evaluation_snapshot() or {}).get("blueprints", []))
@@ -608,11 +1005,13 @@ def spawnable_blueprints(query: str, limit: int) -> dict:
     patterns = ("vehicle.*", "walker.pedestrian.*", "static.prop.*")
     ids = sorted({bp.id for pattern in patterns
                   for bp in world.get_blueprint_library().filter(pattern)})
+    ids.extend(sorted(BLENDER.registry()))
     if query:
         ids = [item for item in ids if query.casefold() in item.casefold()]
     return {"ok": True, "total": len(ids), "blueprints": ids[:limit]}
 
 
+@simulation_operation
 def blueprint_thumbnail(blueprint_id: str) -> bytes:
     if blueprint_id in _thumbnail_cache:
         return _thumbnail_cache[blueprint_id]
@@ -690,28 +1089,29 @@ def runtime_name_for_actor(world, actor):
         return mapped
     if actor.type_id == "vehicle.tesla.model3":
         matches = sorted(name for name in names if name.startswith("BP_TeslaM3_C_"))
-        if matches:
-            return matches[-1]
+        if len(matches) == 1:
+            return matches[0]
     if actor.type_id == "vehicle.carlamotors.european_hgv":
         matches = sorted(name for name in names if name.startswith("BP_European_HGV_C_"))
-        if matches:
-            return matches[-1]
+        if len(matches) == 1:
+            return matches[0]
     if actor.type_id == "walker.pedestrian.0001":
         matches = sorted(name for name in names if name.startswith("BP_Walker_Female1_v1_C_"))
-        if matches:
-            return matches[-1]
+        if len(matches) == 1:
+            return matches[0]
     raise RuntimeError(
         f"Runtime mesh identity is unavailable for actor {actor.id} ({actor.type_id}); "
         "respawn it from Create Objects to register the mapping")
 
 
+@simulation_operation
 def scene_state() -> dict:
     global _scene_snapshot
     if evaluation_active():
         live = evaluation_snapshot()
         if live:
             hero = next((item for item in live.get("objects", []) if item.get("hero")), None)
-            return {"ok": True, "map": live["map"], "bounds": live["bounds"],
+            return {"ok": True, "runtime_mode": RUNTIME_MODE, "map": live["map"], "bounds": live["bounds"],
                     "road_points": live.get("road_points", []), "objects": live.get("objects", []),
                     "static_targets": [], "spectator": live["spectator"],
                     "hero_id": hero.get("id") if hero else None,
@@ -719,9 +1119,14 @@ def scene_state() -> dict:
                     "updated_at": live.get("updated_at")}
         if _scene_snapshot is not None:
             return {**_scene_snapshot, "evaluation_active": True}
+        return {"ok": True, "evaluation_active": True, "initializing": True,
+                "map": "", "objects": [], "static_targets": [], "road_points": [],
+                "bounds": {"min_x": 0, "max_x": 1, "min_y": 0, "max_y": 1},
+                "spectator": None, "hero_id": None, "hero_lock": False,
+                "runtime_mode": RUNTIME_MODE}
     world = connect_world()
     actors = [actor_record(actor) for actor in world.get_actors()
-              if actor.type_id.startswith(("vehicle.", "walker."))]
+              if actor.type_id.startswith(("vehicle.", "walker.", "static.prop."))]
     map_name = world.get_map().name
     cached = _map_cache.get(map_name)
     if not cached:
@@ -747,7 +1152,7 @@ def scene_state() -> dict:
                       "y": (bounds["min_y"]+bounds["max_y"])/2, "z": 0.2},
          "extent": {"x": 5.0, "y": 5.0, "z": 0.2}},
     ]
-    _scene_snapshot = {"ok": True, "map": map_name, "bounds": bounds,
+    _scene_snapshot = {"ok": True, "runtime_mode": RUNTIME_MODE, "map": map_name, "bounds": bounds,
             "road_points": cached["road_points"], "objects": actors,
             "static_targets": static_targets,
             "spectator": {"location": vector(spectator.location),
@@ -758,6 +1163,7 @@ def scene_state() -> dict:
     return _scene_snapshot
 
 
+@simulation_operation
 def focus_actor(actor_id: int) -> dict:
     if evaluation_active():
         return evaluation_command("focus_actor", {"actor_id": actor_id})
@@ -781,6 +1187,7 @@ def focus_actor(actor_id: int) -> dict:
             "location": vector(center)}
 
 
+@simulation_operation
 def focus_static(kind: str, name: str) -> dict:
     state = scene_state()
     target = next((item for item in state["static_targets"]
@@ -799,6 +1206,7 @@ def focus_static(kind: str, name: str) -> dict:
             "location": vector(center)}
 
 
+@simulation_operation
 def focus_bev(x: float, y: float) -> dict:
     if evaluation_active():
         return evaluation_command("focus_bev", {"x": x, "y": y})
@@ -813,6 +1221,7 @@ def focus_bev(x: float, y: float) -> dict:
     return {"ok": True, "location": vector(target)}
 
 
+@simulation_operation
 def set_hero_lock(enabled: bool) -> dict:
     world = connect_world()
     hero = hero_actor(world)
@@ -823,29 +1232,33 @@ def set_hero_lock(enabled: bool) -> dict:
             "hero_id": hero.id if hero else None}
 
 
+@simulation_operation
+def hero_follow_step():
+    if not _hero_lock.is_set() or evaluation_active():
+        return
+    world = connect_world()
+    hero = hero_actor(world)
+    if not hero:
+        _hero_lock.clear()
+        return
+    transform = hero.get_transform()
+    forward = transform.get_forward_vector()
+    location = transform.location
+    camera = location + carla.Location(x=-forward.x*10.0, y=-forward.y*10.0, z=5.5)
+    target = location + carla.Location(x=forward.x*6.0, y=forward.y*6.0, z=1.2)
+    world.get_spectator().set_transform(carla.Transform(camera, look_at(camera, target)))
+
+
 def hero_follow_loop():
     while True:
-        if _hero_lock.is_set():
-            try:
-                world = connect_world()
-                hero = hero_actor(world)
-                if not hero:
-                    _hero_lock.clear()
-                else:
-                    transform = hero.get_transform()
-                    forward = transform.get_forward_vector()
-                    location = transform.location
-                    camera = location + carla.Location(
-                        x=-forward.x*10.0, y=-forward.y*10.0, z=5.5)
-                    target = location + carla.Location(
-                        x=forward.x*6.0, y=forward.y*6.0, z=1.2)
-                    world.get_spectator().set_transform(
-                        carla.Transform(camera, look_at(camera, target)))
-            except Exception as exc:
-                print(f"hero follow warning: {exc}", flush=True)
+        try:
+            hero_follow_step()
+        except Exception as exc:
+            print(f"hero follow warning: {exc}", flush=True)
         time.sleep(0.1)
 
 
+@simulation_operation
 def apply_livery(payload: bytes, actor_id: int | None = None) -> dict:
     image, texture = decode_texture(payload, (2048, 2048))
 
@@ -881,6 +1294,7 @@ def apply_livery(payload: bytes, actor_id: int | None = None) -> dict:
             "resolution": [image.width, image.height]}
 
 
+@simulation_operation
 def apply_road_texture(payload: bytes, scope: str) -> dict:
     image, texture = decode_texture(payload, (1024, 1024))
     world = connect_world()
@@ -897,6 +1311,7 @@ def apply_road_texture(payload: bytes, scope: str) -> dict:
             "resolution": [image.width, image.height]}
 
 
+@simulation_operation
 def apply_building_texture(payload: bytes, target: str) -> dict:
     image, texture = decode_texture(payload, (1024, 1024))
     world = connect_world()
@@ -911,19 +1326,13 @@ def apply_building_texture(payload: bytes, target: str) -> dict:
             "material_slot": 0, "resolution": [image.width, image.height]}
 
 
+@simulation_operation
 def apply_environment_texture(payload: bytes, object_id: int) -> dict:
     image, texture = decode_texture(payload, (1024, 1024))
     world = connect_world()
     category, obj = find_environment(world, object_id)
     names = set(world.get_names_of_all_objects())
-    candidates = [obj.name]
-    for suffix in ("_SM_0", "_SM"):
-        if obj.name.endswith(suffix):
-            candidates.append(obj.name[:-len(suffix)])
-    target = next((candidate for candidate in candidates if candidate in names), None)
-    if target is None:
-        target = next((name for name in names
-                       if name.startswith(candidates[-1]) or candidates[-1].startswith(name)), None)
+    target = exact_environment_target(obj.name, names)
     if target is None:
         raise RuntimeError(
             f"The selected {category} object has no runtime material target: {obj.name}")
@@ -933,6 +1342,44 @@ def apply_environment_texture(payload: bytes, object_id: int) -> dict:
             "object_name": target, "resolution": [image.width, image.height]}
 
 
+@simulation_operation
+def material_catalog(object_id):
+    world = connect_world()
+    category, obj = find_environment(world, int(object_id))
+    target = exact_environment_target(obj.name, set(world.get_names_of_all_objects()))
+    catalog = MATERIALS.catalog(world.get_map().name)
+    return {'ok':True, 'target':target, 'map':world.get_map().name.split('/')[-1],
+            'category':category, 'components':catalog['actors'].get(target,[]),
+            'overrides':list(MATERIALS.overrides(world.id).values())}
+
+
+@simulation_operation
+def apply_material_slot(data, payload=None):
+    info = material_catalog(data['object_id'])
+    component = str(data['component'])
+    slot = int(data['slot'])
+    if '|' in component or '|' in info['target']: raise ValueError('Invalid material target')
+    entry = next((c for c in info['components'] if c['component'] == component), None)
+    selected = next((s for s in entry['slots'] if s['slot']==slot), None) if entry else None
+    if not selected or selected.get('status')!='uv0_ready':
+        raise ValueError('This exact component/slot has no verified UV0 export')
+    world = connect_world()
+    if payload is None:
+        texture = carla.TextureColor(1,1)
+        operation, digest = 'restore', None
+    else:
+        image, texture = decode_texture(payload,(1024,1024))
+        output = io.BytesIO(); image.save(output,format='PNG')
+        digest = MATERIALS.put_texture(output.getvalue())
+        operation = 'apply'
+    world.apply_color_texture_to_object(f"{info['target']}|csa|{component}|{slot}|{operation}",
+                                       carla.MaterialParameter.Diffuse, texture)
+    MATERIALS.record(world.id,info['target'],component,slot,digest)
+    return {'ok':True,'target':info['target'],'component':component,'slot':slot,'texture':digest,
+            'operation':operation,'scope':'one component material slot','projection':'UV0'}
+
+
+@simulation_operation
 def apply_pedestrian_texture(payload: bytes, actor_id: int | None = None) -> dict:
     image, texture = decode_texture(payload, (1024, 1024))
     world = connect_world()
@@ -968,6 +1415,73 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         request = urlparse(self.path)
         params = parse_qs(request.query)
+        if request.path in ('/scenes', '/scenes/document'):
+            try:
+                result = {'scenes': SCENES.list()} if request.path == '/scenes' else SCENES.read(params.get('scene_id',[''])[0], params.get('version',[None])[0])
+                self._headers()
+                self.wfile.write(json.dumps({'ok': True, **result}).encode())
+            except (ValueError, OSError) as exc:
+                self._headers(400)
+                self.wfile.write(json.dumps({'ok': False, 'error': str(exc)}).encode())
+            return
+        if request.path in ('/system/preflight', '/session/status'):
+            result = system_preflight() if request.path == '/system/preflight' else {'ok': True, 'session': SESSION.snapshot()}
+            self._headers()
+            self.wfile.write(json.dumps(result).encode())
+            return
+        if request.path in ('/capture/status', '/capture/media', '/datasets/index', '/datasets/file', '/datasets/frame'):
+            try:
+                if request.path == '/capture/status':
+                    path = _evaluation_control_dir/'capture/latest.json'
+                    payload = json.loads(path.read_text()) if path.is_file() and evaluation_active() else None
+                    if payload and path.stat().st_mtime < (_e2e_job.get('started_at') or 0):
+                        payload = None
+                    self._headers()
+                    self.wfile.write(json.dumps({'ok': True, 'capture': payload}).encode())
+                    return
+                if request.path == '/datasets/index':
+                    payload = replay_index(DATASET_ROOT, params.get('run_id', [''])[0])
+                    self._headers()
+                    self.wfile.write(json.dumps({'ok': True, **payload}).encode())
+                    return
+                if request.path == '/capture/media':
+                    name = params.get('id', [''])[0]
+                    allowed = {'CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT', 'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT', 'BEV_RGB', 'BEV_POINTS'}
+                    allowed |= {'DEPTH_'+n for n in allowed if n.startswith('CAM_')}
+                    if name not in allowed or not evaluation_active():
+                        raise ValueError('Live sensor is unavailable')
+                    frame = int(params.get('frame', ['-1'])[0])
+                    path = _evaluation_control_dir/'capture'/'frames'/str(frame)/(name+'.jpg')
+                    if path.stat().st_mtime < (_e2e_job.get('started_at') or 0):
+                        raise ValueError('Sensor belongs to an earlier run')
+                else:
+                    name = 'frame.json' if request.path == '/datasets/frame' else params.get('name', [''])[0]
+                    path = replay_file(DATASET_ROOT, params.get('run_id', [''])[0], params.get('frame', ['-1'])[0], name)
+                payload = path.read_bytes()
+                self.send_response(200)
+                self.send_header('Access-Control-Allow-Origin', FRONTEND_ORIGIN)
+                self.send_header('Content-Type', mimetypes.guess_type(path.name)[0] or 'application/octet-stream')
+                self.send_header('Content-Length', str(len(payload)))
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                self.wfile.write(payload)
+            except (ValueError, OSError) as exc:
+                self._headers(404)
+                self.wfile.write(json.dumps({'ok': False, 'error': str(exc)}).encode())
+            return
+        if request.path == '/scene/preview':
+            try:
+                payload = scene_preview()
+                self.send_response(200)
+                self.send_header('Access-Control-Allow-Origin', FRONTEND_ORIGIN)
+                self.send_header('Content-Type', 'image/jpeg')
+                self.send_header('Cache-Control', 'no-store')
+                self.end_headers()
+                self.wfile.write(payload)
+            except Exception as exc:
+                self._headers(409)
+                self.wfile.write(json.dumps({'ok': False, 'error': str(exc)}).encode())
+            return
         if request.path == "/e2e/camera":
             camera_id = params.get("id", [""])[0]
             if camera_id not in {"CAM_FRONT", "CAM_FRONT_LEFT", "CAM_FRONT_RIGHT",
@@ -1011,7 +1525,8 @@ class Handler(BaseHTTPRequestHandler):
                 params.get("category", ["buildings"])[0],
                 params.get("q", [""])[0],
                 max(0, int(params.get("offset", ["0"])[0])),
-                min(200, max(1, int(params.get("limit", ["50"])[0]))))
+                min(200, max(1, int(params.get("limit", ["50"])[0]))),
+                params.get("origin", ["all"])[0])
             self.wfile.write(json.dumps(result).encode())
         elif request.path == "/catalog/blueprints":
             result = spawnable_blueprints(params.get("q", [""])[0], 200)
@@ -1023,6 +1538,11 @@ class Handler(BaseHTTPRequestHandler):
         elif request.path == "/e2e/telemetry":
             path = _evaluation_control_dir / "telemetry" / "latest.json"
             try:
+                if not evaluation_active():
+                    raise FileNotFoundError("No active inference; do not present stale frames as live")
+                started = _e2e_job.get("started_at")
+                if started and path.stat().st_mtime < started:
+                    raise FileNotFoundError("Telemetry belongs to an earlier run")
                 payload = json.loads(path.read_text(encoding="utf-8"))
                 self.wfile.write(json.dumps({"ok": True, "telemetry": payload}).encode())
             except (OSError, json.JSONDecodeError):
@@ -1030,17 +1550,23 @@ class Handler(BaseHTTPRequestHandler):
         elif request.path == "/e2e/benchmark/catalog":
             self.wfile.write(json.dumps({"ok": True,
                 "routes": route_catalog(BENCH2DRIVE_ROOT),
-                "algorithms": algorithm_catalog(BENCH2DRIVE_ZOO)}).encode())
+                "algorithms": algorithm_catalog(
+                    BENCH2DRIVE_ZOO, BENCH2DRIVE_TCP_ZOO)}).encode())
         elif request.path == "/e2e/benchmark/report":
             self.wfile.write(json.dumps({"ok": True,
                 "report": benchmark_report(BENCH2DRIVE_ZOO)}).encode())
+        elif request.path == "/datasets":
+            self.wfile.write(json.dumps({"ok": True, "root": str(DATASET_ROOT),
+                                         "datasets": list_datasets(DATASET_ROOT)}).encode())
+        elif request.path == "/assets/uv-audit":
+            self.wfile.write(json.dumps({"ok": True, **_uv_audit}).encode())
+        elif request.path == "/blender/status":
+            self.wfile.write(json.dumps(BLENDER.status()).encode())
+        elif request.path == "/blender/registry":
+            self.wfile.write(json.dumps({"ok": True, "assets": BLENDER.registry()}).encode())
         elif request.path == "/targets":
             kind = parse_qs(request.query).get("kind", [""])[0]
-            prefix = {"road": "Road_Road_", "building": "BP_House"}.get(kind, "")
-            names = sorted(name for name in connect_world().get_names_of_all_objects()
-                           if prefix and name.startswith(prefix))
-            self.wfile.write(json.dumps({"ok": True, "kind": kind,
-                                         "count": len(names), "objects": names}).encode())
+            self.wfile.write(json.dumps(texture_targets(kind)).encode())
         else:
             self.wfile.write(json.dumps({"ok": True, "service": "carla-surface-bridge"}).encode())
 
@@ -1055,14 +1581,24 @@ class Handler(BaseHTTPRequestHandler):
                                 "/objects/spawn", "/objects/update",
                                 "/objects/duplicate", "/objects/delete",
                                 "/scenario/compile", "/scenario/run", "/scenario/evaluate",
-                                "/e2e/start", "/e2e/stop"):
+                                "/blender/create", "/blender/retexture",
+                                "/blender/import", "/blender/spawn",
+                                "/e2e/start", "/e2e/stop", "/collection/control", '/session/recover',
+                                '/scenes/save', '/scenes/restore', '/scenes/history'):
             self._headers(404)
             self.wfile.write(b'{"ok":false,"error":"not found"}')
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = self.rfile.read(length)
-            if request.path == "/e2e/start":
+            if request.path in ('/scenes/save', '/scenes/restore', '/scenes/history'):
+                operation = {'/scenes/save': save_scene, '/scenes/restore': restore_scene, '/scenes/history': scene_history}[request.path]
+                result = operation(json.loads(payload or b'{}'))
+            elif request.path == '/session/recover':
+                result = recover_session()
+            elif request.path == '/collection/control':
+                result = collection_request(json.loads(payload or b'{}'))
+            elif request.path == "/e2e/start":
                 result = start_e2e(json.loads(payload or b"{}"))
             elif request.path == "/e2e/stop":
                 result = stop_e2e()
@@ -1071,6 +1607,17 @@ class Handler(BaseHTTPRequestHandler):
             elif request.path in ("/scenario/compile", "/scenario/run"):
                 data = json.loads(payload or b"{}")
                 result = compile_scenario(data, request.path.endswith("/run"))
+            elif request.path in ("/blender/create", "/blender/retexture"):
+                data = json.loads(payload or b"{}")
+                if request.path.endswith("retexture") and not data.get("source_path"):
+                    raise ValueError("source_path is required for retexture")
+                result = BLENDER.run(data)
+            elif request.path == "/blender/import":
+                data = json.loads(payload or b"{}")
+                result = BLENDER.import_to_carla(str(data["job_id"]), data.get("name"))
+            elif request.path == "/blender/spawn":
+                data = json.loads(payload or b"{}")
+                result = spawn_object(str(data["blueprint_id"]), data.get("transform", {}))
             elif request.path == "/focus/actor":
                 data = json.loads(payload or b"{}")
                 result = focus_actor(int(data["actor_id"]))
@@ -1129,6 +1676,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    # Do not pass a shell-inherited SIG_IGN to model subprocesses.
+    signal.signal(signal.SIGINT, signal.default_int_handler)
     print(f"CARLA livery bridge listening on http://{HOST}:{PORT}", flush=True)
+    threading.Thread(target=resume_session, daemon=True).start()
     threading.Thread(target=hero_follow_loop, daemon=True).start()
     ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()

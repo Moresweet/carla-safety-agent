@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import struct
+import numpy as np
 
 import carla
 import rclpy
@@ -33,6 +34,8 @@ class CarlaSafetyBridge(Node):
         )
         self.client.set_timeout(10.0)
         self.world = self.client.get_world()
+        if self.world.get_settings().synchronous_mode:
+            raise RuntimeError('Closed-loop evaluation owns CARLA. Use capture_relay instead of spawning a second sensor rig.')
         heroes = self.world.get_actors().filter("vehicle.*")
         self.ego = next(
             (actor for actor in heroes if actor.attributes.get("role_name") == "hero"),
@@ -179,6 +182,11 @@ class CarlaSafetyBridge(Node):
         message.is_bigendian = False
         message.step = image.width * 4
         message.data = bytes(image.raw_data)
+        if label == 'depth':
+            a = np.frombuffer(image.raw_data, dtype=np.uint8).reshape(image.height, image.width, 4).astype(np.float32)
+            depth = (a[:,:,2]+256*a[:,:,1]+65536*a[:,:,0])*(1000.0/16777215.0)
+            message.encoding = '32FC1'
+            message.data = depth.astype('<f4').tobytes()
         self.image_publishers[label].publish(message)
 
     def _publish_surround(self, name: str, image: carla.Image) -> None:

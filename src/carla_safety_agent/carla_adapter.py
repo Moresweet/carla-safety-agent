@@ -4,11 +4,13 @@ import fnmatch
 import json
 import math
 import random
+import sys
 import time
 from pathlib import Path
 from typing import Any
 
 from .metrics import KinematicState, distance, evaluate, ttc
+from .dataset import DatasetRecorder
 from .models import ActorSpec, ProceduralAssetSpec, ScenarioResult, ScenarioSpec
 from .opendrive import build_opendrive
 
@@ -66,11 +68,15 @@ class CarlaAdapter:
         min_distance = math.inf
         min_ttc: float | None = None
         elapsed = 0.0
+        recorder: DatasetRecorder | None = None
+        result: ScenarioResult | None = None
         try:
             settings = world.get_settings()
             settings.synchronous_mode = True
             settings.fixed_delta_seconds = 0.05
             world.apply_settings(settings)
+            if render:
+                recorder = DatasetRecorder(output_dir, spec, settings.fixed_delta_seconds)
             world.set_weather(carla.WeatherParameters(
                 cloudiness=spec.environment.cloudiness,
                 precipitation=spec.environment.precipitation,
@@ -105,7 +111,7 @@ class CarlaAdapter:
                 camera_transform = carla.Transform(
                     carla.Location(x=-7.5, z=3.0), carla.Rotation(pitch=-12.0)
                 )
-                sensor_root = output_dir / spec.scenario_id
+                sensor_root = recorder.root if recorder else output_dir / spec.scenario_id
                 for sensor_id, folder, converter in (
                     ("sensor.camera.rgb", "frames", None),
                     ("sensor.camera.depth", "depth", carla.ColorConverter.LogarithmicDepth),
@@ -150,6 +156,9 @@ class CarlaAdapter:
                     time.sleep(settings.fixed_delta_seconds)
                 elapsed = (frame + 1) * settings.fixed_delta_seconds
                 ego_state = self._state(ego)
+                if recorder:
+                    recorder.record(self._frame_record(frame, elapsed, ego, adversaries,
+                                                       generated_assets, collision["hit"]))
                 for index, (adv, adv_spec) in enumerate(zip(adversaries, spec.adversaries)):
                     adv_state = self._state(adv)
                     d = distance(ego_state, adv_state)
@@ -175,10 +184,12 @@ class CarlaAdapter:
                 if collision["hit"]:
                     break
             output_dir.mkdir(parents=True, exist_ok=True)
-            trace_path = output_dir / f"{spec.scenario_id}.trace.json"
+            trace_path = (recorder.root / "trace.json" if recorder
+                          else output_dir / f"{spec.scenario_id}.trace.json")
             trace_path.write_text(json.dumps(trace, indent=2), encoding="utf-8")
-            return evaluate(spec.scenario_id, spec.oracle, collision["hit"], min_ttc,
-                            min_distance, elapsed, str(trace_path))
+            result = evaluate(spec.scenario_id, spec.oracle, collision["hit"], min_ttc,
+                              min_distance, elapsed, str(trace_path))
+            return result
         finally:
             # Sensor callbacks run on streaming threads. Stop every sensor first,
             # then advance one synchronous frame so callbacks drain before any
@@ -196,6 +207,8 @@ class CarlaAdapter:
             # the scene-capture resource are destroyed.
             if render:
                 time.sleep(0.25)
+            if recorder:
+                recorder.finalize(result, sys.exc_info()[1])
             try:
                 if world.get_settings().synchronous_mode:
                     world.tick()
@@ -205,6 +218,38 @@ class CarlaAdapter:
             if actor_ids:
                 client.apply_batch([carla.command.DestroyActor(actor_id) for actor_id in actor_ids])
             world.apply_settings(original)
+
+    @staticmethod
+    def _frame_record(frame: int, elapsed: float, ego: Any, adversaries: list[Any],
+                      generated_assets: list[Any], collision: bool) -> dict[str, Any]:
+        def actor_record(actor: Any) -> dict[str, Any]:
+            transform = actor.get_transform()
+            velocity = actor.get_velocity()
+            acceleration = actor.get_acceleration()
+            angular = actor.get_angular_velocity()
+            return {
+                "id": actor.id,
+                "type_id": actor.type_id,
+                "location": {"x": transform.location.x, "y": transform.location.y,
+                             "z": transform.location.z},
+                "rotation": {"pitch": transform.rotation.pitch, "yaw": transform.rotation.yaw,
+                             "roll": transform.rotation.roll},
+                "velocity": {"x": velocity.x, "y": velocity.y, "z": velocity.z},
+                "acceleration": {"x": acceleration.x, "y": acceleration.y, "z": acceleration.z},
+                "angular_velocity": {"x": angular.x, "y": angular.y, "z": angular.z},
+            }
+        ego_record = actor_record(ego)
+        control = ego.get_control()
+        ego_record["control"] = {
+            "throttle": float(getattr(control, "throttle", 0.0)),
+            "steer": float(getattr(control, "steer", 0.0)),
+            "brake": float(getattr(control, "brake", 0.0)),
+            "hand_brake": bool(getattr(control, "hand_brake", False)),
+            "reverse": bool(getattr(control, "reverse", False)),
+        }
+        return {"frame": frame, "t": elapsed, "collision": collision, "ego": ego_record,
+                "adversaries": [actor_record(actor) for actor in adversaries],
+                "generated_assets": [actor_record(actor) for actor in generated_assets]}
 
     @staticmethod
     def _spawn_interaction_actor(

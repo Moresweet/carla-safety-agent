@@ -1,0 +1,6 @@
+<library path="carla_safety_visualization">
+  <class name="carla_safety_visualization/SensorWall" type="carla_safety_visualization.sensor_wall.SensorWall" base_class_type="rqt_gui_py::Plugin">
+    <description>Six directional cameras, depth and BEV point cloud in one resizable sensor wall.</description>
+    <qtgui><group><label>Visualization</label></group><label>CARLA Sensor Wall</label><statustip>Six views with depth and point cloud; double-click to enlarge.</statustip></qtgui>
+  </class>
+</library>

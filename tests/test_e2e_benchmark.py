@@ -3,10 +3,32 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from carla_safety_agent.benchmark_catalog import algorithm_catalog
 from carla_safety_agent.e2e_benchmark import parse_bench2drive_results
 
 
 class EndToEndBenchmarkTests(unittest.TestCase):
+    def test_algorithm_catalog_resolves_both_official_branches(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            zoo, tcp_zoo = root / "zoo", root / "tcp"
+            required = [
+                zoo / "team_code/uniad_b2d_agent.py",
+                zoo / "ckpts/uniad_tiny_b2d.pth",
+                zoo / "adzoo/uniad/configs/stage2_e2e/tiny_e2e_b2d.py",
+                tcp_zoo / "team_code/tcp_b2d_agent.py",
+                tcp_zoo / "ckpts/tcp_b2d.ckpt",
+            ]
+            for path in required:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            entries = {item["id"]: item for item in algorithm_catalog(zoo, tcp_zoo)}
+        self.assertEqual(entries["uniad-tiny"]["status"], "available")
+        self.assertEqual(entries["tcp"]["status"], "available")
+        self.assertEqual(entries["tcp"]["sensors"], "3 cameras")
+        self.assertEqual(entries["admlp"]["status"], "not_installed")
+        self.assertEqual(entries["driveadapter"]["status"], "not_released")
+
     def test_collision_is_ranked_above_clean_route(self):
         records = [
             {"route_id": "clean", "status": "Completed", "scenario_name": "A", "town_name": "T",

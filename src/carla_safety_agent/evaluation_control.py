@@ -16,6 +16,7 @@ from typing import Any
 
 import carla
 from PIL import Image
+from .provenance import ActorProvenance
 
 
 ENVIRONMENT_LABELS = {
@@ -72,31 +73,28 @@ def _texture_from_file(path: Path) -> carla.TextureColor:
 
 def _runtime_vehicle_name(world: carla.World, actor: carla.Actor) -> str:
     names = sorted(world.get_names_of_all_objects())
-    actor_token = str(actor.id)
-    matches = [name for name in names if actor_token in name and name.startswith("BP_")]
-    if matches:
-        return matches[-1]
+    # CARLA actor IDs are not Unreal object-name suffixes. Substring matching
+    # can select a lamppost (e.g. actor 173 -> BP_Lamppost_tall15_173).
     prefixes = {
         "vehicle.tesla.model3": "BP_TeslaM3_C_",
         "vehicle.carlamotors.european_hgv": "BP_European_HGV_C_",
         "vehicle.lincoln.mkz_2020": "BP_Lincoln2020_C_",
         "vehicle.dodge.charger_2020": "BP_Charger2020_C_",
+        "vehicle.dodge.charger_police_2020": "BP_ChargerCop2020_C_",
         "vehicle.mini.cooper_s_2021": "BP_Mini2021_C_",
         "vehicle.mercedes.coupe_2020": "BP_MercedesCCC_C_",
         "vehicle.audi.tt": "BP_AudiTT_C_",
     }
     prefix = prefixes.get(actor.type_id)
     matches = [name for name in names if prefix and name.startswith(prefix)]
-    if matches:
-        same_type_ids = sorted(item.id for item in world.get_actors().filter(actor.type_id))
-        ordinal = same_type_ids.index(actor.id)
-        if ordinal < len(matches):
-            return matches[ordinal]
+    same_type = list(world.get_actors().filter(actor.type_id))
+    if len(matches) == 1 and len(same_type) == 1:
+        return matches[0]
     blueprint_token = actor.type_id.rsplit(".", 1)[-1].replace("_", "").casefold()
     matches = [name for name in names
                if blueprint_token and blueprint_token in name.replace("_", "").casefold()
                and name.startswith("BP_")]
-    if len(matches) == 1:
+    if len(matches) == 1 and len(same_type) == 1:
         return matches[0]
     raise RuntimeError(
         f"Runtime mesh identity is ambiguous for actor {actor.id} ({actor.type_id}); "
@@ -109,6 +107,7 @@ class EvaluationControl:
     def __init__(self, runtime_dir: str | Path | None = None) -> None:
         configured = runtime_dir or os.environ.get("CSA_EVALUATION_CONTROL_DIR")
         self.root = Path(configured) if configured else None
+        self.provenance = ActorProvenance(self.root.parent/'actor-provenance.json') if self.root else None
         self.last_snapshot = 0.0
         self.blueprints: list[str] | None = None
         self.road_points: list[dict[str, float]] | None = None
@@ -138,7 +137,10 @@ class EvaluationControl:
         temporary.replace(target)
 
     def _write_snapshot(self, world: carla.World) -> None:
-        actors = [_actor_record(actor, "user" if actor.id in self.user_actor_ids else "evaluation")
+        dynamic = [a for a in world.get_actors() if a.type_id.startswith(('vehicle.', 'walker.', 'static.prop.'))]
+        self.provenance.mark(world.id, dynamic, 'evaluation', overwrite=False)
+        origins = self.provenance.records(world.id)
+        actors = [_actor_record(actor, origins.get(str(actor.id), {}).get('origin', 'evaluation'))
                   for actor in world.get_actors()
                   if actor.type_id.startswith(("vehicle.", "walker.", "static.prop."))]
         if self.blueprints is None:
@@ -209,6 +211,8 @@ class EvaluationControl:
                 raise RuntimeError(f"Unknown environment category: {category}")
             query = str(data.get("query", "")).casefold()
             objects = world.get_environment_objects(ENVIRONMENT_LABELS[category])
+            if data.get('origin', 'all') not in ('all', 'existing'):
+                objects = []
             records = []
             for obj in objects:
                 if query and query not in obj.name.casefold() and query not in str(obj.id):
@@ -216,6 +220,7 @@ class EvaluationControl:
                 box = obj.bounding_box
                 records.append({"key": f"environment:{obj.id}", "id": str(obj.id),
                     "source": "environment", "category": category, "group": "environment",
+                    "origin": "existing",
                     "kind": "road" if category in {"roads", "road_lines", "sidewalks", "ground", "terrain", "water"} else "building",
                     "name": obj.name, "label": f"{obj.name} · {str(obj.id)[-6:]}",
                     "location": _vector(box.location), "extent": _vector(box.extent),
@@ -255,6 +260,7 @@ class EvaluationControl:
                 roll=float(rot.get("roll", 0))))
             actor = world.spawn_actor(blueprint, transform)
             self.user_actor_ids.add(actor.id)
+            self.provenance.mark(world.id, [actor], 'user')
             if blueprint_id.startswith("vehicle."):
                 actor.set_target_velocity(carla.Vector3D())
                 actor.set_target_angular_velocity(carla.Vector3D())

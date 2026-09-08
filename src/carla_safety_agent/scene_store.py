@@ -98,7 +98,7 @@ class SceneStore:
         with self.locked(scene_id):
             head = json.loads((folder/'head.json').read_text())
             version = version or head['version']
-            payload = json.loads((folder/(identifier(version)+'.json')).read_text())
+            payload = validate_scene(json.loads((folder/(identifier(version)+'.json')).read_text()))
             return {'head': head, 'document': payload}
 
     def save(self, document, name, scene_id=None, expected_version=None):
@@ -129,7 +129,9 @@ class SceneStore:
             cursor = head['cursor']+direction
             if not 0 <= cursor < len(head['history']): raise ValueError('No earlier/later version')
             version = head['history'][cursor]
-            document = json.loads((folder/(version+'.json')).read_text())
+            # Reject corrupted history before changing the durable cursor. The
+            # world restore preflight runs later and cannot protect this write.
+            document = validate_scene(json.loads((folder/(identifier(version)+'.json')).read_text()))
             head.update(cursor=cursor, version=version, name=document['name'], map=document['map'],
                         object_count=len(document.get('objects', [])), updated_at=time.time())
             atomic(folder/'head.json', head)

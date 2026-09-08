@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from carla_safety_agent.scene_store import SceneStore, validate_scene
 
@@ -52,3 +54,27 @@ def test_spawn_options_are_checked_before_restore(options):
 
 def test_empty_scene_normalizes_objects():
     assert validate_scene({'map':'Town04'})['objects'] == []
+
+
+@pytest.mark.parametrize('corruption', ['transform', 'weather', 'schema'])
+def test_corrupted_history_does_not_advance_cursor(tmp_path, corruption):
+    store = SceneStore(tmp_path)
+    first = store.save(document(), 'first')['head']
+    second = store.save(document(2), 'second', first['scene_id'], first['version'])['head']
+    folder = tmp_path / first['scene_id']
+    version_file = folder / (first['version'] + '.json')
+    damaged = json.loads(version_file.read_text())
+    if corruption == 'transform':
+        damaged['objects'][0]['transform']['location'] = {'x': 1}
+    elif corruption == 'weather':
+        damaged['weather'] = {'wetness': True}
+    else:
+        damaged['schema_version'] = 'carla-scene/999'
+    version_file.write_text(json.dumps(damaged))
+    previous_head = (folder / 'head.json').read_bytes()
+    with pytest.raises(ValueError):
+        store.move(first['scene_id'], -1, second['version'])
+    assert (folder / 'head.json').read_bytes() == previous_head
+    with pytest.raises(ValueError):
+        store.read(first['scene_id'], first['version'])
+    assert store.read(first['scene_id'])['document']['version'] == second['version']

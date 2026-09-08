@@ -33,6 +33,7 @@ from carla_safety_agent.provenance import ActorProvenance
 from carla_safety_agent.uv_audit import audit_uv
 from carla_safety_agent.replay import replay_index, replay_file, replay_projection, replay_trajectory, replay_events
 from carla_safety_agent.natural_language import NaturalLanguageCompiler
+from carla_safety_agent.scenario_archive import archive_scenario
 from carla_safety_agent.session import SessionJournal
 from carla_safety_agent.scene_store import SceneStore, validate_scene
 from carla_safety_agent.material_library import MaterialLibrary, MaterialTransaction, exact_environment_target
@@ -561,10 +562,9 @@ def compile_scenario(data: dict, execute: bool = False) -> dict:
                 "extracted": compilation.extracted}
     catalog = PROJECT_ROOT / ".runtime" / "generated-scenarios"
     catalog.mkdir(parents=True, exist_ok=True)
-    scenario_path = catalog / f"{scenario.scenario_id}.json"
-    scenario_path.write_text(json.dumps(scenario.to_dict(), indent=2,
-                                        ensure_ascii=False), encoding="utf-8")
+    scenario_path, digest = archive_scenario(catalog, scenario.to_dict())
     response["scenario_path"] = str(scenario_path)
+    response["scenario_sha256"] = digest
     if execute:
         output = PROJECT_ROOT / ".runtime" / "generated-scenarios"
         result = CarlaAdapter(HOST, CARLA_PORT, 120.0).run(

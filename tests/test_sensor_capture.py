@@ -18,6 +18,28 @@ def test_depth_channel_order_and_units():
     assert meters[0,2] == pytest.approx(1000/16777215)
 
 
+def test_close_reports_failed_destroy_and_continues_other_cleanup():
+    import threading
+    capture=object.__new__(SensorCapture);capture.lock=threading.Condition()
+    calls=[]
+    failed=SimpleNamespace(is_alive=True,stop=lambda:None,destroy=lambda:False)
+    good=SimpleNamespace(is_alive=True,stop=lambda:None,destroy=lambda:calls.append('destroy') or True)
+    capture.sensors=[failed,good];capture.run=None
+    capture.manifest=lambda status:calls.append(status)
+    errors=capture.close()
+    assert errors and 'returned false' in errors[0]
+    assert capture.sensors==[failed]
+    assert calls==['destroy','saved_cleanup_error']
+
+
+def test_close_reports_manifest_failure():
+    import threading
+    capture=object.__new__(SensorCapture);capture.lock=threading.Condition();capture.sensors=[];capture.run=None
+    def fail(status): raise OSError('disk full')
+    capture.manifest=fail
+    assert 'disk full' in capture.close()[0]
+
+
 def test_lidar_bev_orientation():
     view = bev_preview(np.array([[10,10,1,.5], [np.nan,0,0,0]]), size=600, extent=60)
     assert view.shape == (600,600,3)

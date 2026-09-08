@@ -185,6 +185,7 @@ class SensorCapture:
             input_archive='model_input.npz' if self.source == 'model-input' else 'sensor_input.npz',
             sampling_every_frames=self.sampling_every,
             execution_id=self.execution_id,
+            cleanup_errors=getattr(self,'cleanup_errors',[]),
             notes=[('model_input.npz contains exact pre-model arrays; RGB PNG is lossless RGB conversion'
                     if self.source == 'model-input' else
                     'sensor_input.npz contains raw rig RGB BGRA arrays; no model was invoked'),
@@ -322,23 +323,32 @@ class SensorCapture:
         temporary.replace(path)
 
     def close(self):
+        errors=[]
         with self.lock:
             self.closed = True
             self.lock.notify_all()
         for sensor in self.sensors:
             try:
                 if sensor.is_alive: sensor.stop()
-            except RuntimeError: pass
+            except Exception as exc: errors.append(f'Sensor stop: {exc}')
+        remaining=[]
         for sensor in self.sensors:
             try:
-                if sensor.is_alive: sensor.destroy()
-            except RuntimeError: pass
-        self.sensors.clear()
+                if sensor.is_alive and sensor.destroy() is False:
+                    raise RuntimeError('destroy returned false')
+            except Exception as exc:
+                errors.append(f'Sensor destroy: {exc}')
+                remaining.append(sensor)
+        self.sensors=remaining
+        self.cleanup_errors=errors
         try:
-            self.manifest('saved')
+            self.manifest('saved_cleanup_error' if errors else 'saved')
         except OSError as exc:
             print(f'Unable to finalize capture manifest; committed samples retained: {exc}', flush=True)
+            errors.append(f'Manifest finalization: {exc}')
         self.run = None
+        if errors: print('Capture cleanup errors: '+ '; '.join(errors),flush=True)
+        return errors
 
 
 def vars_vector(v):

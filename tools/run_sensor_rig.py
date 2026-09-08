@@ -80,7 +80,7 @@ def main():
     finally:
         errors = []
         if capture:
-            try: capture.close()
+            try: errors.extend(capture.close())
             except Exception as exc: errors.append(str(exc))
         if ego and manager:
             # Unregister before destruction: TM's worker may otherwise dereference
@@ -88,7 +88,8 @@ def main():
             try: ego.set_autopilot(False,8050)
             except Exception as exc: errors.append(str(exc))
         if ego:
-            try: ego.destroy()
+            try:
+                if ego.destroy() is False: errors.append('Capture vehicle destroy returned false')
             except Exception as exc: errors.append(str(exc))
         if manager:
             try: manager.set_synchronous_mode(False)

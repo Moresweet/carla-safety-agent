@@ -20,8 +20,13 @@ def diagnose(manifest, client, material_root):
         checks.append({'kind': 'map', 'reference': name,
                        'state': 'available' if available else 'missing'})
     for name in required['blueprints']:
-        checks.append({'kind': 'blueprint', 'reference': name,
-                       'state': 'available' if name in blueprints else 'missing'})
+        check = {'kind': 'blueprint', 'reference': name,
+                 'state': 'available' if name in blueprints else 'missing'}
+        if name.startswith('generated.prop.'):
+            check.update(state='not_checked',
+                         source_package_included=name in required.get('generated_asset_sources', {}),
+                         reason='Generated ID is a studio registry alias; native Blueprint enumeration cannot verify its target mesh')
+        checks.append(check)
     for map_name, target, component, slot in required['material_slots']:
         check = {'kind': 'material_slot', 'reference': [map_name, target, component, slot]}
         if normalize(map_name) != current_map:
@@ -44,4 +49,5 @@ def diagnose(manifest, client, material_root):
     return {'checks': checks, 'all_declared_dependencies_available': all(c['state'] == 'available' for c in checks),
             'current_map': current_map, 'live_world_modified': False, 'restore_verified': False,
             'limitations': ['Checks declarations, not engine patch compatibility or actual spawn/material application',
-                            'External asset bytes and model weights are not included or verified']}
+                            'Bundled source packages do not prove target Unreal import or registry availability',
+                            'Model weights are not included or verified']}

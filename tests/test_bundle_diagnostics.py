@@ -28,3 +28,16 @@ def test_dependency_observations_do_not_switch_maps(tmp_path, listed_map):
     assert not result['live_world_modified'] and not result['restore_verified']
     (folder/'mesh.json').unlink()
     assert diagnose(manifest, client, tmp_path)['checks'][4]['state'] == 'missing'
+
+
+def test_generated_source_is_not_runtime_availability(tmp_path):
+    world = SimpleNamespace(get_map=lambda: SimpleNamespace(name='Town04'),
+                            get_blueprint_library=lambda: [], get_names_of_all_objects=lambda: [])
+    client = SimpleNamespace(get_world=lambda:world, get_available_maps=lambda:['Town04'])
+    blueprint = 'generated.prop.barrier'
+    manifest = {'dependencies':{'maps':['Town04'], 'blueprints':[blueprint], 'material_slots':[],
+                                'generated_asset_sources':{blueprint:'a'*64}}}
+    result = diagnose(manifest, client, tmp_path)
+    assert result['checks'][1]['state'] == 'not_checked'
+    assert result['checks'][1]['source_package_included']
+    assert not result['all_declared_dependencies_available']

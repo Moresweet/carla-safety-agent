@@ -1,5 +1,6 @@
 """Portable scene history and referenced textures; never extracts arbitrary paths."""
 import hashlib
+import io
 import json
 from pathlib import Path
 import re
@@ -11,10 +12,11 @@ from .experiment_matrix import canonical
 from .material_library import material_edits
 from .material_mesh import validate_preview
 from .scene_store import SceneStore, identifier, validate_scene
+from .blender_package import read_asset, import_asset
 
 LIMIT = 256 * 1024 * 1024
 SCHEMA = 'carla-project-bundle/1'
-ENTRY = re.compile(r'(?:scenes/[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_-]{1,80}\.json|textures/[a-f0-9]{64}\.png|material-exports/[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_-]{1,120}\.json)')
+ENTRY = re.compile(r'(?:scenes/[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_-]{1,80}\.json|textures/[a-f0-9]{64}\.png|material-exports/[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_-]{1,120}\.json|generated-assets/(?:index\.json|[a-f0-9]{64}\.zip))')
 
 
 def _validate(files):
@@ -22,7 +24,7 @@ def _validate(files):
     for name, payload in files.items():
         if not ENTRY.fullmatch(name):
             raise ValueError('Unsupported bundle path')
-        if name.startswith('material-exports/'):
+        if name.startswith(('material-exports/', 'generated-assets/')):
             continue
         if name.startswith('textures/'):
             if hashlib.sha256(payload).hexdigest() != Path(name).stem:
@@ -70,13 +72,47 @@ def _validate(files):
             validate_preview(files[mesh_name])
             expected.update((catalog_name, mesh_name))
         if preview_files != expected: raise ValueError('Unexpected preview files')
-    return {'maps': sorted(maps), 'blueprints': sorted(blueprints),
+    dependencies = {'maps': sorted(maps), 'blueprints': sorted(blueprints),
             'material_slots': [list(slot) for slot in sorted(slots)],
             'external_assets_included': False, 'weights_included': False,
             'execution_history_included': False, 'datasets_included': False}
+    asset_files = {name for name in files if name.startswith('generated-assets/')}
+    if asset_files:
+        if 'generated-assets/index.json' not in files:
+            raise ValueError('Missing generated asset index')
+        bindings = json.loads(files['generated-assets/index.json'])
+        expected_blueprints = {bp for bp in blueprints if bp.startswith('generated.prop.')}
+        if not isinstance(bindings, dict) or not bindings or set(bindings) != expected_blueprints:
+            raise ValueError('Generated asset bindings must cover exactly the referenced generated blueprints')
+        expected_files = {'generated-assets/index.json'}
+        expanded = sum(map(len, files.values()))
+        for blueprint, digest in bindings.items():
+            if not isinstance(digest, str) or not re.fullmatch('[a-f0-9]{64}', digest):
+                raise ValueError('Invalid generated asset package digest')
+            name = f'generated-assets/{digest}.zip'
+            if name not in files or hashlib.sha256(files[name]).hexdigest() != digest:
+                raise ValueError('Generated asset package missing or checksum mismatch')
+            if name not in expected_files:
+                with zipfile.ZipFile(io.BytesIO(files[name])) as nested:
+                    nested_size = sum(info.file_size for info in nested.infolist())
+                if expanded + nested_size > LIMIT:
+                    raise ValueError('Expanded generated assets exceed bundle size limit')
+                _, source_files = read_asset(io.BytesIO(files[name]))
+                expanded += sum(map(len, source_files.values()))
+                if expanded > LIMIT:
+                    raise ValueError('Expanded generated assets exceed bundle size limit')
+            expected_files.add(name)
+        if asset_files != expected_files:
+            raise ValueError('Unreferenced generated asset packages')
+        dependencies['generated_asset_sources'] = dict(sorted(bindings.items()))
+        dependencies['generated_assets_require_unreal_import'] = True
+        dependencies['external_assets_included'] = True
+        dependencies['unreal_asset_binaries_included'] = False
+    return dependencies
 
 
-def export_bundle(scene_root, material_root, scene_ids, output, *, include_material_previews=False):
+def export_bundle(scene_root, material_root, scene_ids, output, *, include_material_previews=False,
+                  generated_assets=None):
     files = {}; total = 0
     def add(name, path):
         nonlocal total
@@ -128,6 +164,21 @@ def export_bundle(scene_root, material_root, scene_ids, output, *, include_mater
         for name, catalog in catalogs.items(): files[name] = canonical(catalog)
         if sum(map(len, files.values())) > LIMIT: raise ValueError('Bundle exceeds size limit')
         _validate(files)
+    if generated_assets is not None:
+        bindings = {}
+        for blueprint, package in generated_assets.items():
+            package = Path(package)
+            if package.is_symlink() or not package.is_file() or package.stat().st_size > LIMIT:
+                raise ValueError('Invalid generated asset source package')
+            payload = package.read_bytes()
+            digest = hashlib.sha256(payload).hexdigest()
+            if f'generated-assets/{digest}.zip' not in files and sum(map(len, files.values())) + len(payload) > LIMIT:
+                raise ValueError('Bundle exceeds size limit')
+            files[f'generated-assets/{digest}.zip'] = payload
+            bindings[blueprint] = digest
+        files['generated-assets/index.json'] = canonical(bindings)
+    if sum(map(len, files.values())) > LIMIT: raise ValueError('Bundle exceeds size limit')
+    dependencies = _validate(files)
     manifest = {'schema_version': SCHEMA, 'dependencies': dependencies,
                 'files': {name: {'sha256': hashlib.sha256(payload).hexdigest(), 'size': len(payload)}
                           for name, payload in sorted(files.items())}}
@@ -174,3 +225,20 @@ def import_bundle(path, destination_parent):
         shutil.rmtree(destination)  # Only the private directory allocated above.
         raise
     return destination
+
+
+def prepare_generated_assets(path, project_root):
+    """Validate the whole bundle, then stage jobs; never execute or register assets."""
+    manifest, files = read_bundle(path)
+    bindings = manifest['dependencies'].get('generated_asset_sources', {})
+    if not bindings:
+        raise ValueError('Bundle contains no generated asset source packages')
+    jobs = {}; prepared_packages = {}
+    for blueprint, digest in bindings.items():
+        if digest not in prepared_packages:
+            prepared_packages[digest] = import_asset(io.BytesIO(files[f'generated-assets/{digest}.zip']), project_root)
+        job = prepared_packages[digest]
+        jobs[blueprint] = {**job, 'source_package_sha256': digest,
+                           'suggested_asset_name': blueprint.removeprefix('generated.prop.')}
+    return {'assets': jobs, 'unreal_registered': False, 'live_world_modified': False,
+            'requires_explicit_unreal_import': True}

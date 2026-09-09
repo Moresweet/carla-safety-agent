@@ -1194,3 +1194,17 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 匹配构建后两次独立导入任务1e21c11f01f04a568ed04d04f5c19f66、25bead6b5bc643a9af2d3c2b454e74e0均真实退出0、无import_warning，注册并生成成功。报告目录分别为runs/validation/blender-package-1e21c11f01f04a568ed04d04f5c19f66-2ed8fc40、blender-package-25bead6b5bc643a9af2d3c2b454e74e0-7c9ea41f。两次尺寸断言2.4×0.35×0.8米通过，Actor1635/1639均清理。
 - 已查看第一轮即时截图，护栏灰色；同一资产复用报告blender-package-1e21c11f01f04a568ed04d04f5c19f66-cee9e1d6截图显示蓝色护栏，Actor1637清理。观察与首次材质尚未就绪一致，但未独立证明原因；不能将首次即时视觉验收标为通过，后续需明确材质就绪机制。新资产留存可恢复使用，未覆盖旧资产。
 - 全部362项Python测试通过。本轮验证了已复现的FBX导入退出故障修复；当前运行世界未重启，预检Town04异步空闲。未覆盖纹理FBX、所有模型、重启后完整CARLA流程或跨场景压力测试，S1/S8及整体计划仍未完成。
+
+### 2026-09-08 场景包携带生成资产源文件
+
+- 场景包新增显式generated.prop ID→源资产包SHA-256映射，要求覆盖所选全部历史的生成模型引用；内外两层校验、白名单路径及累计解压限制。prepare-assets将源包准备到目标Blender任务，不执行、不注册、不修改世界；同源多ID共享一次解压。新增PROJECT_MIGRATION.md说明操作和未覆盖项。
+- 实机包35a2e0614e8b49a5bec651d14c694b95使用真实护栏generated.prop.csa_migratedbarrier_bc340f3411，场景6b3355c6b5f74b0caab2707a02491ade，稳定ID29536520388d4db48f6211021a0cd4fc，Actor1641删除后恢复为1642，重复恢复无副本且清理通过。隔离目录bundle-generated-l_eqd24t/carla-project-ua11gfdf中全部源文件字节一致，未执行或注册目标资产。报告runs/validation/bundle-actor-35a2e0614e8b49a5bec651d14c694b95.json；此轮发生在最终依赖标志调整前，不替代最终版服务验收。
+- 最终版依赖明确标记external_assets_included=true、unreal_asset_binaries_included=false；doctor对generated ID报告注册/目标网格未检查，不把原生Blueprint目录缺少工作室别名误判为资产缺失。最终包runs/validation/generated-scene-bundle-final.zip离线导出/导入/prepare-assets通过，目标runs/validation/carla-project-2o07axsk，任务9032046a14954b9ba811a9b1060cb42f，FBX与原文件cmp一致。
+- 最终服务重载申请被自动审核拒绝，原因返回额度限制；没有绕过审核或再次重启。运行桥接仍为此前版本PID3874696。当前改动未提交，GitHub也未推送；需恢复授权执行能力后重载并验证最终版，再提交。旧中间开发包的依赖声明与最终版不同，使用最终包继续后续验证。
+- 新目标Unreal导入注册、同名冲突处理及真正跨机器恢复仍未完成。来源绑定由操作者显式指定，校验和不证明源包与模型语义对应；准备阶段磁盘失败可能留任务。整体目标保持未完成。
+- 最终369项Python测试通过，覆盖源包绑定完整性、内层篡改、累计解压限制、无执行/无注册、共享源去重及诊断状态；git diff --check通过。
+
+### 2026-09-09 恢复额度后的最终版回归
+
+- 空闲检查后成功重载最终版桥接，PID1177011。真实护栏联合场景包e9789292183a433dac1939b15fcf7dc1回归通过，稳定ID2fa0139782ab4e82acba7a9ee5f500a2，Actor1643删除后恢复1644，重复恢复无副本，测试对象清理完成。
+- 隔离目标runs/validation/bundle-generated-n0wnb_rk/carla-project-4dk7dxa6，准备任务c2f36009d8bf4f6e9bd5070060787aac；所有源文件字节一致，未执行或注册目标资产。报告runs/validation/bundle-actor-e9789292183a433dac1939b15fcf7dc1.json。此次覆盖最终依赖标志版本，补齐前一天被额度限制阻止的原生回归；目标Unreal导入及跨机器验收仍未完成。

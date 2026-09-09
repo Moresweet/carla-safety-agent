@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from carla_safety_agent.project_bundle import export_bundle, import_bundle, read_bundle
+from carla_safety_agent.project_bundle import export_bundle, import_bundle, read_bundle, prepare_generated_assets
 
 
 def main():
@@ -14,6 +14,8 @@ def main():
     export.add_argument('--scene', action='append', required=True)
     export.add_argument('--output', type=Path, required=True)
     export.add_argument('--include-material-previews', action='store_true')
+    export.add_argument('--generated-asset', action='append', default=[], metavar='BLUEPRINT=PACKAGE',
+                        help='Explicit source-package binding; cover all generated blueprints in scene history')
     inspect = commands.add_parser('inspect')
     inspect.add_argument('archive', type=Path)
     doctor = commands.add_parser('doctor')
@@ -27,14 +29,26 @@ def main():
     load = commands.add_parser('import')
     load.add_argument('archive', type=Path)
     load.add_argument('--destination-parent', type=Path, required=True)
+    prepare = commands.add_parser('prepare-assets')
+    prepare.add_argument('archive', type=Path)
+    prepare.add_argument('--project', type=Path, required=True)
     args = parser.parse_args()
     if args.action == 'export':
+        bindings = {}
+        for value in args.generated_asset:
+            blueprint, separator, package = value.partition('=')
+            if not separator or not blueprint or not package or blueprint in bindings:
+                parser.error('Each --generated-asset needs a unique BLUEPRINT=PACKAGE binding')
+            bindings[blueprint] = Path(package)
         manifest = export_bundle(args.project/'data/scenes', args.project/'data', args.scene, args.output,
-                                 include_material_previews=args.include_material_previews)
+                                 include_material_previews=args.include_material_previews,
+                                 generated_assets=bindings if args.generated_asset else None)
         result = {'archive': str(args.output.resolve()), 'manifest': manifest}
     elif args.action == 'inspect':
         manifest, _ = read_bundle(args.archive)
         result = {'manifest': manifest, 'dependency_availability': 'not_checked'}
+    elif args.action == 'prepare-assets':
+        result = prepare_generated_assets(args.archive, args.project)
     elif args.action == 'stage':
         import uuid
         import shutil

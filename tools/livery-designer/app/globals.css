@@ -41,3 +41,14 @@
 .asset-import-history summary{cursor:pointer;font-weight:600;padding:6px 0}
 .asset-import-history [role=alert]{color:#ffbdbd}
 .asset-import-history summary:focus-visible{outline:2px solid var(--accent);outline-offset:4px}
+.bundle-panel{border-top:1px solid var(--line);margin-top:24px;padding-top:20px;max-width:1080px}
+.bundle-panel p{line-height:1.6;overflow-wrap:anywhere}
+.project-panel-content .bundle-panel label{display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:10px;margin:16px 0;min-width:0;flex-wrap:wrap;font-size:14px}
+.bundle-panel input[type=checkbox]{width:auto}
+.bundle-panel button{margin:4px 12px 8px 0;padding:10px 16px;border:1px solid #395269;border-radius:8px;background:#152f3d;color:#dcedf5;cursor:pointer;font-size:14px}
+.bundle-panel button:disabled{cursor:not-allowed}
+.bundle-panel h2{font-size:22px;font-weight:700}
+.bundle-panel input[type=file]{padding:8px;border:1px solid #395269;border-radius:8px;max-width:100%}
+.bundle-details{padding:18px;border:1px solid var(--line);border-radius:12px;margin-top:18px}
+.bundle-panel [role=alert]{color:#ffbdbd}
+.bundle-panel a{color:var(--accent);text-decoration:underline}

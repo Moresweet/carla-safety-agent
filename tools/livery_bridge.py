@@ -89,6 +89,8 @@ _e2e_job = {"state": "idle", "kind": None, "started_at": None,
 _scene_snapshot = None
 _world_episode = None
 _provenance = ActorProvenance(PROJECT_ROOT / '.runtime/actor-provenance.json')
+from carla_safety_agent.bundle_workbench import BundleWorkbench
+BUNDLES = BundleWorkbench(PROJECT_ROOT)
 _uv_audit = audit_uv(PROJECT_ROOT / 'tools/livery-designer/public')
 _e2e_log = PROJECT_ROOT / ".runtime" / "uniad-ui.log"
 _e2e_pid = PROJECT_ROOT / ".runtime" / "uniad.pid"
@@ -1866,6 +1868,26 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         request = urlparse(self.path)
         params = parse_qs(request.query)
+        if request.path in ('/projects/bundle','/projects/bundle/download'):
+            try:
+                bundle_id=params.get('bundle_id',[''])[0]
+                if request.path.endswith('/download'):
+                    payload=BUNDLES.download(bundle_id)
+                    self.send_response(200)
+                    self.send_header('Access-Control-Allow-Origin',FRONTEND_ORIGIN)
+                    self.send_header('Content-Type','application/zip')
+                    self.send_header('Content-Disposition',f'attachment; filename="project-{bundle_id}.zip"')
+                    self.send_header('Content-Length',str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                else:
+                    result=BUNDLES.inspect(bundle_id)
+                    self._headers()
+                    self.wfile.write(json.dumps(result).encode())
+            except Exception as exc:
+                self._headers(400)
+                self.wfile.write(json.dumps({'ok':False,'error':str(exc)}).encode())
+            return
         if request.path == '/blender/imports':
             try:
                 result = {'ok':True,'attempts':BLENDER.import_attempts()}
@@ -2123,6 +2145,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         request = urlparse(self.path)
         if request.path not in ("/apply", "/apply/road", "/apply/building",
+                                '/projects/bundle/export','/projects/bundle/upload','/projects/bundle/import',
                                 '/batches/create', '/datasets/quality',
                                 '/batches/control',
                                 '/batches/scheduler',
@@ -2149,7 +2172,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(b'{"ok":false,"error":"Request body exceeds 16 MiB limit"}')
                 return
             payload = self.rfile.read(length)
-            if request.path == '/datasets/quality':
+            if request.path == '/projects/bundle/export':
+                result=BUNDLES.export(json.loads(payload or b'{}'))
+            elif request.path == '/projects/bundle/upload':
+                result=BUNDLES.upload(payload)
+            elif request.path == '/projects/bundle/import':
+                result=BUNDLES.import_isolated(json.loads(payload or b'{}'))
+            elif request.path == '/datasets/quality':
                 data = json.loads(payload or b'{}')
                 if not isinstance(data, dict) or set(data) != {'run_id'}:
                     raise ValueError('Expected only dataset run_id')

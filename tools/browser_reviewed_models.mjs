@@ -63,6 +63,52 @@ try {
   assert(state.buttons[0].disabled,'Unreviewed plan must not start');
   const interactions=[];
   let stoppedExecution=null;
+  const bundleSceneFlag=process.argv.indexOf('--bundle-scene');
+  if(bundleSceneFlag>=0){
+    const sceneId=process.argv[bundleSceneFlag+1];assert(/^[a-zA-Z0-9_-]{1,80}$/.test(sceneId));
+    await evaluate(`document.querySelector('.project-panel').open=true`);
+    let selectorReady=false;
+    for(let i=0;i<100;i++){
+      selectorReady=await evaluate(`!![...document.querySelectorAll('.project-panel select option')].find(o=>o.value===${JSON.stringify(sceneId)})`);
+      if(selectorReady)break;await delay(200);
+    }
+    assert(selectorReady,'Saved scene unavailable');
+    await evaluate(`(()=>{const option=[...document.querySelectorAll('.project-panel select option')].find(o=>o.value===${JSON.stringify(sceneId)});const select=option.parentElement;select.value=option.value;select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await delay(100);
+    assert(await evaluate(`!document.querySelector('.bundle-panel button').disabled`));
+    if(process.argv.includes('--bundle-previews')){
+      await evaluate(`document.querySelector('.bundle-panel input[type=checkbox]').click()`);await delay(100);
+    }
+    await evaluate(`document.querySelector('.bundle-panel button').click()`);
+    let download;
+    for(let i=0;i<150;i++){download=await evaluate(`document.querySelector('.bundle-panel a')?.href`);if(download)break;await delay(200)}
+    assert(download,'Export download was not provided');
+    const exportedId=new URL(download).searchParams.get('bundle_id');
+    const response=await fetch(download);assert(response.ok);
+    const packagePath=join(output,'browser-export.zip');await writeFile(packagePath,Buffer.from(await response.arrayBuffer()));
+    const documentNode=await cdp('DOM.getDocument'),input=await cdp('DOM.querySelector',{nodeId:documentNode.root.nodeId,selector:'.bundle-panel input[type=file]'});
+    await cdp('DOM.setFileInputFiles',{nodeId:input.nodeId,files:[packagePath]});
+    let uploadedId;
+    for(let i=0;i<150;i++){
+      const link=await evaluate(`document.querySelector('.bundle-panel a')?.href`);
+      uploadedId=link&&new URL(link).searchParams.get('bundle_id');
+      if(uploadedId&&uploadedId!==exportedId)break;await delay(200);
+    }
+    assert(uploadedId&&uploadedId!==exportedId,'Did not observe new validated upload');
+    assert(await evaluate(`document.querySelector('.bundle-details button').disabled`),'Import must require confirmation');
+    await evaluate(`document.querySelector('.bundle-details input[type=checkbox]').click()`);await delay(100);
+    await evaluate(`document.querySelector('.bundle-details button').click()`);
+    let imported;
+    for(let i=0;i<150;i++){imported=await evaluate(`document.querySelector('.bundle-panel [role=status]').textContent`);if(imported.startsWith('已隔离导入到：'))break;await delay(200)}
+    assert(imported.startsWith('已隔离导入到：'),imported);
+    assert(imported.includes('尚未检查运行依赖'));
+    assert(!await evaluate(`!!document.querySelector('.bundle-panel [role=alert]')`));
+    await evaluate(`document.querySelector('.bundle-panel').scrollIntoView({block:'start'})`);
+    const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+    await writeFile(join(output,'project-bundle.png'),Buffer.from(shot.data,'base64'));
+    await writeFile(join(output,'bundle-report.json'),JSON.stringify({sceneId,exportedId,uploadedId,imported},null,2));
+    interactions.push('saved_scene_export_uploaded_validated_and_explicitly_imported_to_isolated_directory');
+  }
   if(process.argv.includes('--idle-controls')){
     const current=await (await fetch('http://127.0.0.1:8765/e2e/status')).json();
     assert(!['running','stopping'].includes(current.job.state),'Idle-only control test must not run during evaluation');

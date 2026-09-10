@@ -1956,8 +1956,11 @@ class Handler(BaseHTTPRequestHandler):
                     payload=replay_trajectory(DATASET_ROOT,params.get('run_id',[''])[0],
                         params.get('frame',['-1'])[0],float(params.get('horizon_s',['5'])[0]))
                 else:
+                    depth_check = params.get('depth_check', ['false'])[0]
+                    if depth_check not in ('true', 'false'):
+                        raise ValueError('depth_check must be true or false')
                     payload=replay_projection(DATASET_ROOT,params.get('run_id',[''])[0],
-                        params.get('frame',['-1'])[0],params.get('camera',[''])[0])
+                        params.get('frame',['-1'])[0],params.get('camera',[''])[0], depth_check == 'true')
                 self._headers()
                 self.wfile.write(json.dumps({'ok':True,**payload}).encode())
             except (ValueError,KeyError,OSError) as exc:

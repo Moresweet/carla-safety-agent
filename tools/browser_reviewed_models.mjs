@@ -173,6 +173,21 @@ try {
     const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
     await writeFile(join(output,'replay-quality.png'),Buffer.from(screenshot.data,'base64'));
     interactions.push('recorded_dataset_quality_visible');
+    if(process.argv.includes('--depth-diagnostic')){
+      await evaluate(`document.querySelector('input[aria-label="RGB点云投影"]').click()`);
+      await delay(100);
+      await evaluate(`document.querySelector('input[aria-label="点云深度交叉检查"]').click()`);
+      let ready=false;
+      for(let i=0;i<100;i++){
+        ready=await evaluate(`document.querySelectorAll('svg[aria-label*="深度交叉检查，非遮挡真值"]').length===6`);
+        if(ready)break;await delay(200);
+      }
+      assert(ready,'Six depth diagnostics failed to load');
+      await evaluate(`document.querySelector('input[aria-label="RGB点云投影"]').scrollIntoView({block:'start'})`);
+      const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      await writeFile(join(output,'depth-diagnostic.png'),Buffer.from(screenshot.data,'base64'));
+      interactions.push('six_saved_camera_depth_cross_checks_visible');
+    }
     if(process.argv.includes('--audit-dataset')){
       let available=false;
       for(let i=0;i<100;i++){

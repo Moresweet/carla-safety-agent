@@ -210,11 +210,13 @@ def _replay_boxes(root, run_id, frame, camera):
             'occlusion_checked': False, 'source': 'recorded_native_world_vertices'}
 
 
-def replay_projection(root, run_id, frame, camera):
+def replay_projection(root, run_id, frame, camera, depth_check=False):
     """Bounded diagnostic overlay payload, not an occlusion-correct point label."""
     import numpy as np
     from .projection import project_points
     from .sensor_capture import CAMERAS
+    if not isinstance(depth_check, bool):
+        raise ValueError('depth_check must be boolean')
     if camera not in CAMERAS:
         raise ValueError('Unknown camera')
     dataset=dataset_path(root,run_id)
@@ -230,11 +232,32 @@ def replay_projection(root, run_id, frame, camera):
     result=project_points(points,calibration['LIDAR'],calibration[camera])
     count=len(result['indices'])
     stride=max(1,(count+4999)//5000)
+    diagnostic = None
+    if depth_check:
+        from .depth_consistency import compare_depth
+        name = 'DEPTH_' + camera
+        if name not in calibration:
+            raise ValueError('Missing recorded depth calibration')
+        meta = json.loads(replay_file(root, run_id, frame, 'frame.json').read_text())
+        index = replay_index(root, run_id)
+        entry = next(item for item in index['frames'] if item['frame'] == int(frame))
+        if (not index.get('temporal_quality', {}).get('temporal_order_valid') or
+                meta.get('timestamp') != entry.get('timestamp')):
+            raise ValueError('Depth sample/index timestamp is not verified')
+        auxiliary = meta.get('auxiliary_frames', {})
+        rgb_frame = meta.get('sensor_frames', {}).get(camera, auxiliary.get(camera))
+        if (meta.get('frame') != int(frame) or meta.get('synchronized') is not True or
+                meta.get('missing') or rgb_frame != int(frame) or
+                auxiliary.get(name) != int(frame) or auxiliary.get('LIDAR') != int(frame)):
+            raise ValueError('Depth/RGB/LIDAR frame synchronization is not verified')
+        depth = np.load(replay_file(root, run_id, frame, name + '.npy'), allow_pickle=False, mmap_mode='r')
+        diagnostic = compare_depth(points, calibration['LIDAR'], calibration[name], depth, result['indices'])
+        diagnostic['states'] = diagnostic['states'][::stride].tolist()
     return {'frame':int(frame),'camera':camera,'width':calibration[camera]['width'],
             'height':calibration[camera]['height'],'visible_count':count,
             'pixels':result['pixels'][::stride].tolist(),'depth':result['depth'][::stride].tolist(),
             'point_indices':result['indices'][::stride].tolist(),
-            'occlusion_checked':False,'sample_stride':stride}
+            'occlusion_checked':False,'sample_stride':stride, 'depth_consistency':diagnostic}
 
 
 def replay_trajectory(root, run_id, frame, horizon_s=5.0):

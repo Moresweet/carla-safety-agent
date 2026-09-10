@@ -95,18 +95,22 @@ try {
       if(uploadedId&&uploadedId!==exportedId)break;await delay(200);
     }
     assert(uploadedId&&uploadedId!==exportedId,'Did not observe new validated upload');
-    assert(await evaluate(`document.querySelector('.bundle-details button').disabled`),'Import must require confirmation');
+    await evaluate(`[...document.querySelectorAll('.bundle-details button')].find(b=>b.textContent==='检查本机依赖（不切换地图）').click()`);
+    let diagnostic;
+    for(let i=0;i<100;i++){diagnostic=await evaluate(`document.querySelector('[aria-label="项目包依赖检查"]')?.textContent`);if(diagnostic)break;await delay(200)}
+    assert(diagnostic,'Dependency observation unavailable');
+    assert(await evaluate(`[...document.querySelectorAll('.bundle-details button')].find(b=>b.textContent==='隔离导入已检查项目包').disabled`),'Import must require confirmation');
     await evaluate(`document.querySelector('.bundle-details input[type=checkbox]').click()`);await delay(100);
-    await evaluate(`document.querySelector('.bundle-details button').click()`);
+    await evaluate(`[...document.querySelectorAll('.bundle-details button')].find(b=>b.textContent==='隔离导入已检查项目包').click()`);
     let imported;
     for(let i=0;i<150;i++){imported=await evaluate(`document.querySelector('.bundle-panel [role=status]').textContent`);if(imported.startsWith('已隔离导入到：'))break;await delay(200)}
     assert(imported.startsWith('已隔离导入到：'),imported);
-    assert(imported.includes('尚未检查运行依赖'));
+    assert(imported.includes('导入目录尚未配置运行环境'));
     assert(!await evaluate(`!!document.querySelector('.bundle-panel [role=alert]')`));
     await evaluate(`document.querySelector('.bundle-panel').scrollIntoView({block:'start'})`);
     const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
     await writeFile(join(output,'project-bundle.png'),Buffer.from(shot.data,'base64'));
-    await writeFile(join(output,'bundle-report.json'),JSON.stringify({sceneId,exportedId,uploadedId,imported},null,2));
+    await writeFile(join(output,'bundle-report.json'),JSON.stringify({sceneId,exportedId,uploadedId,imported,diagnostic},null,2));
     interactions.push('saved_scene_export_uploaded_validated_and_explicitly_imported_to_isolated_directory');
   }
   if(process.argv.includes('--idle-controls')){

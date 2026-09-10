@@ -1205,6 +1205,18 @@ def restore_scene(data):
 
 
 @simulation_operation
+def diagnose_bundle(data):
+    from carla_safety_agent.bundle_diagnostics import diagnose
+    if not isinstance(data,dict) or set(data)!={'bundle_id'}:
+        raise ValueError('Expected only bundle_id')
+    package=BUNDLES.inspect(data['bundle_id'])
+    world=connect_world()  # Reject an active tick owner; never load a map.
+    result=diagnose(package['manifest'],_carla_client,PROJECT_ROOT/'data')
+    return {'ok':True,'bundle_id':data['bundle_id'],'observed_at':time.time(),
+            'episode':str(world.id),**result}
+
+
+@simulation_operation
 def restore_bundle_scene(data):
     """Explicit world mutation using a validated, locally staged archive."""
     from carla_safety_agent.project_bundle import read_bundle
@@ -2145,7 +2157,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         request = urlparse(self.path)
         if request.path not in ("/apply", "/apply/road", "/apply/building",
-                                '/projects/bundle/export','/projects/bundle/upload','/projects/bundle/import',
+                                '/projects/bundle/export','/projects/bundle/upload','/projects/bundle/import','/projects/bundle/doctor',
                                 '/batches/create', '/datasets/quality',
                                 '/batches/control',
                                 '/batches/scheduler',
@@ -2178,6 +2190,8 @@ class Handler(BaseHTTPRequestHandler):
                 result=BUNDLES.upload(payload)
             elif request.path == '/projects/bundle/import':
                 result=BUNDLES.import_isolated(json.loads(payload or b'{}'))
+            elif request.path == '/projects/bundle/doctor':
+                result=diagnose_bundle(json.loads(payload or b'{}'))
             elif request.path == '/datasets/quality':
                 data = json.loads(payload or b'{}')
                 if not isinstance(data, dict) or set(data) != {'run_id'}:

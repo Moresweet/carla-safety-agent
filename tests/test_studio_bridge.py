@@ -37,6 +37,15 @@ def test_corrupt_origin_store_refuses_editor_spawn_before_native_mutation():
         env['_spawn_editor_object']('vehicle.test',{})
 
 
+def test_bundle_diagnostic_validates_request_and_archive_before_native_access():
+    def forbidden():pytest.fail('Invalid package reached CARLA')
+    def invalid(_):raise ValueError('Invalid package')
+    env=functions('diagnose_bundle',connect_world=forbidden,
+        BUNDLES=SimpleNamespace(inspect=invalid))
+    for payload in ({},{'bundle_id':'x','path':'/tmp'}, {'bundle_id':'x'}):
+        with pytest.raises(ValueError):env['diagnose_bundle'](payload)
+
+
 @pytest.mark.parametrize('name,args', [
     ('apply_livery',(b'',None)), ('apply_livery',(b'',True)),
     ('apply_pedestrian_texture',(b'',None)), ('apply_pedestrian_texture',(b'',-1)),

@@ -1325,3 +1325,10 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 导入前持久记录任务/进程身份、目标目录、请求和结果路径，记录registered/needs_attention；进程中断留下的importing明确属于未确认状态，不自动重试/删除。网页Asset Workshop可查看最近记录；旧资产不伪造新记录。详见ASSET_IMPORT_ATTEMPTS.md；完整资产自动回滚仍未实现。
 - 真实新资产ImportAudit_8507335db77241e5（任务849c40ad42ce）导入退出0、同名再次导入拒绝，场景实例1163截图后删除，源资产与注册项保留供追溯。报告asset-import-1ffefb6325784dc6a0f93c34cf8494ba。已查看最终导入记录面板browser-models-a796e487-3f5f-43aa-9068-9d754be12371，无本次实例残留。
 - 543项Python测试与TypeScript通过；两条旧测试原本要求保留非零退出登记警告，已随更严格的新契约改为验证拒绝且保留错误日志。生产构建通过。实景发现刚生成时灰色、三秒后变绿色，因此导入成功不等于材质首帧就绪；正在编译原生就绪补丁，尚未验收该修正。
+
+### 2026-09-10 新资产材质首帧就绪
+
+- 原生StaticMeshFactory对生成目录资产，在创建Actor前等待该资产各材质资源的着色器完成，检查有效shader map并提交渲染更新；不等待全项目着色器，不用固定sleep冒充就绪。无效网格在创建Actor前拒绝，设置网格失败清理未登记实例。补丁及适用范围见 integration/carla/generated-material-readiness.md。
+- 首次编译发现UE4.26没有较新版本的GetStaticMaterials接口，按本机头文件改为StaticMaterials后10动作编译链接通过（material-ready-build-fT5a2f.log）。保存场景eccb4e0a3e744042a651074104dd0236后重启并恢复现场；新进程202065，episode10037400898563414813。
+- 全新资产ImportAudit_1fbf2ac2363d406a（任务2a3879a4781d）首帧即为绿色，固定测试区域首帧/稳定帧各1822个绿色像素，实图已查看；报告asset-import-8affbf70d0cf4461ac34a903fe041110。实例124删除，资产保留登记，异步推进零传感器。此颜色计数仅针对该测试夹具，不是通用材质判定或纹理流送就绪证明。
+- 新二进制部分生成失败与无效网格不遗留Actor的实机探针通过（partial-assets-48fe34750367485b9128054f9288ee7d.json）。五模型回归进行中：VAD681d2af417ff4c46937a4dcfaafa6981、TCPa778a80099054d88b40ea317d03bc81d各20样本及清理通过，报告reviewed-models-e52ca5cb17bc4f33aa118d5b12fdf074.json；其余三个尚未完成，不外推全矩阵。

@@ -25,6 +25,13 @@ def main():
     # Use an existing map spawn location as a placement reference; no ego needed.
     reference = SimpleNamespace(get_location=lambda: world.get_map().get_spawn_points()[0].location)
     try:
+        existing={actor.id for actor in world.get_actors()}
+        invalid=world.get_blueprint_library().find('static.prop.mesh')
+        invalid.set_attribute('mesh_path','/Game/Carla/Static/Generated/Missing_'+uuid.uuid4().hex)
+        assert world.try_spawn_actor(invalid,world.get_map().get_spawn_points()[0]) is None
+        time.sleep(.1)
+        assert {actor.id for actor in world.get_actors()}==existing, 'Invalid mesh leaked an unregistered actor'
+        report['invalid_mesh_rejected_without_actor']=True
         for shape in ('metal_pipes', 'concrete_barriers'):
             actors = []
             class FailingWorld:

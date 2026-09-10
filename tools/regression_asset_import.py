@@ -1,5 +1,6 @@
 """Create a unique Blender asset, verify strict import and duplicate rejection."""
 import json
+import argparse
 import time
 import uuid
 from pathlib import Path
@@ -11,6 +12,9 @@ from regression_material_slots import ROOT, request
 
 
 def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--require-first-material',action='store_true')
+    args=parser.parse_args()
     assert request('/system/preflight')['ready']
     assert request('/batches/scheduler')['scheduler']['state'] != 'running'
     session=request('/session/status')['session']['run_id']
@@ -57,6 +61,18 @@ def main():
         (output/'first-preview.jpg').write_bytes(request('/scene/preview',raw=True))
         time.sleep(3)
         (output/'settled-preview.jpg').write_bytes(request('/scene/preview',raw=True))
+        if args.require_first_material:
+            from PIL import Image
+            counts=[]
+            for filename in ('first-preview.jpg','settled-preview.jpg'):
+                image=Image.open(output/filename).convert('RGB')
+                w,h=image.size
+                # Fixed-camera test fixture: target lies at the center, road
+                # behind it is neutral. This is not a generic material oracle.
+                pixels=image.crop((w//2-45,h//2-45,w//2+45,h//2+45)).getdata()
+                counts.append(sum(g>70 and g>r*1.25 and g>b*1.15 for r,g,b in pixels))
+            report['green_fixture_pixels_first_settled']=counts
+            assert min(counts)>100 and counts[0]>=counts[1]*.5, 'First preview still lacks the requested fixture material'
         report.update(state='execution_verified',visual_review_required=True)
     except BaseException as exc:
         report.update(state='failed',error=str(exc))

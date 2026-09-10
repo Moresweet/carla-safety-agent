@@ -1,0 +1,80 @@
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Actor/StaticMeshFactory.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Actor/StaticMeshFactory.cpp
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Actor/StaticMeshFactory.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Actor/StaticMeshFactory.cpp
+@@ -8,6 +8,11 @@
+ #include "Carla/Actor/ActorBlueprintFunctionLibrary.h"
+ #include "Engine/StaticMeshActor.h"
+ #include "Carla/Game/CarlaEpisode.h"
++#include "Engine/StaticMesh.h"
++#include "Materials/MaterialInterface.h"
++#include "MaterialShared.h"
++#include "RenderingThread.h"
++
+ 
+ TArray<FActorDefinition> AStaticMeshFactory::GetDefinitions()
+ {
+@@ -68,6 +73,40 @@
+   }
+   const FVector MeshScale(ScaleX, ScaleY, ScaleZ);
+ 
++  const FString MeshPath = ABFL::RetrieveActorAttributeToString(
++      "mesh_path", ActorDescription.Variations, "");
++  UStaticMesh *Mesh = LoadObject<UStaticMesh>(nullptr, *MeshPath);
++  if (!Mesh)
++  {
++    UE_LOG(LogCarla, Error, TEXT("Static mesh asset could not be loaded: %s"), *MeshPath);
++    return {};
++  }
++#if WITH_EDITOR
++  // Newly imported editor assets compile shaders on first runtime load. Do not
++  // expose an actor to RGB sensors while its real material is still pending.
++  // Wait only for this generated asset's materials, never all editor shaders.
++  if (MeshPath.StartsWith(TEXT("/Game/Carla/Static/Generated/")))
++  {
++    for (const FStaticMaterial &Slot : Mesh->StaticMaterials)
++    {
++      UMaterialInterface *Material = Slot.MaterialInterface;
++      FMaterialResource *Resource = Material ? Material->GetMaterialResource(World->FeatureLevel) : nullptr;
++      if (!Resource)
++      {
++        UE_LOG(LogCarla, Error, TEXT("Generated mesh material resource is missing: %s"), *MeshPath);
++        return {};
++      }
++      Resource->FinishCompilation();
++      if (!Resource->HasValidGameThreadShaderMap())
++      {
++        UE_LOG(LogCarla, Error, TEXT("Generated mesh material compilation failed: %s"), *MeshPath);
++        return {};
++      }
++    }
++    FlushRenderingCommands();
++  }
++#endif
++
+   FActorSpawnParameters SpawnParameters;
+   SpawnParameters.SpawnCollisionHandlingOverride =
+       ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+@@ -75,4 +114,8 @@
+       ActorDescription.Class, SpawnAtTransform, SpawnParameters);
+ 
++  if (!StaticMeshActor)
++  {
++    return {};
++  }
+   auto *StaticMeshComponent = Cast<UStaticMeshComponent>(
+       StaticMeshActor->GetRootComponent());
+@@ -83,10 +126,10 @@
+     if (ActorDescription.Variations.Contains("mesh_path"))
+     {
+-      FString MeshPath = ABFL::ActorAttributeToString(
+-          ActorDescription.Variations["mesh_path"], "");
+-      
+-      UStaticMesh *Mesh = LoadObject<UStaticMesh>(nullptr, *MeshPath);
+       StaticMeshComponent->SetMobility(EComponentMobility::Movable);
+       if (!StaticMeshComponent->SetStaticMesh(Mesh))
++      {
+         UE_LOG(LogCarla, Warning, TEXT("Failed to set the mesh"));
++        StaticMeshActor->Destroy();
++        return {};
++      }
+       StaticMeshComponent->SetWorldScale3D(MeshScale);

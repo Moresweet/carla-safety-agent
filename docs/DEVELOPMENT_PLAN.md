@@ -1244,3 +1244,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - VAD 网页停止执行d8524cc4e5e44a54a134a78a1095159a首轮被测试拦截器误拦 CORS OPTIONS，实际停止 POST 未发送；修正后复用原执行而非启动新任务，真实点击 Stop 且网络检查精确 ID。已查看 browser-models-f42357ca-2069-4c1a-9c02-e179f7c892de/owned-stop.png。独立只读复核 stopped-verification-3350b91d8a524b5b84c38d8b401b9648.json 确认退出130、异步且零传感器；测试拦截器问题不是 CARLA 崩溃。
 - 最终规则清理链重测道路320 A/B 批次2b97ca40eeef4a87bf47b3e5d5b7e32b通过，两组各20样本、原纹理恢复、异步且零传感器；报告 batch-textures-86f79151fa57413495d1049d06a5e5ce.json。436项 Python 测试及最终前端构建通过。TCP 网页最终停止测试仍在运行；强杀后的资源归属恢复、跨图及完整阶段验收仍未完成，不宣称所有崩溃均已消除。
 - 最终 TCP 网页回归完成：执行385c1a49f11d42f4924370391cfc4e62观察真实帧3027965后点击 Stop，拒绝重复启动与旧 ID，退出130、异步且无传感器。浏览器同时断言下拉框为真实运行场景，报告保存 stoppedExecution；已查看 browser-models-c6001339-51aa-4417-9f8b-65251b673b7f/owned-stop.png。闭环报告 generated-stop-61520562f1724341a150f9bfc2a56e34.json；最终 TypeScript 检查通过，当前本机空闲，继续余下计划。
+
+### 2026-09-10 网页原始数据质量扫描
+
+- S4 新增原始文件校验按钮、独立子进程、单扫描限制、300秒超时和持久化历史报告；不访问 CARLA。录制中与旧格式拒绝扫描，错误/超时不显示通过。加强索引样本数、路径、时间身份与 Python 禁用断言保护。Sites 技能用于保留既有本机工作台布局和依赖，未云部署。
+- 445项 Python 测试、TypeScript 和生产构建通过。真实 VAD capture-20260910T131728-a90e9110 的20同步样本通过；17/18传感器外参可验证，其余未声称验证。实际浏览器点击并等待新扫描完成，截图 browser-models-9398279b-c09a-4cdb-b8da-7cecab5cd7ba/raw-quality.png 已人工查看，报告同目录 raw-quality-report.json。
+- 独立小数据夹具覆盖有效数据、时间错配、NaN深度、缺失输入、RGB错配、样本数错误及非法外参，全部按预期接受/拒绝；报告 capture-quality-bc7e382f2bfd45bfaaa151a09ecb12a2.json。未改动现有采集数据。报告只证明本次读取内容，尚无全文件不可变快照/并发锁，修改需重检；不等同驾驶安全或真值准确。S4及整体计划仍未全部完成。

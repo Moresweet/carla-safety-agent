@@ -29,6 +29,7 @@ from carla_safety_agent.carla_adapter import CarlaAdapter
 from carla_safety_agent.benchmark_catalog import algorithm_catalog, benchmark_report, route_catalog
 from carla_safety_agent.blender_pipeline import BlenderPipeline
 from carla_safety_agent.dataset import list_datasets
+from carla_safety_agent.quality_service import QualityService
 from carla_safety_agent.provenance import ActorProvenance
 from carla_safety_agent.uv_audit import audit_uv
 from carla_safety_agent.replay import replay_index, replay_file, replay_projection, replay_trajectory, replay_events, replay_editor_events, replay_boxes
@@ -100,6 +101,8 @@ DATASET_ROOT = Path(os.environ.get(
     "CSA_DATASET_ROOT", str(PROJECT_ROOT / ".runtime" / "generated-scenarios")))
 UNIAD_PYTHON = Path(os.environ.get(
     "UNIAD_PYTHON", str(E2E_ROOT / "miniconda3/envs/uniad-cu128/bin/python")))
+QUALITY = QualityService(DATASET_ROOT, PROJECT_ROOT / '.runtime/dataset-quality',
+                         PROJECT_ROOT / 'tools/validate_capture_dataset.py', UNIAD_PYTHON)
 BLENDER = BlenderPipeline(PROJECT_ROOT)
 SESSION = SessionJournal(PROJECT_ROOT / 'data')
 BATCHES = BatchCatalog(PROJECT_ROOT / 'data/experiment-queues')
@@ -1930,6 +1933,15 @@ class Handler(BaseHTTPRequestHandler):
             self._headers()
             self.wfile.write(json.dumps(result).encode())
             return
+        if request.path == '/datasets/quality':
+            try:
+                result = QUALITY.status(params.get('run_id', [''])[0])
+                self._headers()
+                self.wfile.write(json.dumps({'ok': True, **result}).encode())
+            except (ValueError, OSError) as exc:
+                self._headers(400)
+                self.wfile.write(json.dumps({'ok': False, 'error': str(exc)}).encode())
+            return
         if request.path in ('/datasets/projection','/datasets/boxes','/datasets/trajectory','/datasets/events','/datasets/editor-events'):
             try:
                 params = parse_qs(request.query)
@@ -2099,7 +2111,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         request = urlparse(self.path)
         if request.path not in ("/apply", "/apply/road", "/apply/building",
-                                '/batches/create',
+                                '/batches/create', '/datasets/quality',
                                 '/batches/control',
                                 '/batches/scheduler',
                                 "/apply/environment",
@@ -2125,7 +2137,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(b'{"ok":false,"error":"Request body exceeds 16 MiB limit"}')
                 return
             payload = self.rfile.read(length)
-            if request.path == '/batches/create':
+            if request.path == '/datasets/quality':
+                data = json.loads(payload or b'{}')
+                if not isinstance(data, dict) or set(data) != {'run_id'}:
+                    raise ValueError('Expected only dataset run_id')
+                result = {'ok': True, **QUALITY.start(data['run_id'])}
+            elif request.path == '/batches/create':
                 result = {'ok': True, **BATCHES.create(json.loads(payload or b'{}'))}
             elif request.path == '/batches/control':
                 result = batch_control(json.loads(payload or b'{}'))

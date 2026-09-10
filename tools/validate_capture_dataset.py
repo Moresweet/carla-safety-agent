@@ -5,6 +5,11 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+# This validator deliberately uses assertions for its numerical contracts.
+# Never allow Python's optimization switch to turn a corrupt capture into PASS.
+if not __debug__:
+    raise RuntimeError('Dataset validation requires assertions; do not use Python -O')
+
 root = Path(sys.argv[1]).resolve()
 manifest = json.loads((root/'manifest.json').read_text())
 reference = manifest.get('scenario')
@@ -18,6 +23,8 @@ if reference is not None:
 archive = manifest.get('input_archive', 'model_input.npz')
 assert archive in ('model_input.npz', 'sensor_input.npz'), 'Unknown input archive'
 index = json.loads((root/'index.json').read_text())['frames']
+from carla_safety_agent.data_quality import validate_capture_index
+validate_capture_index(index, manifest)
 calibration = json.loads((root/'calibration.json').read_text())
 extrinsics_checked = 0
 for name, spec in calibration.items():
@@ -40,6 +47,7 @@ for entry in index:
     meta = json.loads((folder/'frame.json').read_text())
     assert meta['synchronized'] and not meta['missing']
     assert meta['frame'] == entry['frame'], 'Index/sample frame mismatch'
+    assert meta['timestamp'] == entry['timestamp'], 'Index/sample timestamp mismatch'
     assert meta['frame'] > previous
     previous = meta['frame']
     with np.load(folder/archive, allow_pickle=False) as model:

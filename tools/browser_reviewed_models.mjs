@@ -1,5 +1,6 @@
 // Local isolated Chrome QA. Never launches a model. --stop-run explicitly stops
-// one owned execution; all other modes only read UI/data or compile a plan.
+// one owned execution; --audit-dataset scans saved files without simulator RPC.
+// Other modes only read UI/data or compile a plan.
 import {spawn} from 'node:child_process';
 import {mkdtemp,readFile,writeFile,mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -172,6 +173,35 @@ try {
     const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
     await writeFile(join(output,'replay-quality.png'),Buffer.from(screenshot.data,'base64'));
     interactions.push('recorded_dataset_quality_visible');
+    if(process.argv.includes('--audit-dataset')){
+      let available=false;
+      for(let i=0;i<100;i++){
+        available=await evaluate(`!!document.querySelector('[aria-label="原始数据质量检查"] button:not(:disabled)')`);
+        if(available)break;await delay(200);
+      }
+      assert(available,'Raw dataset quality control unavailable');
+      const auditStarted=Date.now()/1000;
+      await evaluate(`document.querySelector('[aria-label="原始数据质量检查"] button').click()`);
+      let report;
+      for(let i=0;i<620;i++){
+        report=await (await fetch('http://127.0.0.1:8765/datasets/quality?run_id='+encodeURIComponent(dataset))).json();
+        if(['passed','failed','incomplete'].includes(report.state)&&report.finished_at_unix>=auditStarted)break;
+        await delay(500);
+      }
+      assert.equal(report.run_id,dataset);
+      assert.equal(report.state,'passed',JSON.stringify(report));
+      assert(report.finished_at_unix>=auditStarted,'Did not observe the new scan');
+      for(let i=0;i<30;i++){
+        if(await evaluate(`document.querySelector('[aria-label="原始数据质量检查"]').textContent.includes('本次检查通过')`))break;
+        await delay(200);
+      }
+      assert(await evaluate(`document.querySelector('[aria-label="原始数据质量检查"]').textContent.includes('本次检查通过')`));
+      await evaluate(`document.querySelector('[aria-label="原始数据质量检查"]').scrollIntoView({block:'center'})`);
+      const image=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      await writeFile(join(output,'raw-quality.png'),Buffer.from(image.data,'base64'));
+      await writeFile(join(output,'raw-quality-report.json'),JSON.stringify(report,null,2));
+      interactions.push('raw_quality_button_scanned_saved_dataset_and_reported_pass');
+    }
   }
   await writeFile(join(output,'report.json'),JSON.stringify({models,state,interactions,stoppedExecution,scope:'No model start; optional --stop-run only permits the explicitly supplied execution identity',profile},null,2));
   console.log(JSON.stringify({output,models,state,interactions}));

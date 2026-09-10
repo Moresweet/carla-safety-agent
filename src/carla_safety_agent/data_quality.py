@@ -2,6 +2,24 @@
 import math
 
 
+def validate_capture_index(entries, manifest):
+    """Reject ambiguous sample identities before opening any indexed sample."""
+    if not isinstance(entries, list) or not entries:
+        raise ValueError('No recorded samples')
+    if any(not isinstance(entry, dict) for entry in entries):
+        raise ValueError('Invalid sample index')
+    quality = temporal_quality(entries, manifest.get('sampling_every_frames'))
+    if not quality['temporal_order_valid']:
+        raise ValueError('Invalid sample frame/timestamp order')
+    count = manifest.get('frame_count')
+    if isinstance(count, bool) or not isinstance(count, int) or count != len(entries):
+        raise ValueError('Manifest/index sample count mismatch')
+    for entry in entries:
+        if entry.get('path') != f"samples/{entry['frame']:010d}":
+            raise ValueError('Index sample path does not match frame identity')
+    return quality
+
+
 def temporal_quality(entries, sampling_every=None):
     if sampling_every is not None and (isinstance(sampling_every,bool) or
         not isinstance(sampling_every,int) or sampling_every<1):

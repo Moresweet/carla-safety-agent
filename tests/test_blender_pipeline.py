@@ -38,6 +38,62 @@ def test_pipeline_builds_argument_list_without_shell(monkeypatch, tmp_path: Path
     result = pipeline.run({"shape": "sphere", "dimensions": [1, 1, 1]})
     assert result["ok"]
     assert result["job_id"]
+    assert pipeline.generation_attempts()[0]['state'] == 'exported'
+    assert Path(result['generation_report']).is_file()
+
+
+@pytest.mark.parametrize('field,value', [('dimensions', [float('nan'), 1, 1]),
+    ('dimensions', [True, 1, 1]), ('roughness', float('inf')), ('color', [1, 0, 0]),
+    ('color', [1, 0, 0, float('nan')]), ('color', [1, 0, 0, 2])])
+def test_invalid_generation_input_never_creates_job(tmp_path, monkeypatch, field, value):
+    pipeline = BlenderPipeline(tmp_path)
+    monkeypatch.setattr('subprocess.run', lambda *a, **kw: pytest.fail('Must not launch'))
+    with pytest.raises(ValueError):
+        pipeline.run({field: value})
+    assert not pipeline.runtime.exists()
+
+
+@pytest.mark.parametrize('failure', ['timeout', 'nonzero', 'malformed', 'not_ok'])
+def test_generation_failure_retains_report_and_partial_files(tmp_path, monkeypatch, failure):
+    import subprocess
+    pipeline = BlenderPipeline(tmp_path)
+    def run(command, **kwargs):
+        output = Path(command[-1])
+        assert pipeline.generation_attempts()[0]['state'] == 'generating'
+        (output / 'partial.blend').write_bytes(b'partial evidence')
+        if failure == 'timeout':
+            raise subprocess.TimeoutExpired(command, 180)
+        (output / 'manifest.json').write_text('{' if failure == 'malformed' else '{"ok":false}')
+        return SimpleNamespace(returncode=1 if failure == 'nonzero' else 0, stdout='', stderr='export failed')
+    monkeypatch.setattr('subprocess.run', run)
+    with pytest.raises(RuntimeError, match='retained files'):
+        pipeline.run({})
+    report = pipeline.generation_attempts()[0]
+    assert report['state'] == 'needs_attention' and report['error']
+    assert not report['automatic_retry'] and not report['live_world_modified']
+    assert (Path(report['destination']) / 'partial.blend').read_bytes() == b'partial evidence'
+    assert not pipeline.registry_path.exists()
+    assert BlenderPipeline(tmp_path).generation_attempts() == [report]
+
+
+def test_generation_intent_write_failure_never_launches(tmp_path, monkeypatch):
+    def fail(*args, **kwargs):
+        raise OSError('disk unavailable')
+    monkeypatch.setattr('carla_safety_agent.owned_resources.durable_write', fail)
+    monkeypatch.setattr('subprocess.run', lambda *a, **kw: pytest.fail('Must not launch'))
+    with pytest.raises(OSError, match='disk unavailable'):
+        BlenderPipeline(tmp_path).run({})
+
+
+def test_corrupt_generation_history_is_retained(tmp_path):
+    pipeline = BlenderPipeline(tmp_path)
+    folder = pipeline.runtime / 'job'
+    folder.mkdir(parents=True)
+    report = folder / 'generation.json'
+    report.write_text('{')
+    with pytest.raises(ValueError):
+        pipeline.generation_attempts()
+    assert report.read_text() == '{'
 
 
 @pytest.mark.parametrize('failure',[None,'nonzero','identity','corrupt_registry'])

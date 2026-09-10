@@ -64,6 +64,38 @@ try {
   const state=await evaluate(`(()=>{const section=document.querySelector('[aria-label="确认计划并选择模型"]');return {buttons:[...section.querySelectorAll('button')].map(b=>({text:b.textContent,disabled:b.disabled})),checkboxes:[...section.querySelectorAll('input')].map(b=>({checked:b.checked,disabled:b.disabled}))}})()`);
   assert(state.buttons[0].disabled,'Unreviewed plan must not start');
   const interactions=[];
+  if(process.argv.includes('--blender-generation')){
+    // Explicitly exports one primitive and attempts an invalid-source retexture;
+    // never imports into Unreal or spawns into CARLA. Retain both job directories.
+    const fixture=process.argv[process.argv.indexOf('--blender-generation')+1];
+    assert(fixture?.startsWith('/'),'Supply an explicit invalid GLB fixture path');
+    await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Asset Workshop').click()`);
+    let ready=false;
+    for(let i=0;i<200;i++){ready=await evaluate(`!!document.querySelector('.blender-form .primary')&&!document.querySelector('.blender-form .primary').disabled`);if(ready)break;await delay(200)}
+    assert(ready,'Blender must become available');
+    await evaluate(`(()=>{const e=document.querySelector('input[placeholder="/absolute/path/to/asset.fbx"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,${JSON.stringify(fixture)});e.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await delay(100);
+    const before=(await(await fetch('http://127.0.0.1:8765/blender/generations')).json()).attempts;
+    await evaluate(`(()=>{const b=document.querySelector('.blender-form .primary');b.click();b.click()})()`);
+    for(let i=0;i<1000;i++){ready=await evaluate(`document.querySelector('.blender-status').textContent==='Asset exported successfully.'`);if(ready)break;await delay(200)}
+    assert(ready,'Real Blender primitive export must succeed despite retexture source field');
+    const exported=(await(await fetch('http://127.0.0.1:8765/blender/generations')).json()).attempts.filter(r=>!before.some(b=>b.job_id===r.job_id));
+    assert.equal(exported.length,1,'Double click must launch only once');assert.equal(exported[0].state,'exported');
+    const request=JSON.parse(await readFile(join(exported[0].destination,'request.json'),'utf8'));
+    assert.equal(request.source_path,undefined);
+    const success=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(join(output,'blender-export.png'),Buffer.from(success.data,'base64'));
+    await evaluate(`[...document.querySelectorAll('.blender-form button')].find(b=>b.textContent==='Replace texture & export').click()`);
+    for(let i=0;i<1000;i++){ready=await evaluate(`document.querySelector('.blender-status').textContent.includes('Blender generation did not complete')`);if(ready)break;await delay(200)}
+    assert(ready,'Malformed source must fail with a retained generation report');
+    assert(await evaluate(`[...document.querySelectorAll('.pipeline-actions button')].every(b=>b.disabled)`),'Failed new job must not leave old import/spawn actions enabled');
+    await delay(3300);
+    const attempts=(await(await fetch('http://127.0.0.1:8765/blender/generations')).json()).attempts.filter(r=>!before.some(b=>b.job_id===r.job_id));
+    assert.equal(attempts.length,2);assert(attempts.some(r=>r.state==='needs_attention'));
+    await evaluate(`document.querySelector('.asset-import-history').scrollIntoView({block:'center'});document.querySelector('.asset-import-history details').open=true`);
+    const failed=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(join(output,'blender-generation-failure.png'),Buffer.from(failed.data,'base64'));
+    await writeFile(join(output,'blender-generation.json'),JSON.stringify({attempts},null,2));
+    interactions.push('real_blender_export_single_launch_create_ignores_retexture_source_failed_retexture_retained_no_stale_actions');
+  }
   if(process.argv.includes('--plan-revision')){
     const initialSession=(await(await fetch('http://127.0.0.1:8765/session/status')).json()).session;
     await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Compile & preview').click()`);

@@ -2332,9 +2332,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._headers(400)
                 self.wfile.write(json.dumps({'ok':False,'error':str(exc)}).encode())
             return
-        if request.path == '/blender/imports':
+        if request.path in ('/blender/imports', '/blender/generations'):
             try:
-                result = {'ok':True,'attempts':BLENDER.import_attempts()}
+                result = {'ok':True,'attempts':(BLENDER.generation_attempts() if request.path.endswith('/generations') else BLENDER.import_attempts())}
                 self._headers()
             except (ValueError,OSError,KeyError) as exc:
                 result = {'ok':False,'error':str(exc)}

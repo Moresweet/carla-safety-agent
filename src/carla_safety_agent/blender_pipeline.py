@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import fcntl
 import json
+import math
 import os
 import subprocess
 import time
@@ -37,28 +38,75 @@ class BlenderPipeline:
 
     def run(self, request: dict[str, Any]) -> dict[str, Any]:
         spec = self._normalize(request)
+        from .owned_resources import durable_write
+        from .session import observed_process_identity
+        raw = None
+        texture = request.get("texture_base64")
+        if texture:
+            if not isinstance(texture, str) or len(texture) > 36 * 1024 * 1024:
+                raise ValueError('Texture encoding exceeds the local limit')
+            raw = base64.b64decode(texture.split(',', 1)[-1], validate=True)
+            if len(raw) > 25 * 1024 * 1024:
+                raise ValueError("texture exceeds the 25 MB local limit")
         job_id = uuid.uuid4().hex[:12]
         output = self.runtime / job_id
         output.mkdir(parents=True, exist_ok=False)
-        texture = request.get("texture_base64")
-        if texture:
-            raw = base64.b64decode(str(texture).split(",", 1)[-1], validate=True)
-            if len(raw) > 25 * 1024 * 1024:
-                raise ValueError("texture exceeds the 25 MB local limit")
-            texture_path = output / "texture.png"
-            texture_path.write_bytes(raw)
-            spec["texture_path"] = str(texture_path)
-        spec_path = output / "request.json"
-        spec_path.write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
-        completed = subprocess.run([
-            self.executable, "--background", "--factory-startup", "--python", str(self.worker),
-            "--", str(spec_path), str(output),
-        ], capture_output=True, text=True, timeout=180)
-        if completed.returncode:
-            raise RuntimeError((completed.stderr or completed.stdout)[-4000:])
-        manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
-        manifest.update({"job_id": job_id, "log": completed.stdout[-2000:]})
-        return manifest
+        report_path = output / 'generation.json'
+        report = {'schema_version': 'carla-asset-generation/1', 'attempt_id': job_id,
+                  'job_id': job_id, 'state': 'preparing', 'started_at': time.time(),
+                  'owner': observed_process_identity(os.getpid()), 'report_path': str(report_path),
+                  'destination': str(output), 'live_world_modified': False,
+                  'automatic_retry': False, 'automatic_rollback': False}
+        durable_write(report_path, report, exclusive=True)
+        try:
+            if raw is not None:
+                texture_path = output / "texture.png"
+                texture_path.write_bytes(raw)
+                spec["texture_path"] = str(texture_path)
+            spec_path = output / "request.json"
+            durable_write(spec_path, spec, exclusive=True)
+            report['state'] = 'generating'
+            durable_write(report_path, report)
+            completed = subprocess.run([
+                self.executable, "--background", "--factory-startup", "--python", str(self.worker),
+                "--", str(spec_path), str(output),
+            ], capture_output=True, text=True, timeout=180)
+            report.update(returncode=completed.returncode, log=completed.stdout[-2000:])
+            if completed.returncode:
+                raise RuntimeError((completed.stderr or completed.stdout)[-4000:])
+            manifest_path = output / 'manifest.json'
+            if manifest_path.stat().st_size > 65536:
+                raise ValueError('Oversized Blender result')
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            if not isinstance(manifest, dict) or manifest.get('ok') is not True:
+                raise ValueError('Blender did not report a successful export')
+            report.update(state='exported', ended_at=time.time())
+            durable_write(report_path, report)
+            manifest.update(job_id=job_id, log=completed.stdout[-2000:], generation_report=str(report_path))
+            return manifest
+        except BaseException as exc:
+            report.update(state='needs_attention', ended_at=time.time(), error=str(exc)[-4000:])
+            try:
+                durable_write(report_path, report)
+            except OSError as publication_error:
+                raise RuntimeError(f'Generation status could not be saved; inspect {report_path}; {exc}; {publication_error}') from exc
+            raise RuntimeError(f'Blender generation did not complete; retained files: {report_path}: {exc}') from exc
+
+    def generation_attempts(self):
+        reports = []
+        for path in self.runtime.glob('*/generation.json'):
+            if path.is_symlink() or path.parent.is_symlink() or path.stat().st_size > 65536:
+                raise ValueError('Invalid generation report path or size')
+            report = json.loads(path.read_text())
+            if (not isinstance(report, dict) or report.get('schema_version') != 'carla-asset-generation/1'
+                    or report.get('job_id') != path.parent.name
+                    or report.get('attempt_id') != path.parent.name
+                    or report.get('state') not in ('preparing', 'generating', 'exported', 'needs_attention')
+                    or type(report.get('started_at')) not in (int, float)
+                    or not math.isfinite(report['started_at'])):
+                raise ValueError('Invalid generation report: ' + str(path))
+            reports.append(report)
+        return sorted(reports, key=lambda row: row['started_at'], reverse=True)[:100]
 
     def import_to_carla(self, job_id: str, asset_name: str | None = None, *, require_clean_exit=True) -> dict[str, Any]:
         if require_clean_exit is not True:
@@ -194,18 +242,29 @@ class BlenderPipeline:
         return registry
 
     def _normalize(self, request: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(request, dict):
+            raise ValueError('Expected asset request object')
         shape = str(request.get("shape", "cube"))
         if shape not in {"cube", "cylinder", "cone", "sphere", "plane"}:
             raise ValueError("shape must be cube, cylinder, cone, sphere or plane")
         dimensions = request.get("dimensions", [2, 2, 2])
         if not isinstance(dimensions, list) or len(dimensions) != 3:
             raise ValueError("dimensions must contain x, y and z")
+        color = request.get('color', [0.15, 0.55, 0.85, 1.0])
+        def finite(value):
+            if type(value) not in (int, float) or not math.isfinite(value):
+                raise ValueError('Asset dimensions and materials must be finite numbers')
+            return value
+        dimensions = [finite(value) for value in dimensions]
+        roughness = finite(request.get('roughness', 0.45))
+        if not isinstance(color, list) or len(color) != 4 or any(not 0 <= finite(v) <= 1 for v in color):
+            raise ValueError('Material color requires four finite channels in 0..1')
         spec: dict[str, Any] = {
             "name": str(request.get("name", "GeneratedAsset"))[:63],
             "shape": shape,
             "dimensions": [max(0.01, min(1000.0, float(value))) for value in dimensions],
-            "color": request.get("color", [0.15, 0.55, 0.85, 1.0]),
-            "roughness": max(0.0, min(1.0, float(request.get("roughness", 0.45)))),
+            "color": color,
+            "roughness": max(0.0, min(1.0, roughness)),
         }
         source = request.get("source_path")
         if source:

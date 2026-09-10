@@ -56,6 +56,8 @@ class CarlaAdapter:
         from .world_readiness import map_matches, require_idle_native_world
         world = client.get_world()
         require_idle_native_world(world)
+        from .traffic_manager_ownership import require_unused_port, acquire_local_manager
+        require_unused_port(8051)
         if spec.generated_map:
             xodr = build_opendrive(spec.generated_map)
             map_dir = output_dir / spec.scenario_id
@@ -77,7 +79,11 @@ class CarlaAdapter:
                 if not map_matches(spec.map_name, world.get_map().name):
                     raise RuntimeError('Loaded world does not match the requested map')
         original = world.get_settings()
-        actors: list[Any] = []
+        require_idle_native_world(world)
+        from .owned_resources import OwnedActors, journal_from_environment
+        journal = journal_from_environment(world)
+        actors: list[Any] = OwnedActors(journal)
+        manager = None
         collision = {"hit": False}
         trace: list[dict[str, Any]] = []
         min_distance = math.inf
@@ -87,6 +93,10 @@ class CarlaAdapter:
         unified_capture = None
         result: ScenarioResult | None = None
         try:
+            manager, manager_record = acquire_local_manager(client, 8051)
+            if journal:
+                journal.register_manager(manager_record)
+            manager.set_synchronous_mode(True)
             settings = world.get_settings()
             settings.synchronous_mode = True
             settings.fixed_delta_seconds = 0.05
@@ -156,11 +166,11 @@ class CarlaAdapter:
                 from .sensor_capture import SensorCapture
                 unified_capture = SensorCapture(world, ego, [], capture_runtime,
                                                 source='sensor-rig', dataset_root=output_dir,
-                                                scenario=asdict(spec), client=client)
-            ego.set_autopilot(spec.family != "road_hazard")
+                                                scenario=asdict(spec), client=client, journal=journal)
+            ego.set_autopilot(spec.family != "road_hazard", 8051)
             for adv, adv_spec in zip(adversaries, spec.adversaries):
                 if adv_spec.behavior == "autopilot":
-                    adv.set_autopilot(True)
+                    adv.set_autopilot(True, 8051)
             steps = int(spec.oracle.max_duration_s / settings.fixed_delta_seconds)
             triggered: set[int] = set()
             stopped = False
@@ -223,7 +233,8 @@ class CarlaAdapter:
             return result
         finally:
             cleanup_rule_runtime(carla, client, world, original, actors, unified_capture,
-                                 recorder, result, sys.exc_info()[1], render)
+                                 recorder, result, sys.exc_info()[1], render,
+                                 manager=manager, manager_port=8051)
 
     @staticmethod
     def _frame_record(frame: int, elapsed: float, ego: Any, adversaries: list[Any],

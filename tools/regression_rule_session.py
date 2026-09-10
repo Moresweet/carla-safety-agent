@@ -67,6 +67,12 @@ def main():
                     break
         time.sleep(1)
     assert session['state'] == ('stopped' if args.stop else 'completed'), session
+    from carla_safety_agent.owned_resources import read_resources, resource_path
+    from carla_safety_agent.traffic_manager_ownership import require_stopped_manager
+    resources=read_resources(resource_path(ROOT/'data',execution),session)
+    assert resources['state']=='recovered'
+    assert resources['traffic_manager']['port']==8051
+    require_stopped_manager(resources['traffic_manager'])
     result = json.loads(Path(session['configuration']['results']).read_text())
     assert result['execution_id'] == execution
     assert result['scenario_sha256'] == plan['scenario_sha256']

@@ -42,17 +42,19 @@ def cleanup_native_runtime(carla, client, world, original, actors, capture, rig,
 
 
 def cleanup_rule_runtime(carla, client, world, original, actors, capture,
-                         recorder, result, error, render):
+                         recorder, result, error, render, *, manager=None, manager_port=None):
     cleanup = Cleanup()
     if capture:
         cleanup.attempt('Unified capture', capture.close, reports_errors=True)
     for actor in actors:
         def stop(actor=actor):
-            if not actor.is_alive: return
             if actor.type_id.startswith('sensor.'):
                 actor.stop()
             elif actor.type_id.startswith('vehicle.'):
-                actor.set_autopilot(False)
+                if manager_port is None:
+                    actor.set_autopilot(False)
+                elif manager is not None:
+                    actor.set_autopilot(False, manager_port)
         cleanup.attempt(f'Actor {actor.id} stop', stop)
     if render:
         time.sleep(.25)  # Existing streaming-thread image-write drain window.
@@ -60,7 +62,20 @@ def cleanup_rule_runtime(carla, client, world, original, actors, capture,
         cleanup.attempt('Recorder finalization', lambda: recorder.finalize(result,error))
     cleanup.attempt('Callback drain', lambda: world.tick() if world.get_settings().synchronous_mode else None)
     if actors:
-        cleanup.attempt('Owned actors', lambda: client.apply_batch(
-            [carla.command.DestroyActor(actor.id) for actor in actors]))
+        if manager_port is None:
+            cleanup.attempt('Owned actors', lambda: client.apply_batch(
+                [carla.command.DestroyActor(actor.id) for actor in actors]))
+        else:
+            def destroy():
+                ids = list(dict.fromkeys(actor.id for actor in actors))
+                responses = client.apply_batch_sync([carla.command.DestroyActor(i) for i in ids], False)
+                if len(responses) != len(ids):
+                    raise RuntimeError('Incomplete owned actor destruction acknowledgement')
+                errors = [f'{i}: {response.error}' for i, response in zip(ids, responses) if response.error]
+                if errors:
+                    raise RuntimeError('; '.join(errors))
+            cleanup.attempt('Owned actors', destroy)
+    if manager is not None:
+        cleanup.attempt('Traffic Manager settings', lambda: manager.set_synchronous_mode(False))
     cleanup.attempt('World settings', lambda: world.apply_settings(original))
     cleanup.finish()

@@ -92,6 +92,46 @@ def test_recorder_failure_still_destroys_actors_and_restores_world():
     assert calls==['stop','autopilot','finalize','drain',[1,2],'restore']
 
 
+@pytest.mark.parametrize('failure',['none','destroy','manager','incomplete'])
+def test_rule_owned_manager_cleanup_uses_exact_port_and_acknowledgements(failure):
+    calls=[]
+    actors=[NS(id=7,is_alive=False,type_id='vehicle.test',
+               set_autopilot=lambda enabled,port:calls.append(('autopilot',enabled,port)))]
+    def destroy(ids,tick):
+        calls.append(('destroy',ids,tick))
+        return [] if failure=='incomplete' else [NS(error='failed' if failure=='destroy' else '')]
+    def manager_sync(value):
+        calls.append(('manager',value))
+        if failure=='manager': raise RuntimeError('manager failed')
+    world=NS(get_settings=lambda:NS(synchronous_mode=True),tick=lambda:calls.append('drain'),
+             apply_settings=lambda _:calls.append('restore'))
+    def run():
+        cleanup_rule_runtime(NS(command=NS(DestroyActor=lambda i:i)),NS(apply_batch_sync=destroy),
+            world,'original',actors,None,None,None,None,False,
+            manager=NS(set_synchronous_mode=manager_sync),manager_port=8051)
+    if failure=='none': run()
+    else:
+        with pytest.raises(RuntimeError,match='cleanup incomplete'): run()
+    assert calls==[('autopilot',False,8051),'drain',('destroy',[7],False),('manager',False),'restore']
+
+
+def test_rule_setup_journals_before_world_mutation_and_uses_dedicated_port():
+    import inspect
+    import textwrap
+    from carla_safety_agent.carla_adapter import CarlaAdapter
+    tree=ast.parse(textwrap.dedent(inspect.getsource(CarlaAdapter.run)))
+    calls=[node for node in ast.walk(tree) if isinstance(node,ast.Call)]
+    def lines(name):
+        return [node.lineno for node in calls if
+                (isinstance(node.func,ast.Name) and node.func.id==name) or
+                (isinstance(node.func,ast.Attribute) and node.func.attr==name)]
+    assert max(lines('journal_from_environment')) < min(lines('apply_settings'))
+    assert max(lines('register_manager')) < min(lines('set_synchronous_mode'))
+    for node in calls:
+        if isinstance(node.func,ast.Attribute) and node.func.attr=='set_autopilot':
+            assert len(node.args)==2 and ast.literal_eval(node.args[1])==8051
+
+
 @pytest.mark.parametrize('interaction',[False,True])
 def test_spawned_actor_is_owned_before_velocity_setup(interaction):
     from carla_safety_agent.carla_adapter import CarlaAdapter

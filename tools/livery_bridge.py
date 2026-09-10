@@ -814,6 +814,31 @@ def compile_scenario(data: dict, execute: bool = False) -> dict:
     return response
 
 
+def revise_scenario(data: dict) -> dict:
+    from carla_safety_agent.plan_revision import revise_plan
+    from carla_safety_agent.io import scenario_from_dict
+    if not isinstance(data,dict) or set(data)!={'scenario_path','scenario_sha256','instruction'}:
+        raise ValueError('Select one archived plan, its SHA-256 and a revision instruction')
+    digest=data['scenario_sha256']
+    if not isinstance(digest,str) or len(digest)!=64 or any(c not in '0123456789abcdef' for c in digest):
+        raise ValueError('Invalid parent plan SHA-256')
+    if not isinstance(data['scenario_path'],str):raise ValueError('Invalid parent plan path')
+    path=Path(data['scenario_path']);root=PROJECT_ROOT/'.runtime/generated-scenarios'
+    if path.is_symlink() or path.parent.resolve()!=root.resolve() or path.name!='plan-'+digest+'.json':
+        raise ValueError('Only this workbench archived plans can be revised')
+    document,actual=read_verified_scenario(path,digest)
+    child,changes=revise_plan(document,actual,data['instruction'])
+    child_path,child_digest=archive_scenario(root,child)
+    return {'ok':True,'scenario':child,'scenario_path':str(child_path),'scenario_sha256':child_digest,
+        'build_plan':build_plan(scenario_from_dict(child)).to_dict(),'changes':changes,'parent_sha256':actual,
+        'warnings':['Only listed fields were revised; original description is retained for provenance, not execution'],
+        'plan_review':{'scope':'revised_compiled_scenario','scenario_sha256':child_digest,
+            'environment':child['environment'],'oracle':child['oracle'],
+            'limitations':['Bounded Chinese field edits, not arbitrary scene editing',
+                'No simulator, model or Blender operation was started; adopt the new plan and confirm execution separately',
+                'Map installation and model compatibility remain subject to execution preflight']}}
+
+
 def execute_reviewed_scenario(data: dict) -> dict:
     """Execute the exact reviewed archive, never recompile mutable prompt text."""
     digest = data.get('scenario_sha256')
@@ -2606,7 +2631,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "/objects/environment/visibility",
                                 "/objects/spawn", "/objects/update", "/objects/update-reviewed", "/objects/transform-history",
                                 "/objects/duplicate", "/objects/delete",
-                                "/scenario/compile", "/scenario/run", "/scenario/evaluate", '/scenario/execute-plan',
+                                "/scenario/compile", "/scenario/revise", "/scenario/run", "/scenario/evaluate", '/scenario/execute-plan',
                                 "/blender/create", "/blender/retexture",
                                 "/blender/import", "/blender/spawn",
                                 "/e2e/start", "/e2e/stop", "/scenario/stop", "/collection/control", '/session/recover', '/session/restore-weather',
@@ -2691,6 +2716,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = execute_reviewed_scenario(json.loads(payload or b'{}'))
             elif request.path == "/scenario/evaluate":
                 result = evaluate_scenario(json.loads(payload or b"{}"))
+            elif request.path == '/scenario/revise':
+                result=revise_scenario(json.loads(payload or b'{}'))
             elif request.path in ("/scenario/compile", "/scenario/run"):
                 data = json.loads(payload or b"{}")
                 result = compile_scenario(data, request.path.endswith("/run"))

@@ -64,6 +64,40 @@ try {
   const state=await evaluate(`(()=>{const section=document.querySelector('[aria-label="确认计划并选择模型"]');return {buttons:[...section.querySelectorAll('button')].map(b=>({text:b.textContent,disabled:b.disabled})),checkboxes:[...section.querySelectorAll('input')].map(b=>({checked:b.checked,disabled:b.disabled}))}})()`);
   assert(state.buttons[0].disabled,'Unreviewed plan must not start');
   const interactions=[];
+  if(process.argv.includes('--plan-revision')){
+    const initialSession=(await(await fetch('http://127.0.0.1:8765/session/status')).json()).session;
+    await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Compile & preview').click()`);
+    let ready=false;
+    for(let i=0;i<100;i++){ready=await evaluate(`!!document.querySelector('[aria-label="自然语言局部修改计划"]')`);if(ready)break;await delay(200)}
+    assert(ready);const parent=await evaluate(`JSON.parse(document.querySelector('.scenario-json pre').textContent)`);
+    const parentBytes=await readFile(parent.scenario_path);
+    for(let i=0;i<100;i++){ready=await evaluate(`!document.querySelectorAll('[aria-label="确认计划并选择模型"] input')[1].disabled`);if(ready)break;await delay(200)}
+    assert(ready);await evaluate(`document.querySelectorAll('[aria-label="确认计划并选择模型"] input')[1].click()`);await delay(100);
+    const enter=async value=>evaluate(`(()=>{const e=document.querySelector('[aria-label="计划局部修改指令"]');Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await enter('雨量改为20；添加一辆飞车');await delay(100);
+    await evaluate(`[...document.querySelectorAll('.plan-revision button')].find(b=>b.textContent==='预览局部修改').click()`);
+    for(let i=0;i<100;i++){ready=await evaluate(`!!document.querySelector('.plan-revision [role=alert]')`);if(ready)break;await delay(100)}
+    assert(ready);assert.equal(await evaluate(`JSON.parse(document.querySelector('.scenario-json pre').textContent).scenario_sha256`),parent.scenario_sha256);
+    assert(await evaluate(`document.querySelector('[aria-label="确认计划并选择模型"] button').disabled`));
+    await evaluate(`[...document.querySelectorAll('.plan-revision button')].find(b=>b.textContent==='取消修订，保留原计划').click()`);await delay(100);
+    await enter('自车速度改为5 m/s；天气改为晴天；光照改为白天；运行时长改为1秒；其余保持不变');await delay(100);
+    await evaluate(`[...document.querySelectorAll('.plan-revision button')].find(b=>b.textContent==='预览局部修改').click()`);
+    for(let i=0;i<100;i++){ready=await evaluate(`!!document.querySelector('.plan-revision table')`);if(ready)break;await delay(100)}
+    assert(ready);assert.equal(await evaluate(`JSON.parse(document.querySelector('.scenario-json pre').textContent).scenario_sha256`),parent.scenario_sha256,'Preview adopted itself');
+    assert(await evaluate(`document.querySelector('[aria-label="确认计划并选择模型"] button').disabled`));
+    await evaluate(`document.querySelector('.plan-revision').scrollIntoView({block:'center'})`);
+    const preview=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(join(output,'plan-revision-preview.png'),Buffer.from(preview.data,'base64'));
+    await evaluate(`[...document.querySelectorAll('.plan-revision button')].find(b=>b.textContent==='采纳修订计划（不运行）').click()`);await delay(300);
+    const child=await evaluate(`JSON.parse(document.querySelector('.scenario-json pre').textContent)`);
+    assert.notEqual(child.scenario_sha256,parent.scenario_sha256);assert.equal(child.parent_sha256,parent.scenario_sha256);
+    assert.equal(child.scenario.ego.speed_mps,5);assert.equal(child.scenario.environment.precipitation,0);assert.equal(child.scenario.oracle.max_duration_s,1);
+    assert.deepEqual(child.scenario.adversaries,parent.scenario.adversaries);assert.deepEqual(await readFile(parent.scenario_path),parentBytes);
+    assert(await evaluate(`!document.querySelectorAll('[aria-label="确认计划并选择模型"] input')[1].checked&&document.querySelector('[aria-label="确认计划并选择模型"] button').disabled`));
+    assert.equal((await(await fetch('http://127.0.0.1:8765/session/status')).json()).session.run_id,initialSession.run_id,'Plan adoption launched an execution');
+    await writeFile(join(output,'plan-revision-result.json'),JSON.stringify({parent,child},null,2));
+    const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(join(output,'plan-revision-adopted.png'),Buffer.from(shot.data,'base64'));
+    interactions.push('unsupported_revision_rejected_cancel_preserves_parent_diff_adopt_requires_new_confirmation_no_execution');
+  }
   const draftFlag=process.argv.indexOf('--transform-draft');
   const inspectHistoryFlag=process.argv.indexOf('--inspect-position-history');
   if(draftFlag>=0||inspectHistoryFlag>=0){

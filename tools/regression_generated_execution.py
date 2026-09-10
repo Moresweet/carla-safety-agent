@@ -55,7 +55,7 @@ def main():
     finally:
         current=request('session/status')['session']
         if current['run_id']==execution and current['state'] in ('preparing','running','stopping'):
-            request('e2e/stop',{})
+            request('e2e/stop',{'run_id':execution})
 
 
 if __name__=='__main__': main()

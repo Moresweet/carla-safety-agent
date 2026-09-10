@@ -89,7 +89,7 @@ def main():
                 Image.open(io.BytesIO(raw)).verify()
                 (output/f'{index}-{model}-{camera}.jpg').write_bytes(raw)
                 report['cameras'][camera] = len(raw)
-            request('e2e/stop', {})
+            request('e2e/stop', {'run_id':report['execution_id']})
             report['stop'] = wait_idle()
             assert report['stop']['state'] == 'stopped', report['stop']
             assert not report['stop'].get('cleanup_error'), report['stop']
@@ -109,7 +109,9 @@ def main():
         except Exception as exc:
             report['error'] = str(exc)
             print(f'FAIL {model}: {exc}', flush=True)
-            request('e2e/stop', {})
+            current=request('session/status')['session']
+            if current['run_id']==report.get('execution_id'):
+                request('e2e/stop', {'run_id':current['run_id']})
             wait_idle()
             raise
         finally:

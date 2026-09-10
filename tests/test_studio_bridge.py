@@ -51,6 +51,29 @@ def test_repeated_batch_start_returns_before_native_access():
     assert result['replayed'] is True and result['execution_id'] == 'original'
 
 
+@pytest.mark.parametrize('payload',[{}, {'run_id':None}, {'run_id':''}, {'run_id':'old'}, {'run_id':'current','extra':True}])
+def test_model_stop_rejects_missing_or_stale_identity_without_signalling(payload):
+    import threading
+    env=functions('stop_model_run',_e2e_lock=threading.RLock(),
+        SESSION=SimpleNamespace(snapshot=lambda:{'run_id':'current','kind':'run','state':'running'}),
+        stop_e2e=lambda:pytest.fail('Stale stop must not signal'))
+    with pytest.raises(ValueError):env['stop_model_run'](payload)
+
+
+def test_model_stop_does_not_interrupt_recovery_and_preserves_identity():
+    import threading
+    current={'run_id':'current','kind':'run','state':'running'}
+    calls=[]
+    env=functions('stop_model_run',_e2e_lock=threading.RLock(),SESSION=SimpleNamespace(snapshot=lambda:current),
+        stop_e2e=lambda:calls.append('stop') or {'ok':True,'state':'stopping'})
+    assert env['stop_model_run']({'run_id':'current'})['run_id']=='current'
+    current['state']='recovering'
+    assert env['stop_model_run']({'run_id':'current'})['state']=='recovering'
+    assert calls==['stop']
+    current['kind']='sensor-rig'
+    with pytest.raises(ValueError):env['stop_model_run']({'run_id':'current'})
+
+
 def test_texture_recovery_uses_durable_desired_even_if_override_write_was_lost():
     before, desired, calls = [], [{'target':'house', 'component':'mesh', 'slot':0,'texture':'a'*64}], []
     recovery = {'episode':7, 'map':'Town04', 'before':before, 'desired':desired}

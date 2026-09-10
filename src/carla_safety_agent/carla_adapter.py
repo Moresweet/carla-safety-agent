@@ -14,6 +14,7 @@ from .metrics import KinematicState, distance, evaluate, ttc
 from .dataset import DatasetRecorder
 from .models import ActorSpec, ProceduralAssetSpec, ScenarioResult, ScenarioSpec
 from .opendrive import build_opendrive
+from .runtime_cleanup import cleanup_rule_runtime
 
 
 class CarlaUnavailable(RuntimeError):
@@ -95,17 +96,15 @@ class CarlaAdapter:
                 sun_altitude_angle=spec.environment.sun_altitude_angle,
             ))
             spawn_points = world.get_map().get_spawn_points()
-            ego = self._spawn(world, spec.ego, spawn_points)
-            actors.append(ego)
+            ego = self._spawn(world, spec.ego, spawn_points, actors)
             # Newly spawned physics actors report the origin through RPC until
             # their first world tick. Asset placement must use the initialized
             # vehicle pose, not that transient placeholder transform.
             world.tick()
-            adversaries = [
-                self._spawn_interaction_actor(carla, world, ego, a, spec.family, index)
-                for index, a in enumerate(spec.adversaries)
-            ]
-            actors.extend(adversaries)
+            adversaries = []
+            for index, a in enumerate(spec.adversaries):
+                spawned = self._spawn_interaction_actor(carla, world, ego, a, spec.family, index, actors)
+                adversaries.append(spawned)
             if spec.generated_map and spec.generated_map.realistic_environment:
                 scenery = self._spawn_environment(carla, world, ego, spec)
                 actors.extend(scenery)
@@ -116,8 +115,8 @@ class CarlaAdapter:
                 actors.extend(spawned)
             sensor_bp = world.get_blueprint_library().find("sensor.other.collision")
             sensor = world.spawn_actor(sensor_bp, carla.Transform(), attach_to=ego)
-            sensor.listen(lambda _: collision.__setitem__("hit", True))
             actors.append(sensor)
+            sensor.listen(lambda _: collision.__setitem__("hit", True))
             if render:
                 camera_transform = carla.Transform(
                     carla.Location(x=-7.5, z=3.0), carla.Rotation(pitch=-12.0)
@@ -133,10 +132,10 @@ class CarlaAdapter:
                     camera_bp.set_attribute("image_size_y", "720")
                     camera_bp.set_attribute("fov", "90")
                     camera = world.spawn_actor(camera_bp, camera_transform, attach_to=ego)
+                    actors.append(camera)
                     frames_dir = sensor_root / folder
                     frames_dir.mkdir(parents=True, exist_ok=True)
                     camera.listen(self._image_writer(frames_dir, converter))
-                    actors.append(camera)
                 lidar_bp = world.get_blueprint_library().find("sensor.lidar.ray_cast")
                 lidar_bp.set_attribute("range", "80")
                 lidar_bp.set_attribute("channels", "32")
@@ -147,10 +146,10 @@ class CarlaAdapter:
                 lidar = world.spawn_actor(
                     lidar_bp, carla.Transform(carla.Location(z=2.4)), attach_to=ego
                 )
+                actors.append(lidar)
                 lidar.listen(lambda cloud: cloud.save_to_disk(
                     str(lidar_dir / f"{cloud.frame:08d}.ply")
                 ) if cloud.frame % 5 == 0 else None)
-                actors.append(lidar)
             if capture_runtime is not None:
                 from .sensor_capture import SensorCapture
                 unified_capture = SensorCapture(world, ego, [], capture_runtime,
@@ -221,41 +220,8 @@ class CarlaAdapter:
                 result = replace(result, status='stopped')
             return result
         finally:
-            capture_errors = []
-            if unified_capture:
-                try:
-                    capture_errors = unified_capture.close()
-                except Exception as exc:
-                    capture_errors = [str(exc)]
-            # Sensor callbacks run on streaming threads. Stop every sensor first,
-            # then advance one synchronous frame so callbacks drain before any
-            # attached actor is destroyed.
-            for actor in actors:
-                try:
-                    if getattr(actor, "type_id", "").startswith("sensor."):
-                        actor.stop()
-                    elif getattr(actor, "type_id", "").startswith("vehicle."):
-                        actor.set_autopilot(False)
-                except RuntimeError:
-                    pass
-            # save_to_disk runs on sensor streaming threads. Give an in-flight
-            # PNG write time to finish after stop() before attached actors and
-            # the scene-capture resource are destroyed.
-            if render:
-                time.sleep(0.25)
-            if recorder:
-                recorder.finalize(result, sys.exc_info()[1])
-            try:
-                if world.get_settings().synchronous_mode:
-                    world.tick()
-            except RuntimeError:
-                pass
-            actor_ids = [actor.id for actor in actors if getattr(actor, "is_alive", False)]
-            if actor_ids:
-                client.apply_batch([carla.command.DestroyActor(actor_id) for actor_id in actor_ids])
-            world.apply_settings(original)
-            if capture_errors:
-                raise RuntimeError('Unified rule capture cleanup failed: '+ '; '.join(capture_errors))
+            cleanup_rule_runtime(carla, client, world, original, actors, unified_capture,
+                                 recorder, result, sys.exc_info()[1], render)
 
     @staticmethod
     def _frame_record(frame: int, elapsed: float, ego: Any, adversaries: list[Any],
@@ -291,7 +257,8 @@ class CarlaAdapter:
 
     @staticmethod
     def _spawn_interaction_actor(
-        carla: Any, world: Any, ego: Any, spec: ActorSpec, family: str, index: int
+        carla: Any, world: Any, ego: Any, spec: ActorSpec, family: str, index: int,
+        owned: list[Any] | None = None
     ) -> Any:
         """Place NHTSA actors relative to ego and the lane geometry."""
         library = world.get_blueprint_library()
@@ -317,6 +284,8 @@ class CarlaAdapter:
         actor = world.try_spawn_actor(blueprint, transform)
         if actor is None:
             raise RuntimeError(f"failed to spawn NHTSA actor for {family}")
+        if owned is not None:
+            owned.append(actor)
         if family in {"vulnerable_road_user", "crossing_path"} and actor.type_id.startswith("walker."):
             actor.apply_control(carla.WalkerControl(
                 direction=transform.get_right_vector() * -1.0,
@@ -505,7 +474,7 @@ class CarlaAdapter:
         return spawned
 
     @staticmethod
-    def _spawn(world: Any, spec: ActorSpec, spawn_points: list[Any]) -> Any:
+    def _spawn(world: Any, spec: ActorSpec, spawn_points: list[Any], owned: list[Any] | None = None) -> Any:
         library = world.get_blueprint_library()
         matches = [bp for bp in library if fnmatch.fnmatch(bp.id, spec.blueprint)]
         if not matches:
@@ -516,6 +485,8 @@ class CarlaAdapter:
         actor = world.try_spawn_actor(matches[0], transform)
         if actor is None:
             raise RuntimeError(f"spawn failed for {spec.role} at index {spec.spawn_index}")
+        if owned is not None:
+            owned.append(actor)
         velocity = transform.get_forward_vector() * spec.speed_mps
         actor.set_target_velocity(velocity)
         return actor

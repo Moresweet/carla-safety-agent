@@ -1,4 +1,5 @@
-// Local isolated Chrome QA. Never launches a model or modifies the CARLA world.
+// Local isolated Chrome QA. Never launches a model. --stop-run explicitly stops
+// one owned execution; all other modes only read UI/data or compile a plan.
 import {spawn} from 'node:child_process';
 import {mkdtemp,readFile,writeFile,mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -42,6 +43,7 @@ try {
   const state=await evaluate(`(()=>{const section=document.querySelector('[aria-label="确认计划并选择模型"]');return {buttons:[...section.querySelectorAll('button')].map(b=>({text:b.textContent,disabled:b.disabled})),checkboxes:[...section.querySelectorAll('input')].map(b=>({checked:b.checked,disabled:b.disabled}))}})()`);
   assert(state.buttons[0].disabled,'Unreviewed plan must not start');
   const interactions=[];
+  let stoppedExecution=null;
   if(process.argv.includes('--idle-controls')){
     const current=await (await fetch('http://127.0.0.1:8765/e2e/status')).json();
     assert(!['running','stopping'].includes(current.job.state),'Idle-only control test must not run during evaluation');
@@ -76,6 +78,52 @@ try {
     interactions.push('vad_generated_scene_button_enabled');
   }
   const batchFlag=process.argv.indexOf('--batch');
+  const stopFlag=process.argv.indexOf('--stop-run');
+  if(stopFlag>=0){
+    const execution=process.argv[stopFlag+1];
+    assert(/^[a-f0-9]{32}$/.test(execution),'Expected an owned execution ID');
+    assert(!process.argv.includes('--idle-controls'),'Do not combine idle controls and active stop');
+    const current=await (await fetch('http://127.0.0.1:8765/e2e/status')).json();
+    assert(current.stop_requires_run_id&&current.session.run_id===execution&&current.session.state==='running');
+    let sent=null,interceptError=null;
+    socket.addEventListener('message',async event=>{
+      const value=JSON.parse(event.data);
+      if(value.method!=='Fetch.requestPaused')return;
+      const {requestId,request}=value.params;
+      try{
+        if(request.method==='OPTIONS'){
+          await cdp('Fetch.continueRequest',{requestId});return;
+        }
+        const body=JSON.parse(request.postData||'{}');
+        if(request.method!=='POST'||Object.keys(body).length!==1||body.run_id!==execution){
+          await cdp('Fetch.failRequest',{requestId,errorReason:'Aborted'});
+          throw Error('Browser attempted to stop a different execution');
+        }
+        sent=body;
+        await cdp('Fetch.continueRequest',{requestId});
+      }catch(error){interceptError=String(error)}
+    });
+    await cdp('Fetch.enable',{patterns:[{urlPattern:'http://127.0.0.1:8765/e2e/stop',requestStage:'Request'}]});
+    await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='End-to-End Test').click()`);
+    let ready=false;
+    for(let i=0;i<100;i++){
+      ready=await evaluate(`!![...document.querySelectorAll('.e2e-actions button')].find(b=>b.textContent==='Stop'&&!b.disabled)`);
+      if(ready&&current.job.kind==='run'){
+        ready=await evaluate(`document.querySelector('.e2e-control select').value===${JSON.stringify(current.job.route)}`);
+      }
+      if(ready)break;await delay(200);
+    }
+    assert(ready,'Owned model Stop button unavailable');
+    await evaluate(`[...document.querySelectorAll('.e2e-actions button')].find(b=>b.textContent==='Stop').click()`);
+    for(let i=0;i<100&&!sent&&!interceptError;i++)await delay(100);
+    assert(!interceptError,interceptError);assert.deepEqual(sent,{run_id:execution});
+    stoppedExecution=execution;
+    await delay(500);
+    await evaluate(`document.querySelector('.e2e-control').scrollIntoView({block:'center'})`);
+    const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+    await writeFile(join(output,'owned-stop.png'),Buffer.from(screenshot.data,'base64'));
+    interactions.push('owned_run_stop_button_sent_exact_identity');
+  }
   if(batchFlag>=0){
     const batch=process.argv[batchFlag+1];
     assert(/^[a-f0-9]{32}$/.test(batch),'Expected a batch ID');
@@ -125,7 +173,7 @@ try {
     await writeFile(join(output,'replay-quality.png'),Buffer.from(screenshot.data,'base64'));
     interactions.push('recorded_dataset_quality_visible');
   }
-  await writeFile(join(output,'report.json'),JSON.stringify({models,state,interactions,scope:'Actual browser model options, review gates and optional recorded quality; no model start',profile},null,2));
+  await writeFile(join(output,'report.json'),JSON.stringify({models,state,interactions,stoppedExecution,scope:'No model start; optional --stop-run only permits the explicitly supplied execution identity',profile},null,2));
   console.log(JSON.stringify({output,models,state,interactions}));
 } finally {
   socket?.close();

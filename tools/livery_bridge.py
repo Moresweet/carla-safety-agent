@@ -41,6 +41,7 @@ from carla_safety_agent.batch_control import control_batch
 from carla_safety_agent.batch_service import BatchService
 from carla_safety_agent.batch_capabilities import batch_capabilities
 from carla_safety_agent.batch_textures import texture_records, overlay_materials, require_texture_world
+from carla_safety_agent.world_readiness import require_idle_native_world
 from carla_safety_agent.experiment_report import summarize_queue, compare_variants
 from carla_safety_agent.scene_store import SceneStore, validate_scene
 from carla_safety_agent.material_library import MaterialLibrary, MaterialTransaction, exact_environment_target
@@ -312,6 +313,7 @@ def e2e_status() -> dict:
         item.update(framework="Native Scenario Executor",
                     enabled=item["status"] == "available")
     return {"ok": True, "algorithms": algorithms, "job": job, 'session': SESSION.snapshot(),
+            'stop_requires_run_id': True,
             "routes": e2e_routes(), "log": log, "results": results}
 
 
@@ -331,14 +333,12 @@ def start_e2e(data: dict) -> dict:
     if action not in ('sensor-rig','rule-run') and not UNIAD_PYTHON.is_file():
         raise RuntimeError(f"UniAD environment is missing: {UNIAD_PYTHON}")
     if evaluation_active():
-        raise RuntimeError("An evaluation is already running or stopping")
+        raise ValueError("An evaluation is already running or stopping")
     if action in ("run", "preset-run", "sensor-rig", "rule-run"):
         if shutil.disk_usage(PROJECT_ROOT).free < 1024**3:
             raise RuntimeError('At least 1 GiB free disk space is required before evaluation')
         # Fail promptly instead of launching a model against a crashed server.
-        settings = connect_world().get_settings()
-        if action in ('sensor-rig','rule-run') and settings.synchronous_mode:
-            raise RuntimeError('Another synchronous owner is active')
+        require_idle_native_world(connect_world())
     if action == 'model-smoke' and data.get('algorithm', 'uniad-tiny') != 'uniad-tiny':
         raise RuntimeError('Model smoke supports UniAD-Tiny only')
     if action == 'run':
@@ -349,7 +349,7 @@ def start_e2e(data: dict) -> dict:
             raise RuntimeError('Selected generated-scenario model is not installed')
     with _e2e_lock:
         if _e2e_process is not None and _e2e_process.poll() is None:
-            raise RuntimeError("A UniAD task is already running")
+            raise ValueError("A UniAD task is already running")
         texture_transaction, texture_recovery = None, None
         if action == "doctor":
             command = [str(UNIAD_PYTHON), str(PROJECT_ROOT / "integration/uniad/doctor.py"),
@@ -465,6 +465,7 @@ def start_e2e(data: dict) -> dict:
         _e2e_job.update(state="running", kind=action, started_at=time.time(),
                         ended_at=None, returncode=None, command=command,
                         algorithm=algorithm if action in ('run', 'preset-run') else None if action in ('sensor-rig','rule-run') else "uniad-tiny",
+                        route=str(route) if action in ('run','rule-run') else None,
                         collection=str(route) if action == "preset-run" else None,
                         route_id=route_id if action == "preset-run" else None,
                         results=str(results_path) if action in ("run", "preset-run", "rule-run") else None)
@@ -596,6 +597,18 @@ def manual_sensor_control(data):
         return {'ok':True,'run_id':current['run_id'],'expires_after_s':.5}
 
 
+def stop_model_run(data):
+    if not isinstance(data,dict) or set(data)!={'run_id'} or not isinstance(data['run_id'],str) or not data['run_id']:
+        raise ValueError('Model stop requires exactly one execution run_id')
+    with _e2e_lock:
+        current=SESSION.snapshot()
+        if current.get('run_id')!=data['run_id'] or current.get('kind') not in ('run','preset-run','doctor','model-smoke'):
+            raise ValueError('Model stop execution identity changed; refresh before stopping')
+        if current['state'] not in ('running','stopping'):
+            return {'ok':True,'state':current['state'],'run_id':current['run_id']}
+        return {**stop_e2e(),'run_id':current['run_id']}
+
+
 def stop_e2e() -> dict:
     with _e2e_lock:
         if _e2e_job["state"] == "stopping":
@@ -656,6 +669,7 @@ def recover_session():
     return {'ok': True, 'session': SESSION.snapshot()}
 
 
+@simulation_operation
 def system_preflight():
     """Read-only local checks; never connect a second client during evaluation."""
     checks = [{'id': 'model_environment', 'ok': UNIAD_PYTHON.is_file(), 'detail': str(UNIAD_PYTHON)},
@@ -665,6 +679,7 @@ def system_preflight():
     if not evaluation_active():
         try:
             world = connect_world()
+            require_idle_native_world(world)
             checks.append({'id': 'carla', 'ok': True, 'map': world.get_map().name,
                            'synchronous': world.get_settings().synchronous_mode})
         except Exception as exc:
@@ -2147,7 +2162,7 @@ class Handler(BaseHTTPRequestHandler):
             elif request.path == '/session/restore-weather':
                 result = restore_execution_weather(json.loads(payload or b'{}'))
             elif request.path == "/e2e/stop":
-                result = stop_e2e()
+                result = stop_model_run(json.loads(payload or b'{}'))
             elif request.path == '/scenario/execute-plan':
                 result = execute_reviewed_scenario(json.loads(payload or b'{}'))
             elif request.path == "/scenario/evaluate":

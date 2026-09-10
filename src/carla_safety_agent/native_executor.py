@@ -18,6 +18,7 @@ from .io import scenario_from_dict
 from .scenario_archive import read_verified_scenario
 from .metrics import distance, evaluate, ttc
 from .opendrive import build_opendrive
+from .runtime_cleanup import Cleanup, cleanup_native_runtime
 from agents.navigation.local_planner import RoadOption
 
 
@@ -48,6 +49,7 @@ class NativeSensorRig:
                                     yaw=float(spec.get("yaw", 0)),
                                     roll=float(spec.get("roll", 0))))
             sensor = self.world.spawn_actor(blueprint, transform, attach_to=self.ego)
+            self.sensors.append(sensor)  # Own it even if registration/listen fails.
             self.interface.register_sensor(tag, sensor_type, sensor)
 
             def callback(data, sensor_tag=tag, type_id=sensor_type):
@@ -66,7 +68,6 @@ class NativeSensorRig:
                 self.interface.update_sensor(sensor_tag, value, data.frame)
 
             sensor.listen(callback)
-            self.sensors.append(sensor)
 
     def add_speed(self, frame: int) -> None:
         if not self.has_speedometer:
@@ -84,13 +85,18 @@ class NativeSensorRig:
             self.interface.get_data(frame)
 
     def destroy(self) -> None:
+        cleanup = Cleanup()
         for sensor in self.sensors:
-            try:
-                sensor.stop()
-                sensor.destroy()
-            except RuntimeError:
-                pass
-        self.sensors.clear()
+            cleanup.attempt(f'Sensor {sensor.id} stop', lambda sensor=sensor: sensor.stop() if sensor.is_alive else None)
+        remaining = []
+        for sensor in self.sensors:
+            def destroy(sensor=sensor):
+                if sensor.is_alive and sensor.destroy() is False:
+                    raise RuntimeError('destroy returned false')
+            if not cleanup.attempt(f'Sensor {sensor.id} destroy', destroy):
+                remaining.append(sensor)
+        self.sensors = remaining
+        cleanup.finish()
 
 
 class NativeScenarioExecutor:
@@ -122,7 +128,6 @@ class NativeScenarioExecutor:
         settings = world.get_settings()
         settings.synchronous_mode = True
         settings.fixed_delta_seconds = 0.05
-        world.apply_settings(settings)
         actors: list[Any] = []
         agent = None
         rig = None
@@ -132,19 +137,19 @@ class NativeScenarioExecutor:
         min_distance, min_ttc = math.inf, None
         control_runtime = EvaluationControl()
         try:
+            world.apply_settings(settings)
             world.set_weather(carla.WeatherParameters(
                 cloudiness=spec.environment.cloudiness,
                 precipitation=spec.environment.precipitation,
                 fog_density=spec.environment.fog_density,
                 sun_altitude_angle=spec.environment.sun_altitude_angle))
-            ego = adapter._spawn(world, spec.ego, world.get_map().get_spawn_points())
-            actors.append(ego)
+            ego = adapter._spawn(world, spec.ego, world.get_map().get_spawn_points(), actors)
             self._focus_spectator(carla, world, ego)
             world.tick()
-            adversaries = [adapter._spawn_interaction_actor(
-                carla, world, ego, actor, spec.family, index)
-                for index, actor in enumerate(spec.adversaries)]
-            actors.extend(adversaries)
+            adversaries = []
+            for index, actor in enumerate(spec.adversaries):
+                spawned = adapter._spawn_interaction_actor(carla, world, ego, actor, spec.family, index, actors)
+                adversaries.append(spawned)
             if spec.generated_map and spec.generated_map.realistic_environment:
                 scenery = adapter._spawn_environment(carla, world, ego, spec)
                 actors.extend(scenery)
@@ -156,8 +161,8 @@ class NativeScenarioExecutor:
 
             collision_bp = world.get_blueprint_library().find("sensor.other.collision")
             collision_sensor = world.spawn_actor(collision_bp, carla.Transform(), attach_to=ego)
-            collision_sensor.listen(lambda _: collision.__setitem__("hit", True))
             actors.append(collision_sensor)
+            collision_sensor.listen(lambda _: collision.__setitem__("hit", True))
 
             module_spec = importlib.util.spec_from_file_location("carla_safety_uniad_target", agent_path)
             if module_spec is None or module_spec.loader is None:
@@ -248,25 +253,7 @@ class NativeScenarioExecutor:
                 time.sleep(preview_hold)
             return payload
         finally:
-            if capture:
-                capture.close()
-            if rig:
-                rig.destroy()
-            if agent:
-                try:
-                    agent.destroy()
-                except Exception:
-                    pass
-            actor_ids = [actor.id for actor in actors if getattr(actor, "is_alive", False)]
-            for actor in actors:
-                if getattr(actor, "type_id", "").startswith("sensor."):
-                    try:
-                        actor.stop()
-                    except RuntimeError:
-                        pass
-            if actor_ids:
-                client.apply_batch([carla.command.DestroyActor(actor_id) for actor_id in actor_ids])
-            world.apply_settings(original)
+            cleanup_native_runtime(carla, client, world, original, actors, capture, rig, agent)
 
     @staticmethod
     def _publish_telemetry(sensor_data: dict[str, Any], agent: Any, control: Any,
@@ -346,8 +333,12 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--port", type=int, default=2000)
     args = parser.parse_args()
-    NativeScenarioExecutor(port=args.port).run(
-        args.scenario, args.agent, args.agent_config, args.output)
+    try:
+        NativeScenarioExecutor(port=args.port).run(
+            args.scenario, args.agent, args.agent_config, args.output)
+    except KeyboardInterrupt:
+        print('Native executor interrupted by stop request', flush=True)
+        return 130
     return 0
 
 

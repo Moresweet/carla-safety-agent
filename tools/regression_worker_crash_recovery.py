@@ -1,5 +1,6 @@
 """Opt-in SIGKILL of this tool's own AD-MLP task; verify durable actor recovery."""
 import json
+import argparse
 import os
 from pathlib import Path
 import re
@@ -16,12 +17,20 @@ from regression_material_slots import ROOT, request
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--sensor-rig-mode', choices=('stationary', 'manual'))
+    args = parser.parse_args()
     assert request('/system/preflight')['ready']
     assert request('/batches/scheduler')['scheduler']['state'] != 'running'
-    plan = request('/scenario/compile', {'description': 'Town04 前车急刹，自车 5 m/s', 'max_duration_s': 10})
-    result = request('/scenario/execute-plan', {'confirmed': True, 'scenario_path': plan['scenario_path'],
-        'scenario_sha256': plan['scenario_sha256'], 'algorithm': 'admlp', 'unified_capture': True})
-    execution = result['execution_id']
+    if args.sensor_rig_mode:
+        result = request('/e2e/start', {'action': 'sensor-rig', 'mode': args.sensor_rig_mode,
+                                      'frames': 1000, 'every': 1})
+        execution = request('/session/status')['session']['run_id']
+    else:
+        plan = request('/scenario/compile', {'description': 'Town04 前车急刹，自车 5 m/s', 'max_duration_s': 10})
+        result = request('/scenario/execute-plan', {'confirmed': True, 'scenario_path': plan['scenario_path'],
+            'scenario_sha256': plan['scenario_sha256'], 'algorithm': 'admlp', 'unified_capture': True})
+        execution = result['execution_id']
     output = ROOT/'runs/validation'/('worker-crash-recovery-'+uuid.uuid4().hex+'.json')
     output.parent.mkdir(parents=True, exist_ok=True)
     report = {'execution_id': execution, 'state': 'waiting', 'scope': 'Owned native worker SIGKILL; not server crash'}
@@ -50,10 +59,16 @@ def main():
         pid = owner['pid']
         assert observed_process_identity(pid) == owner, 'Worker identity changed'
         command = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
-        assert b'carla_safety_agent.native_executor' in command, 'Not our native worker'
-        assert command[command.index(b'--scenario')+1] == os.fsencode(plan['scenario_path'])
-        assert command[command.index(b'--agent')+1] == os.fsencode(ROOT/'integration/bench2drive/admlp_agent.py')
-        assert session['configuration']['command'] == [str(ROOT/'scripts/run_benchmark_preset.sh')]
+        if args.sensor_rig_mode:
+            assert os.fsencode(ROOT/'tools/run_sensor_rig.py') in command, 'Not our capture worker'
+            assert command[command.index(b'--mode')+1] == os.fsencode(args.sensor_rig_mode)
+            assert session['kind'] == 'sensor-rig' and session['configuration']['request']['mode'] == args.sensor_rig_mode
+            assert [os.fsdecode(item) for item in command if item] == session['configuration']['command']
+        else:
+            assert b'carla_safety_agent.native_executor' in command, 'Not our native worker'
+            assert command[command.index(b'--scenario')+1] == os.fsencode(plan['scenario_path'])
+            assert command[command.index(b'--agent')+1] == os.fsencode(ROOT/'integration/bench2drive/admlp_agent.py')
+            assert session['configuration']['command'] == [str(ROOT/'scripts/run_benchmark_preset.sh')]
         latest = request('/session/status')['session']
         assert latest['run_id'] == execution and latest['process'] == owner and latest['state'] == 'running'
         assert observed_process_identity(pid) == owner
@@ -88,7 +103,7 @@ def main():
         output.write_text(json.dumps(report, indent=2))
         current = request('/session/status')['session']
         if current['run_id'] == execution and current['state'] in ('preparing', 'running', 'stopping'):
-            request('/e2e/stop', {'run_id': execution})
+            request('/collection/stop' if args.sensor_rig_mode else '/e2e/stop', {'run_id': execution})
         raise
 
 

@@ -465,7 +465,7 @@ def start_e2e(data: dict) -> dict:
                               'python': sys.executable if action in ('sensor-rig','rule-run') else str(UNIAD_PYTHON), 'carla_port': CARLA_PORT,
                               'results': str(results_path) if action in ('run', 'preset-run', 'rule-run') else None})
         env['CSA_EXECUTION_ID'] = execution_id
-        if action == 'run':
+        if action == 'run' or (action == 'sensor-rig' and data.get('mode', 'stationary') in ('stationary', 'manual')):
             env['CSA_RESOURCE_DATA_ROOT'] = str(PROJECT_ROOT/'data')
         _e2e_job.clear()
         _e2e_job.update(state="running", kind=action, started_at=time.time(),

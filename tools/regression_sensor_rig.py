@@ -1,5 +1,6 @@
 """Real independent rule-driving capture lifecycle and dataset verification."""
 import json
+import argparse
 import subprocess
 import sys
 import time
@@ -10,8 +11,11 @@ from regression_material_slots import ROOT, request
 
 
 def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--mode',choices=('stationary','manual','autopilot'),default='autopilot')
+    args=parser.parse_args()
     assert request('/system/preflight')['ready']
-    result = request('/e2e/start', {'action':'sensor-rig','mode':'autopilot','frames':120,'every':3})
+    result = request('/e2e/start', {'action':'sensor-rig','mode':args.mode,'frames':120,'every':3})
     assert result['job']['algorithm'] is None
     execution_id=request('/session/status')['session']['run_id']
     try:
@@ -42,7 +46,11 @@ def main():
         frames = json.loads((dataset/'index.json').read_text())['frames']
         first,last = [json.loads((dataset/e['path']/'frame.json').read_text()) for e in (frames[0],frames[-1])]
         displacement = sum((last['ego']['matrix'][axis][3]-first['ego']['matrix'][axis][3])**2 for axis in range(3))**.5
-        assert displacement > .5, 'Rule-driving vehicle did not move'
+        if args.mode=='autopilot':
+            assert displacement > .5, 'Rule-driving vehicle did not move'
+        if args.mode in ('stationary','manual'):
+            from carla_safety_agent.owned_resources import read_resources,resource_path
+            assert read_resources(resource_path(ROOT/'data',execution_id),status)['state']=='recovered'
         import carla
         client=carla.Client('127.0.0.1',2000); client.set_timeout(5)
         world=client.get_world()

@@ -11,6 +11,7 @@ from carla_safety_agent.evaluation_control import EvaluationControl
 from carla_safety_agent.sensor_capture import SensorCapture, atomic_json
 from carla_safety_agent.session import SessionJournal
 from carla_safety_agent.manual_control import current_control
+from carla_safety_agent.owned_resources import journal_from_environment
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -33,6 +34,9 @@ def main():
     world = client.get_world()
     previous = world.get_settings()
     if previous.synchronous_mode: raise RuntimeError('Another synchronous owner is already active')
+    journal = journal_from_environment(world)
+    if journal is not None and args.mode == 'autopilot':
+        raise RuntimeError('Autopilot resource recovery requires Traffic Manager ownership support')
     ego = capture = manager = None
     stopped = False
     def stop(signum, frame):
@@ -53,6 +57,8 @@ def main():
             ego = world.try_spawn_actor(blueprint, transform)
             if ego: break
         if not ego: raise RuntimeError('No free spawn point for the capture vehicle')
+        if journal:
+            journal.register(ego)  # ego remains reachable by finally if fsync fails.
         if args.mode == 'autopilot':
             manager = client.get_trafficmanager(8050)
             manager.set_synchronous_mode(True)
@@ -60,7 +66,7 @@ def main():
             ego.set_autopilot(True,8050)
         else:
             ego.apply_control(carla.VehicleControl(brake=1,hand_brake=True))
-        capture = SensorCapture(world,ego,[],runtime,source='sensor-rig',client=client)
+        capture = SensorCapture(world,ego,[],runtime,source='sensor-rig',client=client,journal=journal)
         control = EvaluationControl(runtime)
         for _ in range(args.frames):
             if stopped: break
@@ -92,7 +98,9 @@ def main():
             except Exception as exc: errors.append(str(exc))
         if ego:
             try:
-                if ego.destroy() is False: errors.append('Capture vehicle destroy returned false')
+                responses = client.apply_batch_sync([carla.command.DestroyActor(ego.id)], False)
+                if len(responses) != 1 or responses[0].error:
+                    errors.append('Capture vehicle destruction not acknowledged: '+str(responses))
             except Exception as exc: errors.append(str(exc))
         if manager:
             try: manager.set_synchronous_mode(False)

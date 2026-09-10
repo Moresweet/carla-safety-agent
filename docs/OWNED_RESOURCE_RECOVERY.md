@@ -2,7 +2,9 @@
 
 原生 `run` 任务在改变同步设置之前，创建 `data/experiments/<execution_id>/owned-resources.json`。日志保存执行 ID、PID 与启动时间、CARLA episode、地图、启动前 Actor ID 集合，以及随后登记的对象 ID 和类型。文件同步写盘并原子替换；不会用下一次任务覆盖旧日志。
 
-目前覆盖原生执行器持有的车辆、交互对象、模型传感器和统一采集辅助传感器。独立采集、规则驾驶及外部 Leaderboard 任务尚未接入该持久化清单，不能把本能力外推给它们。
+目前覆盖原生执行器持有的车辆、交互对象、模型传感器和统一采集辅助传感器，以及静止/人工独立采集的车辆和传感器。独立采集在车辆控制前登记车辆，SensorCapture 接收同一个日志；登记写盘失败仍保留本进程车辆引用用于清理。车辆销毁使用不触发tick的精确ID批量应答，不依赖刚创建对象的客户端快照。
+
+Traffic Manager 自动驾驶采集、规则驾驶及外部 Leaderboard 任务尚未接入该持久化清单，不能把本能力外推给它们。其正常清理仍保留；日志不伪造 Traffic Manager 所有权。未来接入需覆盖自动驾驶注销、服务状态及进程终止顺序，不能仅删除车辆就声称全部恢复。
 
 恢复条件：
 
@@ -19,5 +21,7 @@
 需要重载恢复代码时可使用 `scripts/restart_studio_bridge.sh --resume-recovery`。该路径要求 recovering、原模型进程已退出、队列不活跃，保留持久化状态，由新桥接继续恢复；不重启 CARLA，也不把运行中的任务当作空闲。普通重启仍不允许跳过这些检查。
 
 故障验收工具 `tools/regression_worker_crash_recovery.py` 仅终止它自己通过工作台创建并重复核对身份的 AD-MLP 测试进程，不终止模拟器。测试记录保存于 runs/validation，录制中断的数据不因此自动变为完整数据集。
+
+该工具也支持 `--sensor-rig-mode stationary` 或 `manual`，仅终止自己启动且命令行、执行ID、PID启动身份均匹配的独立采集进程；不会发送人工驾驶油门。正常退出可用 `regression_sensor_rig.py --mode stationary` 验证原始数据和资源日志恢复状态。
 
 2026-09-10：新格式正常退出、主动停止与一次录制中 SIGKILL 的实机恢复通过。强杀报告 worker-crash-recovery-7bf3c4daaee04ebaa7152cc7ce6d37b4.json，21个已登记对象无残留，同episode恢复异步并持续推进。此处不声明全部故障矩阵完成。

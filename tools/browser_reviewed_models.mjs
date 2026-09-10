@@ -65,8 +65,9 @@ try {
   assert(state.buttons[0].disabled,'Unreviewed plan must not start');
   const interactions=[];
   const draftFlag=process.argv.indexOf('--transform-draft');
-  if(draftFlag>=0){
-    const actor=Number(process.argv[draftFlag+1]);assert(Number.isSafeInteger(actor)&&actor>0);
+  const inspectHistoryFlag=process.argv.indexOf('--inspect-position-history');
+  if(draftFlag>=0||inspectHistoryFlag>=0){
+    const actor=Number(process.argv[(draftFlag>=0?draftFlag:inspectHistoryFlag)+1]);assert(Number.isSafeInteger(actor)&&actor>0);
     await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Edit World').click()`);
     let ready=false;
     for(let i=0;i<100;i++){
@@ -80,6 +81,19 @@ try {
     }
     assert(ready);await evaluate(`(()=>{const s=document.querySelector('.catalog-list select[size]');s.value='actor:${actor}';s.dispatchEvent(new Event('change',{bubbles:true}))})()`);
     await delay(400);
+    if(inspectHistoryFlag>=0){
+      await evaluate(`document.querySelector('[aria-label="对象位置历史"]').open=true`);
+      for(let i=0;i<100;i++){ready=await evaluate(`!!document.querySelector('[aria-label="对象位置历史"] input[type=checkbox]')`);if(ready)break;await delay(200)}
+      assert(ready,'Pending history inspection not shown');
+      assert(await evaluate(`[...document.querySelectorAll('[aria-label="对象位置历史"] button')].find(b=>b.textContent==='确认检查并开始空历史').disabled`));
+      await evaluate(`document.querySelector('[aria-label="对象位置历史"] input[type=checkbox]').click()`);await delay(100);
+      await evaluate(`[...document.querySelectorAll('[aria-label="对象位置历史"] button')].find(b=>b.textContent==='确认检查并开始空历史').click()`);
+      for(let i=0;i<100;i++){const h=await(await fetch('http://127.0.0.1:8765/objects/transform-history?actor_id='+actor)).json();ready=h.eligible&&!h.pending&&h.undo_count===0&&h.redo_count===0;if(ready)break;await delay(200)}
+      assert(ready,'Inspection did not archive the uncertain chain');
+      await delay(1800);await evaluate(`document.querySelector('[aria-label="对象位置历史"]').scrollIntoView({block:'center'})`);
+      const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(join(output,'position-history-inspected.png'),Buffer.from(shot.data,'base64'));
+      interactions.push('explicit_position_history_inspection_archives_without_moving_actor');
+    }else{
     const original=await evaluate(`Number(document.querySelector('.transform-grid input').value)`);
     const wanted=String(original+1.25);
     const enter=async value=>evaluate(`(()=>{const e=document.querySelector('.transform-grid input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}))})()`);
@@ -121,12 +135,25 @@ try {
       await enter(String(original+2.5));await delay(100);
       await evaluate(`[...document.querySelectorAll('.object-inspector button')].find(b=>b.textContent==='放弃草稿，读取最新位置').click()`);
       await delay(100);assert.equal(Number(await evaluate(`document.querySelector('.transform-grid input').value`)),Number(wanted));
+      if(process.argv.includes('--position-history')){
+        const h=await(await fetch('http://127.0.0.1:8765/objects/transform-history?actor_id='+actor)).json();
+        assert(h.eligible&&h.undo_count>0&&!h.pending);const before=h.entries.at(-1).before.location.x;
+        await evaluate(`document.querySelector('[aria-label="对象位置历史"]').open=true`);
+        for(const [label,x,count] of [['撤销上次位置修改',before,h.undo_count-1],['重做位置修改',Number(wanted),h.undo_count]]){
+          for(let i=0;i<100;i++){ready=await evaluate(`![...document.querySelectorAll('[aria-label="对象位置历史"] button')].find(b=>b.textContent===${JSON.stringify(label)})?.disabled`);if(ready)break;await delay(200)}
+          assert(ready);await evaluate(`[...document.querySelectorAll('[aria-label="对象位置历史"] button')].find(b=>b.textContent===${JSON.stringify(label)}).click()`);
+          for(let i=0;i<100;i++){const current=await(await fetch('http://127.0.0.1:8765/objects/transform-history?actor_id='+actor)).json();ready=current.undo_count===count&&!current.pending&&Math.abs(current.observed.location.x-x)<.01;if(ready)break;await delay(200)}
+          assert(ready,'Position history did not perform '+label);await delay(1800);
+        }
+        interactions.push('explicit_browser_position_undo_and_redo_verified');
+      }
     }
     await evaluate(`document.querySelector('.object-inspector').scrollIntoView({block:'center'})`);
     const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
     await writeFile(join(output,'transform-draft.png'),Buffer.from(shot.data,'base64'));
     await writeFile(join(output,'transform-draft.json'),JSON.stringify({actor,original,wanted,observed,baseline:process.argv.includes('--expect-draft-reset')},null,2));
     interactions.push(process.argv.includes('--expect-draft-reset')?'baseline_polling_draft_loss_reproduced':'draft_survives_polling_empty_and_failed_apply_preserved_no_auto_retry_double_click_guard_and_discard_verified');
+    }
   }
   const handoffFlag=process.argv.indexOf('--handoff-scene');
   if(handoffFlag>=0){

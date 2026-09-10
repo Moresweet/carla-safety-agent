@@ -41,6 +41,7 @@ from carla_safety_agent.scenario_archive import archive_scenario, read_verified_
 from carla_safety_agent.build_plan import build_plan
 from carla_safety_agent.session import SessionJournal
 from carla_safety_agent.scene_handoff import SceneHandoff
+from carla_safety_agent.transform_history import TransformHistory
 from carla_safety_agent.batch_catalog import BatchCatalog
 from carla_safety_agent.batch_control import control_batch
 from carla_safety_agent.batch_service import BatchService
@@ -139,6 +140,7 @@ SESSION = SessionJournal(PROJECT_ROOT / 'data')
 BATCHES = BatchCatalog(PROJECT_ROOT / 'data/experiment-queues')
 SCENES = SceneStore(PROJECT_ROOT / 'data/scenes')
 HANDOFF = SceneHandoff(PROJECT_ROOT/'data/scene-handoffs')
+POSITION_HISTORY = TransformHistory(PROJECT_ROOT/'data/transform-history')
 VISIBILITY = VisibilityStore(PROJECT_ROOT / 'data')
 MATERIALS = MaterialLibrary(PROJECT_ROOT / 'data')
 _thumbnail_dir = os.environ.get("THUMBNAIL_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), ".runtime", "thumbnails"))
@@ -1703,14 +1705,99 @@ def update_actor(actor_id: int, transform_data: dict, expected=None) -> dict:
     current = actor.get_transform()
     if expected is not None:verify_review(expected,world.id,actor,current)
     loc, rot = transform_data.get("location", {}), transform_data.get("rotation", {})
-    actor.set_transform(carla.Transform(
+    target=carla.Transform(
         carla.Location(x=float(loc.get("x", current.location.x)),
                        y=float(loc.get("y", current.location.y)),
                        z=float(loc.get("z", current.location.z))),
         carla.Rotation(pitch=float(rot.get("pitch", current.rotation.pitch)),
                        yaw=float(rot.get("yaw", current.rotation.yaw)),
-                       roll=float(rot.get("roll", current.rotation.roll)))))
+                       roll=float(rot.get("roll", current.rotation.roll))))
+    identity=position_history_identity(world,actor) if expected is not None else None
+    if identity is not None:
+        history=apply_position_history(world,actor,identity,'record',transform_record(target),review=expected)
+        return {'ok':True,'object':actor_record(actor),'history_revision':history['revision']}
+    actor.set_transform(target)
     return {"ok": True, "object": actor_record(actor)}
+
+
+def position_history_identity(world,actor):
+    record=_provenance.records(world.id).get(str(actor.id),{})
+    if record.get('origin')!='user' or record.get('type_id')!=actor.type_id:return None
+    return {'episode':str(world.id),'actor_id':actor.id,'type_id':actor.type_id,'stable_id':record.get('stable_id')}
+
+
+def apply_position_history(world,actor,identity,kind,target=None,revision=None,review=None):
+    import time
+    from carla_safety_agent.transform_history import same_pose
+    from carla_safety_agent.world_readiness import require_idle_native_world
+    require_asset_import_idle();require_idle_native_world(world)
+    current=actor.get_transform()
+    if review is not None:
+        from carla_safety_agent.transform_review import verify_review
+        verify_review(review,world.id,actor,current)
+    row=POSITION_HISTORY.begin(identity,kind,transform_record(current),target,revision)
+    intent=row['pending'];wanted=intent['target']
+    try:
+        actor.set_transform(carla.Transform(carla.Location(**wanted['location']),carla.Rotation(**wanted['rotation'])))
+        deadline=time.monotonic()+5.;matched=0;previous_frame=None
+        for _ in range(128):
+            remaining=deadline-time.monotonic()
+            if remaining<=0:break
+            snapshot=world.wait_for_tick(remaining)
+            fresh=connect_world()
+            if fresh.id!=world.id or snapshot is None or snapshot.find(actor.id) is None:
+                raise RuntimeError('World or actor changed while verifying position edit')
+            observed=fresh.get_actor(actor.id)
+            if observed is None or position_history_identity(fresh,observed)!=identity:
+                raise RuntimeError('Position history actor ownership changed')
+            pose=transform_record(observed.get_transform())
+            frame=snapshot.frame
+            if frame==previous_frame:continue
+            previous_frame=frame
+            matched=matched+1 if same_pose(pose,wanted) else 0
+            if matched>=2:return POSITION_HISTORY.finish(identity,intent['id'],pose)
+        raise RuntimeError('Native position did not settle in two consecutive snapshots; inspect before retrying')
+    except Exception as exc:
+        try:POSITION_HISTORY.fail(identity,intent['id'],exc)
+        except Exception as journal_error:print(f'Position history requires inspection: {journal_error}',file=sys.stderr)
+        raise
+
+
+@simulation_operation
+def position_history_status(actor_id):
+    if evaluation_active():return {'ok':True,'eligible':False,'reason':'闭环执行中的修改记录在执行审核中，不提供位置撤销'}
+    world=connect_world();actor=world.get_actor(actor_id)
+    if actor is None:raise ValueError('Actor is no longer running')
+    identity=position_history_identity(world,actor)
+    if identity is None:return {'ok':True,'eligible':False,'reason':'仅为本工作台纳管新增对象保存位置历史'}
+    row=POSITION_HISTORY.read(identity)
+    observed=transform_record(actor.get_transform())
+    return {'ok':True,'eligible':True,'identity':identity,'revision':row['revision'],
+            'observed':{k:v for k,v in identity.items() if k!='stable_id'}|{'location':observed['location'],'yaw':observed['rotation']['yaw']},
+            'undo_count':row['cursor'],'redo_count':len(row['entries'])-row['cursor'],
+            'pending':row['pending'],'entries':[{**entry,'applied':index<row['cursor']} for index,entry in enumerate(row['entries'])
+                                               if max(0,row['cursor']-5)<=index<row['cursor']+5]}
+
+
+@simulation_operation
+def position_history_action(data):
+    from carla_safety_agent.transform_review import validate_review,verify_review
+    from carla_safety_agent.world_readiness import require_idle_native_world
+    if not isinstance(data,dict) or data.get('action') not in ('undo','redo','acknowledge') or data.get('confirmed') is not True:
+        raise ValueError('Explicit position history action required')
+    expected=validate_review(data.get('expected'))
+    if evaluation_active():raise ValueError('Position history requires an idle simulation')
+    require_asset_import_idle();world=connect_world();require_idle_native_world(world)
+    actor=world.get_actor(expected['actor_id'])
+    if actor is None:raise ValueError('Actor is no longer running')
+    verify_review(expected,world.id,actor,actor.get_transform())
+    identity=position_history_identity(world,actor)
+    if identity is None:raise ValueError('Actor is not managed by this workbench')
+    if data['action']=='acknowledge':
+        row=POSITION_HISTORY.acknowledge(identity,data.get('revision'),data.get('intent_id'),data['confirmed'])
+    else:
+        row=apply_position_history(world,actor,identity,data['action'],revision=data.get('revision'))
+    return {'ok':True,'revision':row['revision'],'action':data['action']}
 
 
 @simulation_operation
@@ -2186,6 +2273,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         request = urlparse(self.path)
         params = parse_qs(request.query)
+        if request.path=='/objects/transform-history':
+            try:
+                result=position_history_status(int(params.get('actor_id',['0'])[0]))
+                self._headers();self.wfile.write(json.dumps(result).encode())
+            except Exception as exc:
+                self._headers(400);self.wfile.write(json.dumps({'ok':False,'error':str(exc)}).encode())
+            return
         if request.path=='/scenes/handoff':
             try:
                 result={'ok':True,**HANDOFF.status()}
@@ -2510,7 +2604,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "/focus/static", "/focus/bev",
                                 "/focus/environment", "/camera/hero-lock",
                                 "/objects/environment/visibility",
-                                "/objects/spawn", "/objects/update", "/objects/update-reviewed",
+                                "/objects/spawn", "/objects/update", "/objects/update-reviewed", "/objects/transform-history",
                                 "/objects/duplicate", "/objects/delete",
                                 "/scenario/compile", "/scenario/run", "/scenario/evaluate", '/scenario/execute-plan',
                                 "/blender/create", "/blender/retexture",
@@ -2633,6 +2727,8 @@ class Handler(BaseHTTPRequestHandler):
             elif request.path == "/objects/spawn":
                 data = json.loads(payload or b"{}")
                 result = spawn_object(str(data["blueprint_id"]), data.get("transform", {}))
+            elif request.path == '/objects/transform-history':
+                result=position_history_action(json.loads(payload or b'{}'))
             elif request.path in ("/objects/update", "/objects/update-reviewed"):
                 data = json.loads(payload or b"{}")
                 if request.path.endswith('update-reviewed'):

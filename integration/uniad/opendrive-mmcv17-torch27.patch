@@ -1,0 +1,18 @@
+--- a/mmcv/ops/csrc/common/pytorch_cuda_helper.hpp
++++ b/mmcv/ops/csrc/common/pytorch_cuda_helper.hpp
+@@ -9 +9 @@
+-#include <THC/THCAtomics.cuh>
++#include <ATen/cuda/Atomic.cuh>
+--- a/mmcv/ops/csrc/pytorch/cuda/ms_deform_attn_cuda.cu
++++ b/mmcv/ops/csrc/pytorch/cuda/ms_deform_attn_cuda.cu
+@@ -17 +17 @@
+-#include <THC/THCAtomics.cuh>
++#include <ATen/cuda/Atomic.cuh>
+--- a/setup.py
++++ b/setup.py
+@@ -268 +268 @@
+-            extra_compile_args['cxx'] = ['-std=c++14']
++            extra_compile_args['cxx'] = ['-std=c++17']
+@@ -363 +363 @@
+-            extra_compile_args['nvcc'] += ['-std=c++14']
++            extra_compile_args['nvcc'] += ['-std=c++17']

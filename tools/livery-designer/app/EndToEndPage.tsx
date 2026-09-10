@@ -6,7 +6,7 @@ import ExecutionProgress from './ExecutionProgress';
 import {supportsGeneratedScene} from './generatedModels';
 
 const bridge="http://127.0.0.1:8765";
-type Algorithm={id:string;name:string;framework:string;checkpoint:string;sensors:string;enabled:boolean;status:string};
+type Algorithm={id:string;name:string;framework:string;checkpoint:string;sensors:string;enabled:boolean;status:string;integration_reason?:string};
 type Route={name:string;path:string;relative:string;count:number};
 type PresetRoute={id:string;town:string;scenarios:string[]};
 type Collection={id:string;name:string;path:string;route_count:number;routes:PresetRoute[]};
@@ -46,7 +46,7 @@ export default function EndToEndPage(){
  async function start(action:string){await request("/e2e/start",action==="preset-run"?{action,algorithm,collection,route_id:preset}:{action,algorithm,route})}
  async function stop(){const runId=status?.session?.run_id;if(!runId){setError('缺少执行身份，请刷新状态后停止');return}await request("/e2e/stop",{run_id:runId})}
  return <section className="e2e-page">
-  <aside className="e2e-sidebar"><span className="eyebrow">ALGORITHM CATALOG</span><h2>End-to-End Testing</h2><p>Runnable models are selectable. The remaining cards document paper baselines and the exact missing component.</p>{status?.algorithms.map(a=><button key={a.id} title={a.enabled?"Ready to run":a.status.replaceAll("_"," ")} className={`algorithm-card ${algorithm===a.id?"selected":""}`} disabled={running||!a.enabled} onClick={()=>setAlgorithm(a.id)}><div className="algorithm-mark">{a.name[0]}</div><div><strong>{a.name}</strong><small>{a.framework} · {a.sensors}</small></div><span>{a.enabled?"READY":a.status==="missing_checkpoint"?"NEEDS WEIGHT":a.status==="not_released"?"NOT RELEASED":"NOT INSTALLED"}</span></button>)}</aside>
+  <aside className="e2e-sidebar"><span className="eyebrow">ALGORITHM CATALOG</span><h2>End-to-End Testing</h2><p>Runnable models are selectable. The remaining cards document paper baselines and the exact missing component.</p>{status?.algorithms.map(a=><button key={a.id} title={a.enabled?"Ready to run":a.integration_reason??a.status.replaceAll("_"," ")} className={`algorithm-card ${algorithm===a.id?"selected":""}`} disabled={running||!a.enabled} onClick={()=>setAlgorithm(a.id)}><div className="algorithm-mark">{a.name[0]}</div><div><strong>{a.name}</strong><small>{a.framework} · {a.sensors}</small></div><span>{a.enabled?"READY":a.status==="missing_checkpoint"?"NEEDS WEIGHT":a.status==="not_integrated"?"NOT INTEGRATED":"NOT INSTALLED"}</span></button>)}</aside>
   <div className="e2e-main">
    <BatchPanel/>
    <ExecutionProgress/>

@@ -27,7 +27,21 @@ class EndToEndBenchmarkTests(unittest.TestCase):
         self.assertEqual(entries["tcp"]["status"], "available")
         self.assertEqual(entries["tcp"]["sensors"], "3 cameras")
         self.assertEqual(entries["admlp"]["status"], "not_installed")
-        self.assertEqual(entries["driveadapter"]["status"], "not_released")
+        self.assertEqual(entries["driveadapter"]["status"], "not_integrated")
+
+    def test_unsupported_adapter_does_not_become_runnable_from_filenames(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for model in ('driveadapter', 'thinktwice'):
+                for name in (f'team_code/{model}_b2d_agent.py', f'ckpts/{model}_b2d.pth'):
+                    path = root / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text('not a working integration')
+            entries = {item['id']: item for item in algorithm_catalog(root)}
+            for model in ('driveadapter', 'thinktwice'):
+                self.assertEqual(entries[model]['status'], 'not_integrated')
+                self.assertFalse(entries[model]['integration_supported'])
+                self.assertEqual(entries[model]['missing_files'], [])
 
     def test_collision_is_ranked_above_clean_route(self):
         records = [

@@ -369,7 +369,7 @@ def e2e_status() -> dict:
             results = {"error": "Result file is not valid JSON"}
     algorithms = algorithm_catalog(BENCH2DRIVE_ZOO, BENCH2DRIVE_TCP_ZOO)
     for item in algorithms:
-        item.update(framework="Native Scenario Executor",
+        item.update(framework="Native Scenario Executor" if item['integration_supported'] else 'Integration pending',
                     enabled=item["status"] == "available")
     return {"ok": True, "algorithms": algorithms, "job": job, 'session': SESSION.snapshot(),
             'stop_requires_run_id': True,

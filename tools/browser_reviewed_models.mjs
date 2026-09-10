@@ -64,6 +64,18 @@ try {
   const state=await evaluate(`(()=>{const section=document.querySelector('[aria-label="确认计划并选择模型"]');return {buttons:[...section.querySelectorAll('button')].map(b=>({text:b.textContent,disabled:b.disabled})),checkboxes:[...section.querySelectorAll('input')].map(b=>({checked:b.checked,disabled:b.disabled}))}})()`);
   assert(state.buttons[0].disabled,'Unreviewed plan must not start');
   const interactions=[];
+  if(process.argv.includes('--integration-status')){
+    await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='End-to-End Test').click()`);
+    let cards=[];
+    for(let i=0;i<100;i++){cards=await evaluate(`[...document.querySelectorAll('.algorithm-card')].map(b=>({name:b.querySelector('strong').textContent,label:b.querySelector('span').textContent,disabled:b.disabled,title:b.title}))`);if(cards.length===7)break;await delay(200)}
+    assert.equal(cards.length,7);
+    for(const name of ['DriveAdapter','ThinkTwice']){const card=cards.find(c=>c.name===name);assert(card?.disabled);assert.equal(card.label,'NOT INTEGRATED');assert(card.title.includes('尚未接入'))}
+    assert.equal(cards.filter(c=>c.label==='READY').length,5);
+    await evaluate(`document.querySelector('.algorithm-card:last-child').scrollIntoView({block:'center'})`);
+    const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(join(output,'integration-status.png'),Buffer.from(shot.data,'base64'));
+    await writeFile(join(output,'integration-status.json'),JSON.stringify(cards,null,2));
+    interactions.push('five_existing_models_ready_two_external_models_not_integrated_not_unreleased');
+  }
   if(process.argv.includes('--natural-asset')){
     await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Asset Workshop').click()`);
     let ready=false;

@@ -69,23 +69,28 @@ def algorithm_catalog(zoo: Path, tcp_zoo: Path | None = None) -> list[dict[str, 
         ("admlp", "AD-MLP", tcp_zoo, "team_code/admlp_b2d_agent.py",
          "ckpts/admlp_b2d.ckpt", None, "not_installed", "TCP/ADMLP branch"),
         ("driveadapter", "DriveAdapter", zoo, "team_code/driveadapter_b2d_agent.py",
-         "ckpts/driveadapter_b2d.pth", None, "not_released", "published comparison only"),
+         "ckpts/driveadapter_b2d.pth", None, "not_integrated", "published comparison only"),
         ("thinktwice", "ThinkTwice", zoo, "team_code/thinktwice_b2d_agent.py",
-         "ckpts/thinktwice_b2d.pth", None, "not_released", "published comparison only"),
+         "ckpts/thinktwice_b2d.pth", None, "not_integrated", "published comparison only"),
     ]
     result = []
     for identifier, name, root, agent, checkpoint, config, fallback, availability_source in definitions:
         agent_path, checkpoint_path = root / agent, root / checkpoint
         config_path = root / config if config else None
         required = [agent_path, checkpoint_path] + ([config_path] if config_path else [])
-        state = "available" if all(path.is_file() for path in required) else fallback
+        integrated = identifier not in ('driveadapter', 'thinktwice')
+        state = "available" if integrated and all(path.is_file() for path in required) else fallback
         result.append({"id": identifier, "name": name, "adapter": str(agent_path),
                        "checkpoint": str(checkpoint_path), "status": state,
                        "config": str(config_path) if config_path else None,
                        "root": str(root),
-                       "sensors": {"tcp": "3 cameras", "admlp": "1 camera"}.get(
-                           identifier, "6 cameras"),
+                       "sensors": ({"tcp": "3 cameras", "admlp": "1 camera"}.get(
+                           identifier, "6 cameras") if integrated else "input contract pending"),
                        "availability_source": availability_source,
+                       "integration_supported": integrated,
+                       "missing_files": [str(path) for path in required if not path.is_file()],
+                       "integration_reason": ("本机执行适配尚未接入；官方原版有公开权重，但不是此处可直接运行的Bench2Drive适配。"
+                                              if not integrated else "本机文件检查不等于启动预检或完整推理验收。"),
                        "source": "Thinklab-SJTU/Bench2DriveZoo"})
     return result
 

@@ -102,19 +102,22 @@ try {
     interactions.push('webgl_source_uv_samples_match_canvas_rows');
   }
   const pedestrianFlag=process.argv.indexOf('--pedestrian-id');
-  if(pedestrianFlag>=0){
-    const actor=Number(process.argv[pedestrianFlag+1]);assert(Number.isSafeInteger(actor)&&actor>0);
+  const vehicleFlag=process.argv.indexOf('--vehicle-id');
+  assert(!(pedestrianFlag>=0&&vehicleFlag>=0),'Choose one actor preview');
+  if(pedestrianFlag>=0||vehicleFlag>=0){
+    const vehicle=vehicleFlag>=0,kind=vehicle?'vehicle':'pedestrian';
+    const actor=Number(process.argv[(vehicle?vehicleFlag:pedestrianFlag)+1]);assert(Number.isSafeInteger(actor)&&actor>0);
     const textureFlag=process.argv.indexOf('--texture');assert(textureFlag>=0);
     const texture=resolve(process.argv[textureFlag+1]);await readFile(texture);
     const scene=await (await fetch('http://127.0.0.1:8765/scene/state')).json();
-    const target=scene.objects.find(item=>item.id===actor&&item.name==='walker.pedestrian.0001');assert(target,'Requested walker is not in the current scene');
+    const target=scene.objects.find(item=>item.id===actor&&(vehicle?item.name==='vehicle.audi.a2':item.name==='walker.pedestrian.0001'));assert(target,'Requested supported actor is not in the current scene');
     await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Edit World').click()`);
-    await evaluate(`[...document.querySelectorAll('.viewtabs button')].find(b=>b.textContent==='Pedestrians').click()`);
+    await evaluate(`[...document.querySelectorAll('.viewtabs button')].find(b=>b.textContent===${JSON.stringify(vehicle?'Vehicles':'Pedestrians')}).click()`);
     let ready=false;
     for(let i=0;i<100;i++){ready=await evaluate(`[...document.querySelectorAll('#target option')].some(o=>o.value===${JSON.stringify(target.key)})`);if(ready)break;await delay(200)}
     assert(ready,'Walker target option missing');
     await evaluate(`(()=>{const select=document.querySelector('#target');select.value=${JSON.stringify(target.key)};select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-    for(let i=0;i<100;i++){ready=await evaluate(`!![...document.querySelectorAll('.previewbar b')].find(e=>e.textContent.includes('裤装槽 14'))&&!!document.querySelector('.projection canvas')`);if(ready)break;await delay(200)}
+    for(let i=0;i<100;i++){ready=await evaluate(`!![...document.querySelectorAll('.previewbar b')].find(e=>e.textContent.includes(${JSON.stringify(vehicle?'vehicle.audi.a2':'裤装槽 14')}))&&!!document.querySelector('.projection canvas')`);if(ready)break;await delay(200)}
     assert(ready,'Actual pedestrian mesh preview missing');
     const documentNode=await cdp('DOM.getDocument');const input=await cdp('DOM.querySelector',{nodeId:documentNode.root.nodeId,selector:'.controls input[type=file]'});
     await cdp('DOM.setFileInputFiles',{nodeId:input.nodeId,files:[texture]});
@@ -123,15 +126,15 @@ try {
     await evaluate(`[...document.querySelectorAll('.texture-modes button')].find(b=>b.textContent==='cover').click()`);
     await delay(200);
     const atlas=await evaluate(`document.querySelector('canvas.atlas-output').toDataURL('image/png')`);
-    await writeFile(join(output,'pedestrian-atlas.png'),Buffer.from(atlas.split(',')[1],'base64'));
+    await writeFile(join(output,kind+'-atlas.png'),Buffer.from(atlas.split(',')[1],'base64'));
     await evaluate(`document.querySelector('.visuals').scrollIntoView({block:'start'})`);
     const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
-    await writeFile(join(output,'pedestrian-uv.png'),Buffer.from(screenshot.data,'base64'));
-    if(process.argv.includes('--apply-pedestrian')){
+    await writeFile(join(output,kind+'-uv.png'),Buffer.from(screenshot.data,'base64'));
+    if(process.argv.includes('--apply-'+kind)){
       let sent=false,error=null;
       socket.addEventListener('message',async event=>{const value=JSON.parse(event.data);if(value.method!=='Fetch.requestPaused')return;
         const {requestId,request}=value.params;try{const url=new URL(request.url);
-          if(url.pathname!=='/apply/pedestrian'||url.searchParams.get('actor_id')!==String(actor)){
+          if(url.pathname!==(vehicle?'/apply':'/apply/pedestrian')||url.searchParams.get('actor_id')!==String(actor)){
             await cdp('Fetch.failRequest',{requestId,errorReason:'Aborted'});throw Error('Unexpected texture target');}
           if(request.method==='POST')sent=true;await cdp('Fetch.continueRequest',{requestId});
         }catch(exc){error=String(exc)}});
@@ -139,9 +142,9 @@ try {
       await evaluate(`document.querySelector('.export button.primary').click()`);
       for(let i=0;i<200;i++){ready=await evaluate(`document.querySelector('.export small').textContent.startsWith('Applied texture to ')`);if(ready||error)break;await delay(100)}
       assert(!error,error);assert(sent&&ready,'Explicit pedestrian texture did not complete');
-      interactions.push('pedestrian_texture_applied_to_explicit_actor_'+actor);
+      interactions.push(kind+'_texture_applied_to_explicit_actor_'+actor);
     }
-    interactions.push('real_pedestrian_slot14_uv_preview_loaded');
+    interactions.push(vehicle?'audi_a2_source_uv_preview_loaded':'real_pedestrian_slot14_uv_preview_loaded');
   }
   if(process.argv.includes('--texture-scope')){
     await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Edit World').click()`);
@@ -157,6 +160,31 @@ try {
     const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
     await writeFile(join(output,'texture-scope.png'),Buffer.from(screenshot.data,'base64'));
     interactions.push('road_collection_requires_exact_object_selection');
+  }
+  const materialFlag=process.argv.indexOf('--material-name');
+  if(materialFlag>=0){
+    const name=process.argv[materialFlag+1];assert(name==='SM_GasStation01_13','Only the verified fixture is supported');
+    const textureFlag=process.argv.indexOf('--texture');assert(textureFlag>=0);
+    const texture=resolve(process.argv[textureFlag+1]);await readFile(texture);
+    await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Edit World').click()`);
+    for(let i=0;i<100;i++){if(await evaluate(`!!document.querySelector('.catalog-list input')`))break;await delay(200)}
+    await evaluate(`(()=>{const input=document.querySelector('.catalog-list input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(name)});input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    let ready=false;
+    for(let i=0;i<100;i++){ready=await evaluate(`document.querySelector('.object-inspector h3')?.textContent.startsWith(${JSON.stringify(name)})`);if(ready)break;await delay(200)}
+    assert(ready,'Requested material object not found');
+    await evaluate(`[...document.querySelectorAll('.object-inspector button')].find(b=>b.textContent==='Edit texture').click()`);
+    for(let i=0;i<100;i++){ready=await evaluate(`!!document.querySelector('.material-slot-editor select option:not([disabled])')&&!!document.querySelector('.material-slot-editor .preview canvas')`);if(ready)break;await delay(200)}
+    assert(ready,'Material mesh selection unavailable');
+    const documentNode=await cdp('DOM.getDocument'),input=await cdp('DOM.querySelector',{nodeId:documentNode.root.nodeId,selector:'.material-slot-editor input[type=file]'});
+    await cdp('DOM.setFileInputFiles',{nodeId:input.nodeId,files:[texture]});
+    for(let i=0;i<100;i++){ready=await evaluate(`![...document.querySelectorAll('.material-slot-editor button')].find(b=>b.textContent==='应用到此材质槽').disabled`);if(ready)break;await delay(200)}
+    assert(ready,'Material upload or mesh load failed');
+    await delay(300);
+    const atlas=await evaluate(`document.querySelector('canvas.atlas-output').toDataURL('image/png')`);
+    await writeFile(join(output,'material-atlas.png'),Buffer.from(atlas.split(',')[1],'base64'));
+    const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+    await writeFile(join(output,'material-uv.png'),Buffer.from(screenshot.data,'base64'));
+    interactions.push('environment_source_uv_preview_loaded_without_apply');
   }
   const stopFlag=process.argv.indexOf('--stop-run');
   if(stopFlag>=0){

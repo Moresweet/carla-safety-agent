@@ -15,7 +15,10 @@ from regression_material_slots import ROOT, request
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--node', required=True)
+    parser.add_argument('--vehicle', action='store_true', help='Test Audi A2 source UV instead of walker pants')
     args = parser.parse_args()
+    kind = 'vehicle' if args.vehicle else 'pedestrian'
+    blueprint = 'vehicle.audi.a2' if args.vehicle else 'walker.pedestrian.0001'
     assert request('/system/preflight')['ready']
     session_id = request('/session/status')['session']['run_id']
     assert request('/batches/scheduler')['scheduler']['state'] != 'running'
@@ -25,10 +28,10 @@ def main():
     before = observe_idle(client, world.get_map().name, seconds=1)
     camera = world.get_spectator().get_transform()
     spawn = world.get_map().get_spawn_points()[0]
-    output = ROOT/'runs/validation'/('pedestrian-uv-'+uuid.uuid4().hex)
+    output = ROOT/'runs/validation'/(kind+'-uv-'+uuid.uuid4().hex)
     output.mkdir(parents=True, exist_ok=False)
     report = {'state': 'started', 'before': before, 'owned_actor_ids': [],
-              'scope': 'Slot 14 source UV and actual scene comparison; bind pose is not live animation'}
+              'scope': blueprint+' source UV and actual scene comparison; not live animation'}
     owned = report['owned_actor_ids']
 
     def save():
@@ -36,12 +39,12 @@ def main():
 
     def image(actor_id, name):
         actor = world.get_actor(actor_id)
-        assert actor and actor.type_id == 'walker.pedestrian.0001'
+        assert actor and actor.type_id == blueprint
         transform = actor.get_transform()
         center = carla.Location(actor.bounding_box.location.x, actor.bounding_box.location.y,
                                 actor.bounding_box.location.z)
         transform.transform(center)
-        eye = center + transform.get_forward_vector()*3.2 + transform.get_right_vector()*.8 + carla.Location(z=.4)
+        eye = center + transform.get_forward_vector()*(4.5 if args.vehicle else 3.2) + transform.get_right_vector()*(5 if args.vehicle else .8) + carla.Location(z=1.7 if args.vehicle else .4)
         delta = center-eye
         rotation = carla.Rotation(pitch=math.degrees(math.atan2(delta.z, math.hypot(delta.x, delta.y))),
                                   yaw=math.degrees(math.atan2(delta.y, delta.x)))
@@ -50,9 +53,9 @@ def main():
         (output/name).write_bytes(request('/scene/preview', raw=True))
 
     try:
-        for offset in (3, 6):
+        for offset in ((0, 7) if args.vehicle else (3, 6)):
             location = spawn.location + spawn.get_right_vector()*offset
-            result = request('/objects/spawn', {'blueprint_id': 'walker.pedestrian.0001',
+            result = request('/objects/spawn', {'blueprint_id': blueprint,
                 'transform': {'location': {'x': location.x, 'y': location.y, 'z': location.z+1},
                               'rotation': {'yaw': spawn.rotation.yaw}, 'snap_to_ground': True}})
             owned.append(result['object']['id'])
@@ -64,9 +67,9 @@ def main():
         image(owned[0], 'target-before.jpg')
         image(owned[1], 'control-before.jpg')
         browser = subprocess.run([args.node, str(ROOT/'tools/browser_reviewed_models.mjs'),
-            '--uv-convention', '--pedestrian-id', str(owned[0]), '--texture',
+            '--uv-convention', '--'+kind+'-id', str(owned[0]), '--texture',
             str(ROOT/'runs/validation/material-slots-20260908/uv-calibration.png'),
-            '--apply-pedestrian'], cwd=ROOT, capture_output=True, text=True, timeout=240)
+            '--apply-'+kind], cwd=ROOT, capture_output=True, text=True, timeout=240)
         (output/'browser.log').write_text(browser.stdout+'\n'+browser.stderr)
         if browser.returncode:
             raise RuntimeError('Browser UV test failed; see '+str(output/'browser.log'))

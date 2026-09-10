@@ -1,10 +1,10 @@
 "use client";
 import {RefObject,useEffect,useRef} from "react";
 import {textureUploadFlipY} from './uvConvention';
+import {previewBounds,previewCamera} from './previewCamera';
 export type MeshData={source:string;triangleCount:number;vertices:number[]};
 function shader(gl:WebGLRenderingContext,type:number,source:string){const s=gl.createShader(type)!;gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s)??"Shader error");return s}
 function program(gl:WebGLRenderingContext){const p=gl.createProgram()!;gl.attachShader(p,shader(gl,gl.VERTEX_SHADER,`attribute vec3 p;attribute vec2 uv;uniform mat4 m;varying vec2 v;void main(){v=uv;gl_Position=m*vec4(p,1.);}`));gl.attachShader(p,shader(gl,gl.FRAGMENT_SHADER,`precision mediump float;uniform sampler2D atlas;varying vec2 v;void main(){vec4 c=texture2D(atlas,v);gl_FragColor=vec4(mix(vec3(.72),c.rgb,c.a),1.);}`));gl.linkProgram(p);return p}
-function matrix(yaw:number,pitch:number,aspect:number){const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch),s=.72;return new Float32Array([cy*s/aspect,sy*sp*s/aspect,sy*cp*s/aspect,0,-sy*s,cy*sp*s,cy*cp*s,0,0,cp*s,-sp*s,0,0,0,0,1])}
 export default function CarPreview({mesh,atlas,revision,useSourceUV=false,repeatTexture=false,label="3D BODY PREVIEW",axisLabels=['Front','Sides','Roof']}:{mesh:MeshData|null;atlas:RefObject<HTMLCanvasElement|null>;revision:number;useSourceUV?:boolean;repeatTexture?:boolean;label?:string;axisLabels?:[string,string,string]}){
  const canvas=useRef<HTMLCanvasElement>(null),angle=useRef({yaw:-.7,pitch:.42}),drag=useRef<{x:number;y:number;yaw:number;pitch:number}|null>(null);
  useEffect(()=>{
@@ -18,7 +18,8 @@ export default function CarPreview({mesh,atlas,revision,useSourceUV=false,repeat
   }
   const bind=(name:string,data:Float32Array,size:number)=>{const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,data,gl.STATIC_DRAW);const a=gl.getAttribLocation(p,name);gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,size,gl.FLOAT,false,0,0)};
   gl.useProgram(p);bind("p",positions,3);bind("uv",uvs,2);const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.enable(gl.DEPTH_TEST);gl.enable(gl.CULL_FACE);
-  const draw=()=>{c.width=c.clientWidth*devicePixelRatio;c.height=c.clientHeight*devicePixelRatio;gl.viewport(0,0,c.width,c.height);gl.clearColor(.035,.055,.085,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.uniformMatrix4fv(gl.getUniformLocation(p,"m"),false,matrix(angle.current.yaw,angle.current.pitch,c.width/c.height));if(atlas.current){gl.bindTexture(gl.TEXTURE_2D,tex);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,textureUploadFlipY(useSourceUV));gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,atlas.current)}gl.drawArrays(gl.TRIANGLES,0,positions.length/3)};
+  const bounds=previewBounds(raw);
+  const draw=()=>{c.width=Math.max(1,c.clientWidth*devicePixelRatio);c.height=Math.max(1,c.clientHeight*devicePixelRatio);gl.viewport(0,0,c.width,c.height);gl.clearColor(.035,.055,.085,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.uniformMatrix4fv(gl.getUniformLocation(p,"m"),false,previewCamera(angle.current.yaw,angle.current.pitch,c.width/c.height,bounds.center,bounds.radius));if(atlas.current){gl.bindTexture(gl.TEXTURE_2D,tex);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,textureUploadFlipY(useSourceUV));gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,atlas.current)}gl.drawArrays(gl.TRIANGLES,0,positions.length/3)};
   if(repeatTexture){gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.REPEAT);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.REPEAT)}
   draw();(c as HTMLCanvasElement&{redraw?:()=>void}).redraw=draw;return()=>{delete (c as HTMLCanvasElement&{redraw?:()=>void}).redraw;gl.deleteProgram(p);gl.deleteTexture(tex);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT)}
  },[mesh,atlas,useSourceUV,repeatTexture]);

@@ -21,7 +21,8 @@ def fixture(root):
     (root/'manifest.json').write_text(json.dumps({'frame_count':1, 'input_archive':'sensor_input.npz'}))
     (root/'index.json').write_text(json.dumps({'frames':[{'frame':1,'timestamp':1.,'path':'samples/0000000001'}]}))
     (folder/'frame.json').write_text(json.dumps({'frame':1,'timestamp':1.,'model':None,
-        'actual_model_inputs':[],'synchronized':True,'missing':[]}))
+        'actual_model_inputs':[],'synchronized':True,'missing':[], 'sensor_frames':{},
+        'auxiliary_frames':{name:1 for name in (*CAMERAS,*('DEPTH_'+name for name in CAMERAS),'LIDAR','BEV_RGB')}}))
     calibration = {}
     raw = {}
     for name in CAMERAS:
@@ -41,12 +42,15 @@ def fixture(root):
 
 def main():
     cases = {}
-    for kind in ('valid','timestamp','depth_nan','missing_input','rgb_mismatch','count','extrinsics'):
+    for kind in ('valid','timestamp','sensor_frame','depth_nan','missing_input','rgb_mismatch','count','extrinsics'):
         with tempfile.TemporaryDirectory(prefix='carla-quality-fixture-') as temporary:
             root = Path(temporary)
             folder = fixture(root)
             if kind == 'timestamp':
                 meta=json.loads((folder/'frame.json').read_text());meta['timestamp']=2.
+                (folder/'frame.json').write_text(json.dumps(meta))
+            elif kind == 'sensor_frame':
+                meta=json.loads((folder/'frame.json').read_text());meta['auxiliary_frames']['LIDAR']=2
                 (folder/'frame.json').write_text(json.dumps(meta))
             elif kind == 'depth_nan':
                 np.save(folder/'DEPTH_CAM_FRONT.npy', np.full((2,2), np.nan, dtype=np.float32))

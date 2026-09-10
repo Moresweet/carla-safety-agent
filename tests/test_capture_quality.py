@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 
 from carla_safety_agent.capture_quality import audit_capture
-from carla_safety_agent.data_quality import validate_capture_index
+from carla_safety_agent.data_quality import validate_capture_index, validate_capture_frame
 
 
 def test_index_identity_and_count():
@@ -16,6 +16,17 @@ def test_index_identity_and_count():
     for count in (True, 0, 2, None):
         with pytest.raises(ValueError):
             validate_capture_index(entries, {'frame_count': count})
+
+
+def test_sensor_frame_summary_cannot_hide_misaligned_or_missing_sources():
+    entry={'frame':5,'timestamp':1.}
+    metadata={**entry,'synchronized':True,'missing':[],'actual_model_inputs':['CAM_FRONT'],
+              'sensor_frames':{'CAM_FRONT':5},'auxiliary_frames':{'LIDAR':5}}
+    validate_capture_frame(metadata,entry,['CAM_FRONT','LIDAR'])
+    for changed in ({'auxiliary_frames':{'LIDAR':4}}, {'sensor_frames':{}},
+                    {'sensor_frames':{'CAM_FRONT':True}}, {'auxiliary_frames':None}):
+        with pytest.raises(ValueError):
+            validate_capture_frame({**metadata,**changed},entry,['CAM_FRONT','LIDAR'])
 
 
 @pytest.mark.parametrize('code,state', [(0, 'passed'), (1, 'failed'), (-11, 'failed')])

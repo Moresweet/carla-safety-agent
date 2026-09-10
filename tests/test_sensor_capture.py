@@ -165,6 +165,7 @@ def test_standalone_capture_records_real_rig_arrays_without_model_claim(tmp_path
     model_manifest = dict(manifest, input_archive='model_input.npz')
     (capture.run/'manifest.json').write_text(json.dumps(model_manifest))
     model_meta = dict(meta, model='test-model', actual_model_inputs=[*CAMERAS, 'SPEED'],
+                      sensor_frames={name:meta['frame'] for name in (*CAMERAS,'SPEED')},
                       input_scalars={'SPEED': {'speed': 12.5}})
     (folder/'frame.json').write_text(json.dumps(model_meta))
     np.savez(folder/'model_input.npz', **{name:image for name in CAMERAS})

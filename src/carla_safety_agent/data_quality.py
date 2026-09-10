@@ -2,6 +2,29 @@
 import math
 
 
+def validate_capture_frame(metadata, entry, required_sensors):
+    """Verify source frame IDs instead of trusting the synchronized summary flag."""
+    frame=entry['frame']
+    timestamp=metadata.get('timestamp')
+    if (isinstance(metadata.get('frame'),bool) or not isinstance(metadata.get('frame'),int) or
+            isinstance(timestamp,bool) or not isinstance(timestamp,(int,float)) or not math.isfinite(timestamp) or
+            metadata.get('frame')!=frame or timestamp!=entry['timestamp'] or
+            metadata.get('synchronized') is not True or metadata.get('missing')!=[]):
+        raise ValueError('Sample/index identity or synchronization mismatch')
+    tables=[metadata.get('sensor_frames'),metadata.get('auxiliary_frames')]
+    if any(not isinstance(table,dict) for table in tables):
+        raise ValueError('Missing recorded sensor frame identities')
+    for table in tables:
+        if any(not isinstance(name,str) or not name or isinstance(value,bool) or
+               not isinstance(value,int) or value!=frame for name,value in table.items()):
+            raise ValueError('Recorded sensor frames are not synchronized')
+    present=set(tables[0])|set(tables[1])
+    if not set(required_sensors)<=present:
+        raise ValueError('Required sensor frame identity missing')
+    if not set(metadata.get('actual_model_inputs',[]))<=set(tables[0]):
+        raise ValueError('Model input frame identity missing')
+
+
 def validate_capture_index(entries, manifest):
     """Reject ambiguous sample identities before opening any indexed sample."""
     if not isinstance(entries, list) or not entries:

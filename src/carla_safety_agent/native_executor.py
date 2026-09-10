@@ -155,13 +155,11 @@ class NativeScenarioExecutor:
                 spawned = adapter._spawn_interaction_actor(carla, world, ego, actor, spec.family, index, actors)
                 adversaries.append(spawned)
             if spec.generated_map and spec.generated_map.realistic_environment:
-                scenery = adapter._spawn_environment(carla, world, ego, spec)
-                actors.extend(scenery)
+                adapter._spawn_environment(carla, world, ego, spec, actors)
             hazards = []
             for asset in spec.generated_assets:
-                created = adapter._spawn_generated_asset(carla, world, ego, asset)
+                created = adapter._spawn_generated_asset(carla, world, ego, asset, actors)
                 hazards.extend(created)
-                actors.extend(created)
 
             collision_bp = world.get_blueprint_library().find("sensor.other.collision")
             collision_sensor = world.spawn_actor(collision_bp, carla.Transform(), attach_to=ego)

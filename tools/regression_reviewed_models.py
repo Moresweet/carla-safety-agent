@@ -12,13 +12,19 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--models', nargs='+', choices=['uniad-tiny','uniad-base','vad','tcp','admlp'], required=True)
     parser.add_argument('--capture', action='store_true')
+    parser.add_argument('--description', default='Town04 前车急刹，自车 5 m/s')
+    parser.add_argument('--require-generated-assets', action='store_true')
     args=parser.parse_args()
     assert request('system/preflight')['ready']
     assert request('batches/scheduler')['scheduler']['state']!='running'
     rows=[]
     output=ROOT/'runs/validation'/('reviewed-models-'+uuid.uuid4().hex+'.json')
     for model in args.models:
-        plan=request('scenario/compile',{'description':'Town04 前车急刹，自车 5 m/s','max_duration_s':1})
+        plan=request('scenario/compile',{'description':args.description,'max_duration_s':1})
+        if args.require_generated_assets:
+            from pathlib import Path
+            document=json.loads(Path(plan['scenario_path']).read_text())
+            assert document.get('generated_assets'), 'Requested generated-asset fixture was not compiled'
         response=request('scenario/execute-plan',{'confirmed':True,'scenario_path':plan['scenario_path'],
             'scenario_sha256':plan['scenario_sha256'],'algorithm':model,'unified_capture':args.capture})
         execution=response['execution_id']
@@ -45,6 +51,11 @@ def main():
         world=client.get_world()
         assert not world.get_settings().synchronous_mode
         assert not list(world.get_actors().filter('sensor.*'))
+        if args.require_generated_assets:
+            from carla_safety_agent.owned_resources import read_resources,resource_path
+            resources=read_resources(resource_path(ROOT/'data',execution),session)
+            assert resources['state']=='recovered'
+            assert sum(row['type_id']=='static.prop.mesh' for row in resources['actors']) == sum(asset['count'] for asset in document['generated_assets'])
         rows.append({'model':model,'execution_id':execution,'capture_requested':args.capture,
                      'captures':[str(p) for p in captures],'cleanup_verified':True})
         output.write_text(json.dumps({'scope':'One-second native reviewed-plan routing, capture and cleanup; not driving quality','runs':rows},indent=2))

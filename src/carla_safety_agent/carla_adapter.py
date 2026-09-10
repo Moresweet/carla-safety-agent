@@ -110,13 +110,11 @@ class CarlaAdapter:
                 spawned = self._spawn_interaction_actor(carla, world, ego, a, spec.family, index, actors)
                 adversaries.append(spawned)
             if spec.generated_map and spec.generated_map.realistic_environment:
-                scenery = self._spawn_environment(carla, world, ego, spec)
-                actors.extend(scenery)
+                self._spawn_environment(carla, world, ego, spec, actors)
             generated_assets: list[Any] = []
             for asset_spec in spec.generated_assets:
-                spawned = self._spawn_generated_asset(carla, world, ego, asset_spec)
+                spawned = self._spawn_generated_asset(carla, world, ego, asset_spec, actors)
                 generated_assets.extend(spawned)
-                actors.extend(spawned)
             sensor_bp = world.get_blueprint_library().find("sensor.other.collision")
             sensor = world.spawn_actor(sensor_bp, carla.Transform(), attach_to=ego)
             actors.append(sensor)
@@ -303,7 +301,8 @@ class CarlaAdapter:
 
     @classmethod
     def _spawn_environment(
-        cls, carla: Any, world: Any, ego: Any, scenario: ScenarioSpec
+        cls, carla: Any, world: Any, ego: Any, scenario: ScenarioSpec,
+        owned: list[Any] | None = None
     ) -> list[Any]:
         """Build a deterministic roadside scene from CARLA's packaged assets."""
         config = scenario.generated_map
@@ -339,6 +338,8 @@ class CarlaAdapter:
                                          rng.uniform(0.75, 1.25))
             if actor:
                 actors.append(actor)
+                if owned is not None:
+                    owned.append(actor)
         for index in range(config.building_count):
             candidates = origin.next(22.0 + index * 22.0)
             if not candidates:
@@ -354,7 +355,9 @@ class CarlaAdapter:
             )
             if actor:
                 actors.append(actor)
-        actors.extend(cls._spawn_background_road_users(carla, world, origin, config, rng))
+                if owned is not None:
+                    owned.append(actor)
+        actors.extend(cls._spawn_background_road_users(carla, world, origin, config, rng, owned))
         return actors
 
     @staticmethod
@@ -369,7 +372,8 @@ class CarlaAdapter:
 
     @staticmethod
     def _spawn_background_road_users(
-        carla: Any, world: Any, origin: Any, config: Any, rng: random.Random
+        carla: Any, world: Any, origin: Any, config: Any, rng: random.Random,
+        owned: list[Any] | None = None
     ) -> list[Any]:
         library = world.get_blueprint_library()
         vehicles = sorted(library.filter("vehicle.*"), key=lambda bp: bp.id)
@@ -383,8 +387,10 @@ class CarlaAdapter:
             transform.location += transform.get_right_vector() * (3.5 if index % 2 else -3.5)
             actor = world.try_spawn_actor(vehicles[(index + 3) % len(vehicles)], transform)
             if actor:
-                actor.apply_control(carla.VehicleControl(hand_brake=True))
                 result.append(actor)
+                if owned is not None:
+                    owned.append(actor)
+                actor.apply_control(carla.VehicleControl(hand_brake=True))
         for index in range(config.pedestrian_count):
             candidates = origin.next(20.0 + index * 17.0)
             if not candidates:
@@ -399,11 +405,14 @@ class CarlaAdapter:
             actor = world.try_spawn_actor(walkers[index % len(walkers)], transform)
             if actor:
                 result.append(actor)
+                if owned is not None:
+                    owned.append(actor)
         return result
 
     @staticmethod
     def _spawn_generated_asset(
-        carla: Any, world: Any, ego: Any, spec: ProceduralAssetSpec
+        carla: Any, world: Any, ego: Any, spec: ProceduralAssetSpec,
+        owned: list[Any] | None = None
     ) -> list[Any]:
         if spec.shape not in {"metal_pipes", "concrete_barriers"}:
             raise RuntimeError(f"unsupported generated asset shape: {spec.shape}")
@@ -442,13 +451,17 @@ class CarlaAdapter:
                 )
                 actor = world.try_spawn_actor(blueprint, carla.Transform(location, barrier.rotation))
                 if actor is None:
-                    for previous in spawned:
-                        previous.destroy()
+                    if owned is None:
+                        for previous in spawned:
+                            previous.destroy()
                     raise RuntimeError(f"failed to spawn generated barrier {index}")
                 spawned.append(actor)
+                if owned is not None:
+                    owned.append(actor)
             if len(spawned) != spec.count:
-                for previous in spawned:
-                    previous.destroy()
+                if owned is None:
+                    for previous in spawned:
+                        previous.destroy()
                 raise RuntimeError("road ended before all generated barriers could be placed")
             return spawned
         diameter = width
@@ -473,10 +486,13 @@ class CarlaAdapter:
             )
             actor = world.try_spawn_actor(blueprint, carla.Transform(location, rotation))
             if actor is None:
-                for previous in spawned:
-                    previous.destroy()
+                if owned is None:
+                    for previous in spawned:
+                        previous.destroy()
                 raise RuntimeError(f"failed to spawn generated pipe {index}")
             spawned.append(actor)
+            if owned is not None:
+                owned.append(actor)
         return spawned
 
     @staticmethod

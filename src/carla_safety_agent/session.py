@@ -74,7 +74,13 @@ class SessionJournal:
     def owned_pid(self):
         with self.lock:
             identity = self.state.get('process')
-            if identity and process_identity(identity['pid']) == identity:
+            if identity is not None and (not isinstance(identity,dict) or set(identity)!={'pid','start_ticks'}
+                    or type(identity['pid']) is not int or identity['pid']<=0
+                    or not isinstance(identity['start_ticks'],str) or not identity['start_ticks'].isdigit()):
+                raise ValueError('Invalid persisted session process identity')
+            # Permission errors and malformed /proc records are not evidence
+            # that a tick owner exited. Propagate them before any recovery.
+            if identity and observed_process_identity(identity['pid']) == identity:
                 return identity['pid']
             return None
 
@@ -181,7 +187,7 @@ class SessionJournal:
 
     def attach(self, pid):
         # A very short-lived diagnostic may exit before /proc is read.
-        self.transition('running', process=process_identity(pid))
+        self.transition('running', process=observed_process_identity(pid))
 
     def reconcile(self):
         with self.lock:

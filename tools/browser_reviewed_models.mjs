@@ -618,6 +618,22 @@ try {
       await writeFile(join(output,'prediction-overlay.json'),JSON.stringify({count,trackText},null,2));
       interactions.push(count?'explicit_prediction_spatial_overlay_without_fake_timing':process.argv.includes('--warmup-no-prediction')?'warmup_does_not_fabricate_prediction':'legacy_prediction_not_silently_promoted');
     }
+    if(process.argv.includes('--six-views')){
+      for(const mode of ['RGB','深度']){
+        await evaluate(`[...document.querySelectorAll('.sensor-toolbar button')].find(b=>b.textContent===${JSON.stringify(mode==='RGB'?'六视角 RGB':'六视角深度')}).click()`);
+        let loaded=false;
+        for(let i=0;i<100;i++){
+          loaded=await evaluate(`(()=>{const images=[...document.querySelectorAll('.surround-grid .sensor-tile img')];return images.length===6&&images.every(i=>i.complete&&i.naturalWidth>0&&i.naturalHeight>0)})()`);
+          if(loaded)break;await delay(200);
+        }
+        assert(loaded,'Six saved '+mode+' views must load');
+        await evaluate(`document.querySelector('.surround-grid .sensor-tile').parentElement.scrollIntoView({block:'start'})`);
+        const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+        await writeFile(join(output,mode==='RGB'?'six-rgb.png':'six-depth.png'),Buffer.from(shot.data,'base64'));
+      }
+      interactions.push('six_rgb_and_six_depth_images_loaded_and_visually_captured');
+      await evaluate(`[...document.querySelectorAll('.sensor-toolbar button')].find(b=>b.textContent==='六视角 RGB').click()`);
+    }
     if(process.argv.includes('--depth-diagnostic')){
       await evaluate(`document.querySelector('input[aria-label="RGB点云投影"]').click()`);
       await delay(100);

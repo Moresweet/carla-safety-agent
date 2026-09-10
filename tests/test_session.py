@@ -8,7 +8,7 @@ def test_identity_does_not_match_recycled_pid(tmp_path):
     journal.begin('test', {'seed': 7})
     journal.attach(os.getpid())
     assert journal.owned_pid() == os.getpid()
-    journal.state['process']['start_ticks'] = 'invalid'
+    journal.state['process']['start_ticks'] = '0'
     assert journal.owned_pid() is None
     assert journal.reconcile()['state'] == 'recovering'
 

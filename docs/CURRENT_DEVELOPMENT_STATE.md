@@ -33,6 +33,7 @@
 - 最新尝试历史GUI增量：750项Python测试、TypeScript与生产构建通过；原生批次的停止/完成历史网页截图已查看。
 - [中断采集恢复](CAPTURE_RECOVERY.md)
 - [诊断片段归档](CAPTURE_EXCERPTS.md)：新增保存/ZIP下载/独立回放，规则与VAD真实录制验证通过；最新完整Python测试764项、TypeScript通过。
+- 后续S1：最新引擎VAD双向Town04/05换图及六RGB/深度/预测可视化通过；严格会话进程身份观察与规则worker SIGKILL恢复通过，最新774项Python测试。当前episode9525653911212935787，具体证据见计划尾部。
 - [项目包界面](PROJECT_BUNDLE_UI.md)、[迁移命令与不包含项](PROJECT_MIGRATION.md)
 - [预测空间契约](PREDICTION_SPATIAL_CONTRACT.md)
 

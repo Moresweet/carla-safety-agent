@@ -1,5 +1,4 @@
 """Path-confined local batch catalog for UI/API consumers."""
-import json
 import uuid
 from pathlib import Path
 from .scene_store import identifier
@@ -23,7 +22,7 @@ class BatchCatalog:
         path = self.directory(batch_id)/'queue.json'
         if path.is_symlink() or path.stat().st_size > 32*1024*1024:
             raise ValueError('Invalid batch state path or size')
-        state = json.loads(path.read_text())
+        state = ExperimentQueue(self.directory(batch_id)).read()
         summarize_queue(state)  # Verify plan identity and job/attempt association.
         return state
 

@@ -35,7 +35,7 @@ def atomic(path, payload):
     finally: os.close(descriptor)
 
 
-def read_json(path):
+def read_json(path, max_bytes=16*1024*1024):
     """Bounded regular-file reads; reject duplicate keys and special JSON numbers."""
     def pairs(items):
         result={}
@@ -48,10 +48,10 @@ def read_json(path):
     descriptor=os.open(path,os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(descriptor,'rb') as stream:
         info=os.fstat(stream.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_size>16*1024*1024:
+        if not stat.S_ISREG(info.st_mode) or info.st_size>max_bytes:
             raise ValueError('Invalid scene file type or size')
-        raw=stream.read(16*1024*1024+1)
-    if len(raw)>16*1024*1024: raise ValueError('Scene file exceeds size limit')
+        raw=stream.read(max_bytes+1)
+    if len(raw)>max_bytes: raise ValueError('Scene file exceeds size limit')
     return json.loads(raw,object_pairs_hook=pairs,parse_constant=invalid)
 
 

@@ -89,6 +89,8 @@ def verified_rule_metrics(execution, results_root):
 
 
 def summarize_queue(state, results_root=None):
+    from .queue_integrity import validate_ledger
+    validate_ledger(state)
     plan = state['plan']
     if compile_matrix(plan['dimensions']) != plan or hashlib.sha256(canonical(plan)).hexdigest() != state['plan_sha256']:
         raise ValueError('Queue plan identity mismatch')

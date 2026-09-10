@@ -1450,3 +1450,10 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 原子写改为唯一排他临时文件、文件flush/fsync、replace、目录fsync；新场景目录项同步父目录。发布head失败保留旧head及新版本供检查；replace后目录fsync失败明确提示可能已发布，不能假装回滚或盲重试。并非引擎/磁盘原子事务或所有断电情形保证，详见SCENE_STORAGE_INTEGRITY.md。
 - 现有92个可读head及其当前文档通过兼容检查。原生pedestrian-texture-versions-4270df4711a845b784dc1ba20fd2ff7e通过保存、重启、撤销/重做、重建273→279、纹理包校验和无关对象保持，棋盘格重建截图已查看；同episode异步零传感器。最后的当前head交叉校验和发布后错误提示增量由单测覆盖。
 - 完整Python测试730项通过，git diff --check通过；未修改前端布局，因此沿用上一提交通过的类型检查与生产构建。
+
+### S7增量：队列持久化完整性
+
+- CLI与HTTP共享严格队列读写校验：32MiB文件上限、重复JSON键与特殊非有限值拒绝；计划顺序不可改写、同一队列最多一个活动尝试、尝试/执行身份唯一、历史只能来自失败或停止、pending不能隐藏活动或完成尝试、最多20次尝试及有效结束证据。读写/暂停/调度均不修补损坏原件，目录页展示错误。
+- 排他临时文件flush/fsync、replace后目录fsync及新目录项同步；拒绝目录/队列/锁符号链接。并非引擎事务或恶意本机竞争的完整防护，详见BATCH_LEDGER_INTEGRITY.md。既有18批次通过兼容读取，747项Python测试通过。
+- 新实机batch-lost-response-20e9df7cbee644d18bbae2fad8285634通过响应丢失后绑定88713075578b4e5295e37fe64f772fc4、显式停止、保留旧attempt并重试c044a2acd2bb4b74b6b1cf941261adbd，第二项abb6d31deebb469cbe27e0afa8ab14d1仅一次。尝试数2/1，各成功录制20帧及14/14外参/原始数据通过，异步零传感器。
+- 网页efcb4fee-b24c-4c67-9c0e-d87c01ed2d3c只读验收通过：两个completed行、2/1尝试次数、完成任务重试按钮禁用、调度启动未确认；报告截图已查看。

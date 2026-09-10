@@ -29,6 +29,7 @@
 - [完整计划与按时间记录](DEVELOPMENT_PLAN.md)
 - [纹理版本边界](ACTOR_MATERIAL_VERSIONS.md)、[真实UV与视觉证据](SOURCE_UV_PREVIEW.md)
 - [场景历史完整性与写入失败边界](SCENE_STORAGE_INTEGRITY.md)：该增量后完整Python测试730项通过。
+- [批量队列完整性](BATCH_LEDGER_INTEGRITY.md)：后续队列增量完整Python测试747项通过，并有原生停止重试证据。
 - [中断采集恢复](CAPTURE_RECOVERY.md)
 - [项目包界面](PROJECT_BUNDLE_UI.md)、[迁移命令与不包含项](PROJECT_MIGRATION.md)
 - [预测空间契约](PREDICTION_SPATIAL_CONTRACT.md)

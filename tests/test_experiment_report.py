@@ -36,9 +36,10 @@ def test_valid_execution_cannot_be_assigned_to_wrong_queue_job(tmp_path, wrong):
     q.update_attempt(job, attempt, execution_id='run')
     request = {'batch_job_id': 'other' if wrong == 'job' else job,
                'batch_attempt_id': 'other' if wrong == 'attempt' else attempt}
-    q.update_attempt(job, attempt, execution_id='run', outcome='completed', result={
-        'source': 'session_journal', 'execution': {'run_id': 'run', 'configuration': {'request': request}}})
-    with pytest.raises(ValueError, match='another batch'): summarize_queue(q.read())
+    with pytest.raises(ValueError, match='another batch'):
+        q.update_attempt(job, attempt, execution_id='run', outcome='completed', result={
+            'source': 'session_journal', 'execution': {'run_id': 'run', 'configuration': {'request': request}}})
+    assert q.read()['jobs'][0]['state']=='running'
 
 
 @pytest.mark.parametrize('defect', [None, 'execution', 'scenario', 'metric', 'outside'])

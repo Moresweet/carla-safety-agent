@@ -6,8 +6,8 @@ must reconcile the actual session before deciding an attempt has ended.
 from contextlib import contextmanager
 import fcntl
 import hashlib
-import json
 import os
+import stat
 from pathlib import Path
 import time
 import uuid
@@ -18,11 +18,21 @@ from .experiment_matrix import canonical, compile_matrix
 class ExperimentQueue:
     def __init__(self, root):
         self.root = Path(root)
+        if self.root.is_symlink():raise ValueError('Queue directory must not be a symbolic link')
+        existed=self.root.exists()
         self.root.mkdir(parents=True, exist_ok=True)
+        if not existed:
+            descriptor=os.open(self.root.parent,os.O_RDONLY | os.O_DIRECTORY)
+            try:os.fsync(descriptor)
+            finally:os.close(descriptor)
 
     @contextmanager
     def locked(self):
-        with (self.root/'queue.lock').open('a') as lock:
+        path=self.root/'queue.lock'
+        if path.is_symlink() or self.root.is_symlink():raise ValueError('Queue locks must not use symbolic links')
+        descriptor=os.open(path,os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,0o600)
+        with os.fdopen(descriptor,'a') as lock:
+            if not stat.S_ISREG(os.fstat(lock.fileno()).st_mode):raise ValueError('Invalid queue lock type')
             fcntl.flock(lock, fcntl.LOCK_EX)
             try:
                 yield
@@ -30,13 +40,27 @@ class ExperimentQueue:
                 fcntl.flock(lock, fcntl.LOCK_UN)
 
     def read(self):
-        return json.loads((self.root/'queue.json').read_text())
+        from .scene_store import read_json
+        from .experiment_report import summarize_queue
+        state=read_json(self.root/'queue.json',max_bytes=32*1024*1024)
+        summarize_queue(state)
+        return state
 
     def write(self, state):
+        if (self.root/'queue.json').is_symlink():raise ValueError('Queue file must not be a symbolic link')
+        from .experiment_report import summarize_queue
+        summarize_queue(state)
+        payload=canonical(state)
+        if len(payload)>32*1024*1024:raise ValueError('Queue state exceeds size limit')
         temporary = self.root/('queue-'+uuid.uuid4().hex+'.tmp')
         with temporary.open('xb') as stream:
-            stream.write(canonical(state)); stream.flush(); os.fsync(stream.fileno())
+            stream.write(payload); stream.flush(); os.fsync(stream.fileno())
         temporary.replace(self.root/'queue.json')
+        descriptor=os.open(self.root,os.O_RDONLY | os.O_DIRECTORY)
+        try:os.fsync(descriptor)
+        except OSError as exc:
+            raise OSError('Queue state was replaced but directory sync failed; inspect before retrying') from exc
+        finally:os.close(descriptor)
 
     def create(self, dimensions):
         plan = compile_matrix(dimensions)

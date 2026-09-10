@@ -1,7 +1,7 @@
 "use client";
 import {useEffect,useRef,useState} from 'react';
 type Scene={scene_id:string;name:string;history:string[];version?:string};
-type Review={review_token:string;expires_in_s:number;map:string;episode:string;create_count:number;update_count:number;preserved_user_objects:number;weather_fields:string[];camera_changed:boolean;material_state_replaced:boolean;visibility_state_replaced:boolean};
+type Review={review_token:string;expires_in_s:number;map:string;episode:string;create_count:number;update_count:number;preserved_user_objects:number;weather_fields:string[];camera_changed:boolean;material_state_replaced:boolean;actor_material_state_replaced:boolean;actor_material_count:number;visibility_state_replaced:boolean};
 export default function BundleRestorePanel({bundleId,scenes,disabled,onBusy}:{bundleId:string;scenes:Scene[];disabled:boolean;onBusy:(busy:boolean)=>void}){
  const initial=scenes[0];
  const [selection,setSelection]=useState(initial?initial.scene_id+'/'+(initial.version??initial.history[0]):'');
@@ -24,7 +24,7 @@ export default function BundleRestorePanel({bundleId,scenes,disabled,onBusy}:{bu
  }
  return <section aria-label="项目包实景恢复">
   <h3>可选：恢复到当前实景</h3>
-  <p>这会修改正在运行的场景，与隔离导入不同。仅支持当前同名地图，不自动安装或注册源资产，不恢复旧式车辆/行人纹理。</p>
+  <p>这会修改正在运行的场景，与隔离导入不同。仅支持当前同名地图，不自动安装或注册源资产。车辆纹理版本目前仅支持工作台新增 Audi A2 的车身槽；其他车辆、行人及旧式纹理未纳入版本。</p>
   <label>包内场景版本<select aria-label="包内恢复版本" disabled={disabled} value={selection} onChange={e=>{setSelection(e.target.value);setReview(null);setConfirmed(false);setError('');setStatus('')}}>
    {scenes.flatMap(scene=>scene.history.map(version=><option key={scene.scene_id+'/'+version} value={scene.scene_id+'/'+version}>{scene.name} · {version}{version===scene.version?'（当前版本）':''}</option>))}
   </select></label>
@@ -34,6 +34,7 @@ export default function BundleRestorePanel({bundleId,scenes,disabled,onBusy}:{bu
    <p>创建 {review.create_count} 个对象 · 更新 {review.update_count} 个对象 · 保留其他 {review.preserved_user_objects} 个用户对象</p>
    <p>天气字段：{review.weather_fields.join('、')||'不修改'}；相机：{review.camera_changed?'修改':'不修改'}</p>
    <p>已纳管环境材质：{review.material_state_replaced?'整体恢复为选中版本（可能清除当前覆盖）':'保持'}；已纳管可见性：{review.visibility_state_replaced?'整体恢复为选中版本':'保持'}。</p>
+   <p>目标对象纹理：{review.actor_material_state_replaced?`恢复 ${review.actor_material_count} 个已纳管槽位；可能清除目标对象当前覆盖，无关对象保持不变`:'旧版本未记录，保持当前覆盖'}。</p>
    <label><input aria-label="确认实景恢复" type="checkbox" checked={confirmed} disabled={disabled} onChange={e=>setConfirmed(e.target.checked)}/>确认上述实景修改；先保存恢复前快照，不删除无关对象</label>
    <button disabled={disabled||!confirmed} onClick={()=>void run(true)}>确认恢复当前实景</button>
   </div>}

@@ -13,6 +13,7 @@ from .material_library import material_edits
 from .material_mesh import validate_preview
 from .scene_store import SceneStore, identifier, validate_scene
 from .blender_package import read_asset, import_asset
+from .actor_materials import actor_texture_digests
 
 LIMIT = 256 * 1024 * 1024
 SCHEMA = 'carla-project-bundle/1'
@@ -20,7 +21,7 @@ ENTRY = re.compile(r'(?:scenes/[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_-]{1,80}\.json|tex
 
 
 def _validate(files):
-    scenes = {}; maps = set(); blueprints = set(); slots = set(); textures = set()
+    scenes = {}; maps = set(); blueprints = set(); slots = set(); textures = set(); actor_slots=set();has_actor_materials=False
     for name, payload in files.items():
         if not ENTRY.fullmatch(name):
             raise ValueError('Unsupported bundle path')
@@ -50,6 +51,10 @@ def _validate(files):
             blueprints.update(obj['blueprint_id'] for obj in document['objects'])
             edits = material_edits(document.get('environment_materials', []))
             textures.update(edits.values())
+            textures.update(actor_texture_digests(document))
+            if 'actor_materials' in document:
+                has_actor_materials=True
+                actor_slots.update((record['blueprint_id'],record['component'],record['slot']) for record in document['actor_materials'])
             slots.update((document['map'], *key) for key in edits)
     if not scenes:
         raise ValueError('Bundle requires scenes')
@@ -76,6 +81,7 @@ def _validate(files):
             'material_slots': [list(slot) for slot in sorted(slots)],
             'external_assets_included': False, 'weights_included': False,
             'execution_history_included': False, 'datasets_included': False}
+    if has_actor_materials:dependencies['actor_material_slots']=[list(slot) for slot in sorted(actor_slots)]
     asset_files = {name for name in files if name.startswith('generated-assets/')}
     if asset_files:
         if 'generated-assets/index.json' not in files:
@@ -140,7 +146,7 @@ def export_bundle(scene_root, material_root, scene_ids, output, *, include_mater
                 name = f'scenes/{scene_id}/{identifier(version)}.json'
                 add(name, folder/(version+'.json'))
                 document = validate_scene(json.loads(files[name]))
-                for digest in material_edits(document.get('environment_materials', [])).values():
+                for digest in set(material_edits(document.get('environment_materials', [])).values())|actor_texture_digests(document):
                     texture = f'textures/{digest}.png'
                     if texture not in files: add(texture, Path(material_root)/texture)
     dependencies = _validate(files)

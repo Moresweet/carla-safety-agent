@@ -73,6 +73,9 @@ def validate_scene(document):
             if not finite_number(value) or value < 0 or (key == 'scale' and value == 0):
                 raise ValueError('Invalid mass or scale')
     document['objects'] = objects
+    if 'actor_materials' in document:
+        from .actor_materials import actor_material_edits
+        actor_material_edits(document['actor_materials'],objects)
     if 'spectator' in document: validate_transform(document['spectator'])
     weather = document.get('weather', {})
     if not isinstance(weather, dict) or not all(

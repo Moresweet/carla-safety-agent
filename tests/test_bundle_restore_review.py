@@ -87,3 +87,19 @@ def test_busy_world_refuses_confirmation_before_read_or_backup():
     env=functions('confirm_bundle_restore',connect_world=busy)
     with pytest.raises(RuntimeError,match='active execution'):
         env['confirm_bundle_restore']({'review_token':'x','confirmed':True})
+
+
+def test_actor_material_review_reports_clear_and_detects_changes():
+    selection,baseline,target,manifest=fixture();reviews=RestoreReviews()
+    baseline['actor_materials']=[{'stable_id':'a','texture':'first'},{'stable_id':'b','texture':'second'}]
+    target['actor_materials']=[]
+    review=reviews.issue(selection,manifest,target,baseline,10)
+    assert review['actor_material_state_replaced'] and review['actor_material_count']==0
+    baseline['actor_materials'].reverse()
+    reviews.consume({'review_token':review['review_token'],'confirmed':True},manifest,baseline,10)
+    review=reviews.issue(selection,manifest,target,baseline,10)
+    baseline['actor_materials'][0]['texture']='changed'
+    with pytest.raises(ValueError,match='Managed scene changed'):
+        reviews.consume({'review_token':review['review_token'],'confirmed':True},manifest,baseline,10)
+    del target['actor_materials']
+    assert not reviews.issue(selection,manifest,target,baseline,10)['actor_material_state_replaced']

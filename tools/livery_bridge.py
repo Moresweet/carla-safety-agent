@@ -1194,6 +1194,7 @@ def capture_scene_document():
     world = connect_world()
     provenance = _provenance.records(world.id)
     objects = []
+    actor_materials = []
     for actor in world.get_actors():
         record = provenance.get(str(actor.id), {})
         if record.get('origin') != 'user' or record.get('type_id') != actor.type_id:
@@ -1202,17 +1203,21 @@ def capture_scene_document():
                         'blueprint_id': record.get('blueprint_id', actor.type_id),
                         'transform': transform_record(actor.get_transform()),
                         'spawn_options': record.get('spawn_options', {})})
+        actor_materials.extend(record.get('actor_materials', []))
     weather = world.get_weather()
     weather_keys = ('cloudiness','precipitation','precipitation_deposits','wind_intensity',
                     'sun_azimuth_angle','sun_altitude_angle','fog_density','fog_distance',
                     'fog_falloff','wetness','scattering_intensity','mie_scattering_scale',
                     'rayleigh_scattering_scale','dust_storm')
     document = {'map': world.get_map().name, 'objects': objects,
+                'actor_materials': actor_materials,
                 'environment_materials': list(MATERIALS.overrides(world.id).values()),
                 'hidden_environment': VISIBILITY.records(world.id),
                 'weather': {k: float(getattr(weather,k)) for k in weather_keys},
                 'spectator': transform_record(world.get_spectator().get_transform()),
-                'limitations': ['Managed user actors, exact environment material slots and studio-managed visibility; legacy actor textures and external visibility changes not captured']}
+                'limitations': ['Managed user actors, exact environment material slots and studio-managed visibility; versioned actor textures currently cover managed Audi A2 VehicleMesh slot 4 only; legacy textures and external visibility changes not captured']}
+    from carla_safety_agent.actor_materials import actor_material_edits
+    actor_material_edits(actor_materials,objects)
     return document
 
 
@@ -1256,7 +1261,8 @@ def restore_bundle_scene(data):
              'document': json.loads(files[prefix+version+'.json'])}
     # Immutable content-addressed copies remain available for later scene saves.
     from carla_safety_agent.material_library import material_edits
-    for digest in set(material_edits(saved['document'].get('environment_materials', [])).values()):
+    from carla_safety_agent.actor_materials import actor_texture_digests
+    for digest in set(material_edits(saved['document'].get('environment_materials', [])).values())|actor_texture_digests(saved['document']):
         MATERIALS.put_texture(files['textures/'+digest+'.png'])
         MATERIALS.texture(digest)  # Reject a pre-existing corrupted destination.
     result = restore_scene_document(saved)
@@ -1285,7 +1291,8 @@ def confirm_bundle_restore(data):
     backup=SCENES.save(baseline,'项目包恢复前自动快照')
     try:
         from carla_safety_agent.material_library import material_edits
-        for digest in set(material_edits(saved['document'].get('environment_materials',[])).values()):
+        from carla_safety_agent.actor_materials import actor_texture_digests
+        for digest in set(material_edits(saved['document'].get('environment_materials',[])).values())|actor_texture_digests(saved['document']):
             MATERIALS.put_texture(files['textures/'+digest+'.png'])
             MATERIALS.texture(digest)
         result=restore_scene_document(saved)
@@ -1310,6 +1317,7 @@ def restore_scene_document(saved):
             world.get_blueprint_library().find(blueprint)
     provenance = _provenance.records(world.id)
     live = live_scene_bindings(world, provenance)
+    actor_material_transaction = prepare_scene_actor_materials(world,document,live,provenance) if 'actor_materials' in document else None
     created, moved = [], []
     previous_weather, previous_view = world.get_weather(), world.get_spectator().get_transform()
     # Validate native properties before the first spawn, move or material edit.
@@ -1342,6 +1350,8 @@ def restore_scene_document(saved):
                                  spawn_options=obj.get('spawn_options', {}))
                 live[obj['stable_id']] = actor
         world.set_weather(weather)
+        if actor_material_transaction:
+            actor_material_transaction.apply()
         if material_transaction:
             material_transaction.apply()
         if visibility_transaction:
@@ -1355,6 +1365,9 @@ def restore_scene_document(saved):
             except Exception as exc: recovery_errors.append(str(exc))
         if material_transaction:
             try: material_transaction.rollback()
+            except Exception as exc: recovery_errors.append(str(exc))
+        if actor_material_transaction:
+            try: actor_material_transaction.rollback()
             except Exception as exc: recovery_errors.append(str(exc))
         for actor, transform in reversed(moved):
             try: actor.set_transform(transform)
@@ -1371,7 +1384,7 @@ def restore_scene_document(saved):
         raise
     return {'ok': True, **saved, 'restored': len(document['objects']), 'spawned': len(created),
             'bindings': {obj['stable_id']: live[obj['stable_id']].id for obj in document['objects']},
-            'mode': 'merge', 'note': 'Unrelated actors preserved; managed environment materials and visibility restored; legacy actor textures not restored'}
+            'mode': 'merge', 'note': 'Unrelated actors preserved; managed environment materials and visibility restored; recorded Audi A2 body textures restored for selected objects only; legacy actor textures not restored'}
 
 
 def live_scene_bindings(world, provenance):
@@ -1402,6 +1415,64 @@ def prepare_scene_visibility(world, document):
         VISIBILITY.record(world.id, record['object_id'], record['name'], visible)
     return VisibilityTransaction(VISIBILITY.records(world.id), document['hidden_environment'],
                                  lambda number: find_environment(world, number)[1].name, apply)
+
+
+def prepare_scene_actor_materials(world, document, live, provenance, native_textures=None):
+    from carla_safety_agent.actor_materials import actor_material_edits, transaction_records, SUPPORTED
+    desired=document['actor_materials']
+    actor_material_edits(desired,document['objects'])
+    selected={obj['stable_id']:obj for obj in document['objects']}
+    previous=[]
+    for stable in selected:
+        actor=live.get(stable)
+        if actor is not None:previous.extend(provenance[str(actor.id)].get('actor_materials',[]))
+    actor_material_edits(previous,document['objects'])
+    payloads={};textures={} if native_textures is None else dict(native_textures)
+    def apply(key,digest):
+        stable,component,slot=key
+        actor=live[stable]
+        record=_provenance.records(world.id).get(str(actor.id),{})
+        model=selected[stable]['blueprint_id']
+        if record.get('origin')!='user' or record.get('stable_id')!=stable or record.get('type_id')!=actor.type_id or actor.type_id!=model:
+            raise ValueError('Actor material identity changed; refusing another object')
+        target=runtime_name_for_actor(world,actor)
+        if digest is None:
+            texture,operation=carla.TextureColor(1,1),'restore';records=[]
+        else:
+            if digest not in textures:
+                _,textures[digest]=decode_texture(payloads[digest],(SUPPORTED[model][2],)*2)
+            texture,operation=textures[digest],'apply'
+            records=[{'stable_id':stable,'blueprint_id':model,'component':component,'slot':slot,'texture':digest}]
+        world.apply_color_texture_to_object(f'{target}|csa|{component}|{slot}|{operation}',carla.MaterialParameter.Diffuse,texture)
+        _provenance.bind(world.id,actor,stable,actor_materials=records)
+    transaction=MaterialTransaction(transaction_records(previous),transaction_records(desired),apply)
+    for stable,_,_ in transaction.changed:
+        if stable in live:runtime_name_for_actor(world,live[stable])
+    for digest in set(transaction.before.values())|set(transaction.desired.values()):
+        payloads[digest]=MATERIALS.texture(digest)
+        with Image.open(io.BytesIO(payloads[digest])) as image:image.verify()
+    return transaction
+
+
+def apply_versioned_livery(world,actor,image,texture):
+    from carla_safety_agent.actor_materials import SUPPORTED
+    record=_provenance.records(world.id).get(str(actor.id),{})
+    if record.get('origin')!='user' or record.get('type_id')!=actor.type_id:
+        raise ValueError('Versioned actor textures require a managed user object')
+    stable=record['stable_id'];component,slot,_=SUPPORTED[actor.type_id]
+    payload=io.BytesIO();image.save(payload,format='PNG')
+    digest=MATERIALS.put_texture(payload.getvalue())
+    document={'objects':[{'stable_id':stable,'blueprint_id':actor.type_id}],
+        'actor_materials':[{'stable_id':stable,'blueprint_id':actor.type_id,'component':component,'slot':slot,'texture':digest}]}
+    transaction=prepare_scene_actor_materials(world,document,{stable:actor},{str(actor.id):record},{digest:texture})
+    try:transaction.apply()
+    except Exception as original:
+        try:transaction.rollback()
+        except Exception as recovery:
+            raise RuntimeError(f'Actor texture failed: {original}; recovery incomplete for actor {actor.id}: {recovery}') from original
+        raise
+    return {'ok':True,'actor_id':actor.id,'type_id':actor.type_id,'object_name':runtime_name_for_actor(world,actor),
+            'texture':digest,'versionable':True,'component':component,'material_slot':slot,'resolution':list(image.size)}
 
 
 def prepare_scene_materials(world, document, previous=None):
@@ -1799,6 +1870,10 @@ def apply_livery(payload: bytes, actor_id: int | None = None) -> dict:
         raise RuntimeError("Select a running vehicle before applying a texture")
     if not actor.type_id.startswith("vehicle."):
         raise RuntimeError(f"Actor {actor.id} is not a vehicle")
+    if actor.type_id=='vehicle.audi.a2':
+        record=_provenance.records(world.id).get(str(actor.id),{})
+        if record.get('origin')=='user' and record.get('type_id')==actor.type_id:
+            return apply_versioned_livery(world,actor,image,texture)
     target = runtime_name_for_actor(world, actor)
     world.apply_color_texture_to_object(
         target, carla.MaterialParameter.Diffuse, texture)

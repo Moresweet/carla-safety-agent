@@ -46,6 +46,9 @@ def diagnose(manifest, client, material_root):
                 except (OSError, ValueError, TypeError, KeyError) as exc:
                     check.update(state='missing', reason=f'Preview unavailable: {exc}')
         checks.append(check)
+    for slot in required.get('actor_material_slots',[]):
+        checks.append({'kind':'actor_material_slot','reference':slot,'state':'not_checked',
+                       'reason':'Actor template slot compatibility is checked during restore; source blueprint enumeration is insufficient'})
     for model in required.get('model_ids', []):
         checks.append({'kind':'model_files','reference':model,'state':'not_checked',
                        'reason':'Supply relocated roots to runtime_reference.py verify; scene diagnostics never load weights or execute configs'})

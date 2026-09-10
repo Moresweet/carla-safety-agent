@@ -11,7 +11,7 @@ def digest(value):
 
 def baseline_digest(document):
     value=dict(document)
-    for key in ('objects','environment_materials','hidden_environment'):
+    for key in ('objects','environment_materials','hidden_environment','actor_materials'):
         if key in value:value[key]=sorted(value[key],key=digest)
     return digest(value)
 
@@ -39,6 +39,8 @@ class RestoreReviews:
             'weather_fields':sorted(document.get('weather',{})),
             'camera_changed':'spectator' in document,
             'material_state_replaced':'environment_materials' in document,
+            'actor_material_state_replaced':'actor_materials' in document,
+            'actor_material_count':len(document.get('actor_materials',[])),
             'visibility_state_replaced':'hidden_environment' in document,
             'live_world_modified':False,'dependency_preflight_completed':False}
 

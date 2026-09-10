@@ -1,10 +1,13 @@
 """Own one test prop, restore it through real browser consent, then clean it up."""
 import argparse
 import json
+import math
 import subprocess
+import time
 import uuid
 import urllib.request
 import urllib.error
+from pathlib import Path
 import carla
 from regression_scene_versions import ROOT,request
 from carla_safety_agent.provenance import ActorProvenance
@@ -13,7 +16,11 @@ from carla_safety_agent.world_health import observe_idle
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--node',required=True)
+    parser.add_argument('--vehicle-atlas',type=Path,help='Test a versioned Audi body texture instead of a prop')
     args=parser.parse_args()
+    if args.vehicle_atlas:
+        args.vehicle_atlas=args.vehicle_atlas.resolve()
+        assert ROOT/'runs/validation' in args.vehicle_atlas.parents and args.vehicle_atlas.is_file()
     assert request('system/preflight')['ready']
     assert request('batches/scheduler')['scheduler']['state']!='running'
     session=request('session/status')['session']['run_id']
@@ -24,9 +31,18 @@ def main():
     output=ROOT/'runs/validation'/('browser-bundle-restore-'+uuid.uuid4().hex);output.mkdir()
     report={'state':'started','before':before};owned=set();stable=None
     try:
-        original=request('objects/spawn',{'blueprint_id':'static.prop.advertisement',
-            'transform':{'location':{'x':393.098,'y':-228.088,'z':2.5}}})['object']
+        pose={'location':{'x':393.098,'y':-228.088,'z':2.5}}
+        if args.vehicle_atlas:
+            spawn=world.get_map().get_spawn_points()[0]
+            pose={'location':{'x':spawn.location.x,'y':spawn.location.y,'z':spawn.location.z+.5},
+                  'rotation':{'yaw':spawn.rotation.yaw}}
+        original=request('objects/spawn',{'blueprint_id':'vehicle.audi.a2' if args.vehicle_atlas else 'static.prop.advertisement',
+            'transform':pose})['object']
         owned.add(original['id'])
+        if args.vehicle_atlas:
+            from regression_material_slots import request as raw_request
+            applied=raw_request('/apply?actor_id='+str(original['id']),args.vehicle_atlas.read_bytes())
+            assert applied['versionable'] is True
         saved=request('scenes/save',{'name':'浏览器恢复专用测试对象'})
         added=[obj for obj in saved['document']['objects'] if obj['stable_id'] not in baseline_ids]
         assert len(added)==1
@@ -47,12 +63,25 @@ def main():
         location=actor.get_location()
         assert all(abs(getattr(location,key)-value)<.02 for key,value in target['transform']['location'].items())
         request('focus/actor',{'actor_id':actor.id})
+        if args.vehicle_atlas:
+            transform=actor.get_transform()
+            center=carla.Location(**{key:getattr(actor.bounding_box.location,key) for key in ('x','y','z')})
+            transform.transform(center)
+            eye=center+transform.get_forward_vector()*4.5+transform.get_right_vector()*5+carla.Location(z=1.7)
+            delta=center-eye
+            world.get_spectator().set_transform(carla.Transform(eye,carla.Rotation(
+                pitch=math.degrees(math.atan2(delta.z,math.hypot(delta.x,delta.y))),
+                yaw=math.degrees(math.atan2(delta.y,delta.x)))))
+            time.sleep(.5)
         with urllib.request.urlopen('http://127.0.0.1:8765/scene/preview',timeout=30) as response:
             (output/'restored-object.jpg').write_bytes(response.read())
-        from pathlib import Path
         browser_report=json.loads((Path(browser['output'])/'bundle-report.json').read_text())
         selection={'bundle_id':browser_report['uploadedId'],'scene_id':saved['head']['scene_id'],'version':saved['head']['version']}
         review=request('projects/bundle/restore-preview',selection)
+        if args.vehicle_atlas:
+            assert review['actor_material_state_replaced'] and review['actor_material_count']>=1
+            assert records[str(actor.id)]['actor_materials'][0]['texture']==applied['texture']
+            report['restored_texture']=applied['texture']
         approval={'review_token':review['review_token'],'confirmed':True}
         camera=world.get_spectator().get_transform()
         ids={item.id for item in world.get_actors()}

@@ -1,7 +1,9 @@
 // Local isolated Chrome QA. Never launches a model. --stop-run explicitly stops
 // one owned execution; --audit-dataset scans saved files without simulator RPC.
 // --apply-pedestrian explicitly applies a texture to the supplied walker ID.
-// Other modes only read UI/data or compile a plan.
+// --transform-draft explicitly moves the supplied fixture unless baseline-only.
+// Handoff, bundle restore/registration, excerpt and recovery flags explicitly
+// execute their named workflow; default mode only inspects UI/model selection.
 import {spawn} from 'node:child_process';
 import {mkdtemp,readFile,writeFile,mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -62,6 +64,70 @@ try {
   const state=await evaluate(`(()=>{const section=document.querySelector('[aria-label="确认计划并选择模型"]');return {buttons:[...section.querySelectorAll('button')].map(b=>({text:b.textContent,disabled:b.disabled})),checkboxes:[...section.querySelectorAll('input')].map(b=>({checked:b.checked,disabled:b.disabled}))}})()`);
   assert(state.buttons[0].disabled,'Unreviewed plan must not start');
   const interactions=[];
+  const draftFlag=process.argv.indexOf('--transform-draft');
+  if(draftFlag>=0){
+    const actor=Number(process.argv[draftFlag+1]);assert(Number.isSafeInteger(actor)&&actor>0);
+    await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Edit World').click()`);
+    let ready=false;
+    for(let i=0;i<100;i++){
+      ready=await evaluate(`!![...document.querySelectorAll('.catalog-groups button')].find(b=>b.querySelector('span')?.textContent==='spawned props')`);
+      if(ready)break;await delay(200);
+    }
+    assert(ready);await evaluate(`[...document.querySelectorAll('.catalog-groups button')].find(b=>b.querySelector('span')?.textContent==='spawned props').click()`);
+    for(let i=0;i<100;i++){
+      ready=await evaluate(`[...document.querySelectorAll('.catalog-list select[size] option')].some(o=>o.value==='actor:${actor}')`);
+      if(ready)break;await delay(200);
+    }
+    assert(ready);await evaluate(`(()=>{const s=document.querySelector('.catalog-list select[size]');s.value='actor:${actor}';s.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+    await delay(400);
+    const original=await evaluate(`Number(document.querySelector('.transform-grid input').value)`);
+    const wanted=String(original+1.25);
+    const enter=async value=>evaluate(`(()=>{const e=document.querySelector('.transform-grid input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,${JSON.stringify(value)});e.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await enter(wanted);await delay(100);
+    assert.equal(await evaluate(`document.querySelector('.transform-grid input').value`),wanted,'Input was not entered');
+    await delay(4600);
+    const observed=await evaluate(`document.querySelector('.transform-grid input').value`);
+    if(process.argv.includes('--expect-draft-reset'))assert.equal(Number(observed),original,'Expected baseline reset was not reproduced');
+    else {
+      assert.equal(observed,wanted,'Polling overwrote unsaved transform');
+      await enter('');await delay(100);
+      assert(await evaluate(`[...document.querySelectorAll('.object-inspector button')].find(b=>b.textContent==='Apply transform').disabled`),'Empty coordinate must not become zero');
+      await enter(wanted);await delay(100);
+      let updateRequests=0,injected=false;
+      await cdp('Network.enable');
+      socket.addEventListener('message',event=>{const value=JSON.parse(event.data);if(value.method==='Network.requestWillBeSent'&&value.params.request.method==='POST'&&value.params.request.url.endsWith('/objects/update'))updateRequests++});
+      await cdp('Fetch.enable',{patterns:[{urlPattern:'*://127.0.0.1:8765/objects/update',requestStage:'Request'}]});
+      const intercept=async event=>{const value=JSON.parse(event.data);if(value.method!=='Fetch.requestPaused')return;const p=value.params;
+        if(p.request.method==='POST'&&!injected){injected=true;await cdp('Fetch.fulfillRequest',{requestId:p.requestId,responseCode:400,responseHeaders:[{name:'Content-Type',value:'application/json'},{name:'Access-Control-Allow-Origin',value:'*'}],body:Buffer.from(JSON.stringify({error:'Injected transform rejection for draft regression'})).toString('base64')})}
+        else await cdp('Fetch.continueRequest',{requestId:p.requestId});
+      };
+      socket.addEventListener('message',intercept);
+      await evaluate(`[...document.querySelectorAll('.object-inspector button')].find(b=>b.textContent==='Apply transform').click()`);
+      for(let i=0;i<100;i++){ready=await evaluate(`document.querySelector('.manager-head').textContent.includes('Injected transform rejection')`);if(ready)break;await delay(100)}
+      assert(ready&&injected,'Injected rejection was not reported');
+      await cdp('Fetch.disable');socket.removeEventListener('message',intercept);
+      await delay(2500);
+      assert.equal(await evaluate(`document.querySelector('.transform-grid input').value`),wanted,'Failure lost draft');
+      assert(await evaluate(`document.querySelector('.manager-head').textContent.includes('Injected transform rejection')`),'Polling hid operation failure');
+      assert.equal(updateRequests,1,'Failure retried without explicit action');
+      await evaluate(`(()=>{const b=[...document.querySelectorAll('.object-inspector button')].find(b=>b.textContent==='Apply transform');b.click();b.click()})()`);
+      for(let i=0;i<100;i++){
+        const catalog=await(await fetch('http://127.0.0.1:8765/catalog/objects?category=spawned_props')).json();
+        ready=Math.abs(catalog.objects.find(o=>o.id===actor)?.location.x-Number(wanted))<.01;
+        if(ready)break;await delay(200);
+      }
+      assert(ready,'Explicit transform was not applied');await delay(2500);
+      assert.equal(updateRequests,2,'Double click submitted more than one retry');
+      await enter(String(original+2.5));await delay(100);
+      await evaluate(`[...document.querySelectorAll('.object-inspector button')].find(b=>b.textContent==='放弃草稿，读取最新位置').click()`);
+      await delay(100);assert.equal(Number(await evaluate(`document.querySelector('.transform-grid input').value`)),Number(wanted));
+    }
+    await evaluate(`document.querySelector('.object-inspector').scrollIntoView({block:'center'})`);
+    const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+    await writeFile(join(output,'transform-draft.png'),Buffer.from(shot.data,'base64'));
+    await writeFile(join(output,'transform-draft.json'),JSON.stringify({actor,original,wanted,observed,baseline:process.argv.includes('--expect-draft-reset')},null,2));
+    interactions.push(process.argv.includes('--expect-draft-reset')?'baseline_polling_draft_loss_reproduced':'draft_survives_polling_empty_and_failed_apply_preserved_no_auto_retry_double_click_guard_and_discard_verified');
+  }
   const handoffFlag=process.argv.indexOf('--handoff-scene');
   if(handoffFlag>=0){
     const sceneId=process.argv[handoffFlag+1];assert(/^[a-f0-9]{32}$/.test(sceneId));

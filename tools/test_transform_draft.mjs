@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import {parseTransformFields,transformFields} from './livery-designer/app/transformDraft.ts';
+const live={location:{x:1,y:2,z:3},rotation:{yaw:4}};
+const fields=transformFields(live);
+assert.deepEqual(parseTransformFields(fields),{location:{x:1,y:2,z:3},rotation:{yaw:4}});
+for(const key of ['x','y','z','yaw'])for(const invalid of ['',' ','NaN','Infinity','1e999','-'])assert.equal(parseTransformFields({...fields,[key]:invalid}),null);
+assert.equal(parseTransformFields({...fields,x:'0'}).location.x,0);
+assert.equal(parseTransformFields({...fields,x:'-0.25'}).location.x,-.25);
+assert.equal(transformFields({location:live.location}).yaw,'0');
+const draft={...fields,x:'8'};live.location.x=9;
+assert.equal(draft.x,'8');assert.equal(transformFields(live).x,'9');
+console.log('PASS: finite transform fields, explicit zero, independent draft and live values');

@@ -15,8 +15,11 @@ PYTHONPATH=src python3 tools/recover_capture.py CAPTURE_ID --confirm-copy
 Add `--install-replay` to publish the verified copy under a new `recovered-*`
 dataset ID in the local playback catalog. Without that option, copies stay in
 `.runtime/capture-recovery`. The original and failed attempts are retained.
-This is currently a command-line recovery action; the web UI can play and
-reaudit a published copy but does not yet launch recovery.
+The web data page also offers an explicitly confirmed recovery action for
+interrupted datasets. It creates and audits a copy in a background job, then
+offers a button to open it in playback. Request IDs prevent duplicate delivery
+from repeating the same recovery. Reloading the same browser tab resumes status
+lookup; interrupted bridge workers require inspection rather than automatic retry.
 
 Recovery reconstructs a canonical index from committed frame metadata rather
 than trusting the interrupted index or manifest count. Directories without
@@ -53,3 +56,20 @@ No new native capture or scene mutation was performed for this recovery test.
 Browser `06516971-cd34-48af-8d5a-01095d5b6f88` subsequently clicked the raw-data
 audit button and observed a fresh passing report; screenshot inspected. Python
 suite: 680 passing tests. Type checking and production build also passed.
+
+## Browser recovery launch
+
+`browser-models-1f2923b8-24ad-4f89-bbe1-8be96cc88c8f` confirmed recovery of the
+original interrupted dataset, opened `recovered-d591b839253244fa8f0c830491dfbb4c`
+and performed a fresh passing raw-data audit. Request
+`5ccc6d4b71ae44d5ba8d8a9bf7ab2429` is recorded in `.runtime/dataset-recovery`.
+Completion screenshot inspected. Full Python suite: 685 passed; types passed.
+
+Initial browser testing exposed duplicate React keys between recovery, quality
+and replay-event siblings: catalog polling duplicated panels and lost effective
+confirmation state, without submitting a backend recovery. Keys now include the
+component identity. Regression waits for catalog polling and checks that each
+recovery/quality panel occurs exactly once before confirming.
+The failed first run is retained as
+`browser-models-732ad827-71ac-4927-98e6-aa0c3904c055` (recovery never started,
+probe timed out); it is not counted as successful recovery.

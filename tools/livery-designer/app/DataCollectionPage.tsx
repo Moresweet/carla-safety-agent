@@ -5,6 +5,7 @@ import SensorRigControls from "./SensorRigControls";
 import ReplayEvents from "./ReplayEvents";
 import ReplayQuality, {type TemporalQuality} from './ReplayQuality';
 import CaptureQuality from './CaptureQuality';
+import CaptureRecovery from './CaptureRecovery';
 const bridge="http://127.0.0.1:8765";
 type Dataset={run_id:string;scenario_id:string;status:string;map:string;frame_count:number;replay?:boolean;skipped_frames?:number;manifest_path:string;recovery?:{source_run_id:string;omitted_uncommitted_tail:string[]}};
 type Entry={frame:number;timestamp:number};
@@ -24,8 +25,9 @@ export default function DataCollectionPage(){
  {selected&&<section className="replay-controls"><button disabled={!index.length||quality?.runId!==selected} onClick={()=>{if(position>=index.length-1)setPosition(0);setPlaying(v=>!v)}}>{playing?"暂停":"播放"}</button><button disabled={!position} onClick={()=>{setPlaying(false);setPosition(v=>v-1)}}>上一帧</button><button disabled={position>=index.length-1} onClick={()=>{setPlaying(false);setPosition(v=>v+1)}}>下一帧</button><input aria-label="回放时间轴" type="range" min={0} max={Math.max(0,index.length-1)} value={position} onChange={e=>{setPlaying(false);setPosition(+e.target.value)}}/><select aria-label="播放速度" value={speed} onChange={e=>setSpeed(+e.target.value)}>{[.25,.5,1,2,4].map(s=><option key={s} value={s}>{s}×</option>)}</select><span>{index.length?position+1:0} / {index.length} 帧</span><p>{dataset?.manifest_path} · 跳过不同步帧 {dataset?.skipped_frames??0}</p>{visibleFrame&&<a href={bridge+"/datasets/file?run_id="+encodeURIComponent(selected)+"&frame="+visibleFrame.frame+"&name="+encodeURIComponent(visibleFrame.input_archive??"model_input.npz")} download>下载当前帧原始输入 NPZ</a>}</section>}
  {dataset?.recovery&&<p role="note" aria-label="中断采集恢复提示">这是中断采集的恢复副本，不是完整录制。来源：{dataset.recovery.source_run_id}；排除 {dataset.recovery.omitted_uncommitted_tail.length} 个未提交尾帧目录，原始目录保留。可回放已验证样本，不能据此认定任务正常完成；暂不允许自动加入训练划分。</p>}
  {selected&&<ReplayQuality quality={quality?.runId===selected?quality.value:null}/>}
- {selected&&<CaptureQuality key={selected} runId={selected}/>}
- {selected&&<ReplayEvents key={selected} runId={selected} onSeek={target=>{
+ {selected&&<CaptureQuality key={'quality:'+selected} runId={selected}/>}
+ {dataset&&['recording','saved_cleanup_error'].includes(dataset.status)&&<CaptureRecovery key={'recovery:'+selected} runId={selected} onRecovered={id=>{void refresh();setSelected(id)}}/>}
+ {selected&&<ReplayEvents key={'events:'+selected} runId={selected} onSeek={target=>{
   const next=index.findIndex(entry=>entry.frame===target);
   if(next<0){setStatus('该片段不在当前回放索引中，请重新选择数据集');return}
   setPlaying(false);if(next!==position)setFrame(null);setPosition(next);

@@ -30,6 +30,7 @@ from carla_safety_agent.benchmark_catalog import algorithm_catalog, benchmark_re
 from carla_safety_agent.blender_pipeline import BlenderPipeline
 from carla_safety_agent.dataset import list_datasets
 from carla_safety_agent.quality_service import QualityService
+from carla_safety_agent.recovery_service import RecoveryService
 from carla_safety_agent.provenance import ActorProvenance
 from carla_safety_agent.uv_audit import audit_uv
 from carla_safety_agent.replay import replay_index, replay_file, replay_projection, replay_trajectory, replay_events, replay_editor_events, replay_boxes
@@ -108,6 +109,8 @@ UNIAD_PYTHON = Path(os.environ.get(
     "UNIAD_PYTHON", str(E2E_ROOT / "miniconda3/envs/uniad-cu128/bin/python")))
 QUALITY = QualityService(DATASET_ROOT, PROJECT_ROOT / '.runtime/dataset-quality',
                          PROJECT_ROOT / 'tools/validate_capture_dataset.py', UNIAD_PYTHON)
+RECOVERY = RecoveryService(DATASET_ROOT, PROJECT_ROOT / '.runtime/dataset-recovery',PROJECT_ROOT/'data',
+                           PROJECT_ROOT/'tools/validate_capture_dataset.py',UNIAD_PYTHON)
 BLENDER = BlenderPipeline(PROJECT_ROOT)
 SESSION = SessionJournal(PROJECT_ROOT / 'data')
 BATCHES = BatchCatalog(PROJECT_ROOT / 'data/experiment-queues')
@@ -2104,9 +2107,10 @@ class Handler(BaseHTTPRequestHandler):
             self._headers()
             self.wfile.write(json.dumps(result).encode())
             return
-        if request.path == '/datasets/quality':
+        if request.path in ('/datasets/quality','/datasets/recovery'):
             try:
-                result = QUALITY.status(params.get('run_id', [''])[0])
+                result = (QUALITY.status(params.get('run_id', [''])[0]) if request.path=='/datasets/quality'
+                          else RECOVERY.status(params.get('request_id',[''])[0]))
                 self._headers()
                 self.wfile.write(json.dumps({'ok': True, **result}).encode())
             except (ValueError, OSError) as exc:
@@ -2287,7 +2291,7 @@ class Handler(BaseHTTPRequestHandler):
         if request.path not in ("/apply", "/apply/road", "/apply/building",
                                 '/projects/bundle/export','/projects/bundle/upload','/projects/bundle/import','/projects/bundle/doctor',
                                 '/projects/bundle/restore-preview','/projects/bundle/restore-confirm',
-                                '/batches/create', '/datasets/quality',
+                                '/batches/create', '/datasets/quality', '/datasets/recovery',
                                 '/batches/control',
                                 '/batches/scheduler',
                                 "/apply/environment",
@@ -2325,6 +2329,8 @@ class Handler(BaseHTTPRequestHandler):
                 result=preview_bundle_restore(json.loads(payload or b'{}'))
             elif request.path == '/projects/bundle/restore-confirm':
                 result=confirm_bundle_restore(json.loads(payload or b'{}'))
+            elif request.path == '/datasets/recovery':
+                result={'ok':True,**RECOVERY.start(json.loads(payload or b'{}'))}
             elif request.path == '/datasets/quality':
                 data = json.loads(payload or b'{}')
                 if not isinstance(data, dict) or set(data) != {'run_id'}:

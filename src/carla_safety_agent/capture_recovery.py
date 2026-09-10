@@ -52,6 +52,8 @@ def recover_capture(source,destination_root,validator,python,require_inactive):
     if source.is_symlink():raise ValueError('Recovery source cannot be a link')
     source=source.resolve();destination_root=Path(destination_root).resolve()
     require_inactive()
+    if (source/'manifest.json').is_symlink() or (source/'manifest.json').stat().st_size>8*1024*1024:
+        raise ValueError('Invalid capture manifest path or size')
     evidence,total=inventory(source)
     manifest=json.loads((source/'manifest.json').read_text())
     if manifest.get('schema_version')!='carla-safety-dataset/0.2':raise ValueError('Only unified captures can be recovered')
@@ -68,6 +70,7 @@ def recover_capture(source,destination_root,validator,python,require_inactive):
         if not (folder/'frame.json').is_file():
             omitted.append(folder.name);continue
         if omitted:raise ValueError('Uncommitted sample inside capture; refusing to hide an interior hole')
+        if (folder/'frame.json').stat().st_size>8*1024*1024:raise ValueError('Oversized sample metadata')
         metadata=json.loads((folder/'frame.json').read_text())
         if type(metadata.get('frame')) is not int or metadata['frame']!=int(folder.name):raise ValueError('Sample identity mismatch')
         entries.append({'frame':metadata['frame'],'timestamp':metadata['timestamp'],'path':'samples/'+folder.name})

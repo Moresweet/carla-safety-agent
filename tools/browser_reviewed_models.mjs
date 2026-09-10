@@ -402,7 +402,7 @@ try {
   }
   const datasetFlag=process.argv.indexOf('--dataset');
   if(datasetFlag>=0){
-    const dataset=process.argv[datasetFlag+1];
+    let dataset=process.argv[datasetFlag+1];
     assert(/^(capture-[A-Za-z0-9-]+|recovered-[a-f0-9]{32})$/.test(dataset),'Expected a capture dataset ID');
     await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Collect Data').click()`);
     let ready=false;
@@ -417,6 +417,50 @@ try {
       if(ready)break;await delay(200);
     }
     assert(ready,'Replay metadata did not load');
+    if(process.argv.includes('--recover-capture')){
+      assert(dataset.startsWith('capture-'),'Recovery must start from an original recording');
+      await delay(3500);
+      assert.equal(await evaluate(`document.querySelectorAll('[aria-label="恢复中断录制"]').length`),1,'Recovery panel must not duplicate after catalog polling');
+      assert.equal(await evaluate(`document.querySelectorAll('[aria-label="原始数据质量检查"]').length`),1,'Quality panel must not duplicate');
+      await evaluate(`document.querySelector('[aria-label="恢复中断录制"]').scrollIntoView({block:'center'})`);
+      assert(await evaluate(`document.querySelector('[aria-label="恢复中断录制"] button').disabled`));
+      await evaluate(`document.querySelector('[aria-label="确认创建恢复副本"]').click()`);
+      for(let i=0;i<30;i++){
+        if(await evaluate(`!document.querySelector('[aria-label="恢复中断录制"] button').disabled`))break;
+        await delay(100);
+      }
+      assert(await evaluate(`!document.querySelector('[aria-label="恢复中断录制"] button').disabled`));
+      await evaluate(`document.querySelector('[aria-label="恢复中断录制"] button').click()`);
+      let requestId;
+      for(let i=0;i<620;i++){
+        requestId=await evaluate(`sessionStorage.getItem('capture-recovery:'+${JSON.stringify(dataset)})`);
+        if(requestId){
+          const response=await fetch('http://127.0.0.1:8765/datasets/recovery?request_id='+requestId);
+          const recovery=await response.json();
+          if(recovery.state==='recovered'){
+            await writeFile(join(output,'capture-recovery-report.json'),JSON.stringify(recovery,null,2));
+            dataset=recovery.recovered_run_id;break;
+          }
+          assert(!['failed','needs_attention'].includes(recovery.state),JSON.stringify(recovery));
+        }
+        await delay(500);
+      }
+      assert(dataset.startsWith('recovered-'),'Recovery did not finish');
+      for(let i=0;i<30;i++){
+        ready=await evaluate(`[...document.querySelectorAll('[aria-label="恢复中断录制"] button')].some(b=>b.textContent==='打开恢复副本回放')`);
+        if(ready)break;await delay(200);
+      }
+      assert(ready,'Verified recovery action not displayed');
+      const recoveredShot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      await writeFile(join(output,'capture-recovery-complete.png'),Buffer.from(recoveredShot.data,'base64'));
+      await evaluate(`[...document.querySelectorAll('[aria-label="恢复中断录制"] button')].find(b=>b.textContent==='打开恢复副本回放').click()`);
+      for(let i=0;i<100;i++){
+        ready=await evaluate(`document.querySelector('select[aria-label="数据集"]').value===${JSON.stringify(dataset)}&&!!document.querySelector('[aria-label="中断采集恢复提示"]')&&!!document.querySelector('.replay-controls a[download]')`);
+        if(ready)break;await delay(200);
+      }
+      assert(ready,'Recovered copy not ready for playback');
+      interactions.push('explicit_browser_recovery_created_and_opened_verified_copy');
+    }
     if(dataset.startsWith('recovered-')){
       const warning=await evaluate(`document.querySelector('[aria-label="中断采集恢复提示"]')?.textContent`);
       assert(warning?.includes('不是完整录制')&&warning.includes('原始目录保留'));

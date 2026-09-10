@@ -56,10 +56,14 @@ def test_unreal_import_registers_generated_blueprint(monkeypatch, tmp_path: Path
 
     def run(command, **kwargs):
         assert failure!='corrupt_registry', 'Corrupted registry must stop before Unreal launch'
+        import os
+        assert len(kwargs['pass_fds'])==1
+        os.fstat(kwargs['pass_fds'][0])
         assert any(arg.startswith('-abslog=') for arg in command)
         pending=pipeline.import_attempts()
         assert len(pending)==1 and pending[0]['state']=='importing'
         assert pending[0]['destination']=='/Game/Carla/Static/Generated/Barrier'
+        assert pending[0]['import_lock_inherited_by_child'] is True
         request = json.loads(Path(kwargs["env"]["CSA_UNREAL_IMPORT_REQUEST"]).read_text())
         Path(request["result_path"]).write_text(json.dumps({
             "ok": True, "asset_id": "Wrong" if failure=='identity' else "Barrier", "blueprint_id": "generated.prop.barrier",
@@ -86,6 +90,29 @@ def test_unreal_import_registers_generated_blueprint(monkeypatch, tmp_path: Path
 def test_unclean_import_cannot_be_enabled(tmp_path):
     with pytest.raises(ValueError,match='clean process exit'):
         BlenderPipeline(tmp_path).import_to_carla('job',require_clean_exit=False)
+
+
+def test_native_child_keeps_flock_after_parent_descriptor_closes(tmp_path):
+    """Real Linux descriptor inheritance, not an Unreal-crash integration claim."""
+    import fcntl
+    import subprocess
+    import sys
+    path=tmp_path/'import.lock'
+    lock=path.open('a');fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    child=None
+    try:
+        child=subprocess.Popen([sys.executable,'-c','import sys; sys.stdin.buffer.read(1)'],
+            pass_fds=(lock.fileno(),),stdin=subprocess.PIPE,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        lock.close()
+        with path.open('a') as contender:
+            with pytest.raises(BlockingIOError):fcntl.flock(contender,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        child.communicate(b'x',timeout=5)
+        assert child.returncode==0
+        with path.open('a') as contender:fcntl.flock(contender,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    finally:
+        lock.close()
+        if child and child.poll() is None:
+            child.terminate();child.wait(timeout=5)
 
 
 @pytest.mark.parametrize('value',[[], {'generated.prop.test':{}}, {'wrong':{'blueprint_id':'wrong','mesh_path':'/Game/Test'}}])

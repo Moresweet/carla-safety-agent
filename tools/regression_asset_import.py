@@ -14,6 +14,7 @@ from regression_material_slots import ROOT, request
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--require-first-material',action='store_true')
+    parser.add_argument('--require-inherited-lock',action='store_true')
     args=parser.parse_args()
     assert request('/system/preflight')['ready']
     assert request('/batches/scheduler')['scheduler']['state'] != 'running'
@@ -39,6 +40,9 @@ def main():
         assert result['import_returncode']==0 and result['blueprint_id']=='generated.prop.'+name.lower()
         attempts=request('/blender/imports')['attempts']
         assert next(a for a in attempts if a['attempt_id']==result['import_attempt_id'])['state']=='registered'
+        if args.require_inherited_lock:
+            assert next(a for a in attempts if a['attempt_id']==result['import_attempt_id'])['import_lock_inherited_by_child'] is True
+            report['inherited_lock_launch_verified']=True
         import urllib.error
         try:
             request('/blender/import',{'job_id':asset['job_id'],'name':name})

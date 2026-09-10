@@ -69,9 +69,9 @@ class BlenderPipeline:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise RuntimeError('Another asset import is active; wait for its recorded outcome') from exc
-            return self._import_to_carla(job_id, asset_name, require_clean_exit=require_clean_exit)
+            return self._import_to_carla(job_id, asset_name, require_clean_exit=require_clean_exit, import_lock_fd=lock.fileno())
 
-    def _import_to_carla(self, job_id: str, asset_name: str | None = None, *, require_clean_exit=True) -> dict[str, Any]:
+    def _import_to_carla(self, job_id: str, asset_name: str | None = None, *, require_clean_exit=True, import_lock_fd: int) -> dict[str, Any]:
         if not job_id.isascii() or not job_id.isalnum() or len(job_id)>64:
             raise ValueError("invalid Blender job id")
         job = (self.runtime / job_id).resolve()
@@ -88,7 +88,7 @@ class BlenderPipeline:
         durable_write(report_path,report,exclusive=True)
         def save(): durable_write(report_path,report)
         try:
-            result = self._perform_import(job, asset_name, attempt_id, report, save)
+            result = self._perform_import(job, asset_name, attempt_id, report, save, import_lock_fd)
             report.update(state='registered',ended_at=time.time(),blueprint_id=result['blueprint_id'])
             save()
             return {**result,'import_report':str(report_path)}
@@ -98,7 +98,7 @@ class BlenderPipeline:
             save()
             raise RuntimeError(f'Asset import did not complete; inspect {report_path}: {exc}') from exc
 
-    def _perform_import(self, job, asset_name, attempt_id, report, save):
+    def _perform_import(self, job, asset_name, attempt_id, report, save, import_lock_fd):
         job_id = job.name
         blender_manifest = json.loads((job / "manifest.json").read_text(encoding="utf-8"))
         fbx = Path(blender_manifest["outputs"]["fbx"]).resolve()
@@ -125,6 +125,7 @@ class BlenderPipeline:
         environment = os.environ.copy()
         environment["CSA_UNREAL_IMPORT_REQUEST"] = str(request_path)
         report.update(state='importing',asset_name=safe_name,
+                      import_lock_inherited_by_child=True,
                       destination='/Game/Carla/Static/Generated/'+safe_name,
                       request_path=str(request_path),result_path=str(result_path))
         save()  # Persist target ownership before the external process can write assets.
@@ -132,7 +133,8 @@ class BlenderPipeline:
             self.ue_editor, self.carla_project, "-run=pythonscript",
             f"-script={self.importer}", "-unattended", "-nop4", "-nosplash", "-nullrhi",
             f"-abslog={job / ('unreal-' + attempt_id + '.log')}",
-        ], capture_output=True, text=True, timeout=600, env=environment)
+        ], capture_output=True, text=True, timeout=600, env=environment,
+           pass_fds=(import_lock_fd,))
         log_path = job / ("unreal-log-" + attempt_id + ".json")
         log_path.write_text(json.dumps({
             "attempt_id": attempt_id, "returncode": completed.returncode,

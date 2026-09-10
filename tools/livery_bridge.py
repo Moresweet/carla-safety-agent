@@ -1716,15 +1716,11 @@ def hero_follow_loop():
 
 @simulation_operation
 def apply_livery(payload: bytes, actor_id: int | None = None) -> dict:
+    if type(actor_id) is not int or not 0 < actor_id < 2**32:
+        raise ValueError('Select an explicit vehicle Actor ID; no implicit hero target')
     image, texture = decode_texture(payload, (2048, 2048))
 
     if evaluation_active():
-        if not actor_id:
-            snapshot = evaluation_snapshot() or {}
-            hero = next((item for item in snapshot.get("objects", []) if item.get("hero")), None)
-            actor_id = int(hero["id"]) if hero else None
-        if not actor_id:
-            raise RuntimeError("Select a running vehicle before applying a texture")
         upload_dir = _evaluation_control_dir / "textures"
         upload_dir.mkdir(parents=True, exist_ok=True)
         texture_path = upload_dir / f"{uuid.uuid4().hex}.png"
@@ -1737,7 +1733,7 @@ def apply_livery(payload: bytes, actor_id: int | None = None) -> dict:
             raise
 
     world = connect_world()
-    actor = world.get_actor(actor_id) if actor_id else hero_actor(world)
+    actor = world.get_actor(actor_id)
     if not actor:
         raise RuntimeError("Select a running vehicle before applying a texture")
     if not actor.type_id.startswith("vehicle."):
@@ -1751,7 +1747,9 @@ def apply_livery(payload: bytes, actor_id: int | None = None) -> dict:
 
 
 @simulation_operation
-def apply_road_texture(payload: bytes, scope: str) -> dict:
+def apply_road_texture(payload: bytes, scope: str, confirmed_all=False) -> dict:
+    if not isinstance(scope, str) or not scope or (scope == 'all' and confirmed_all is not True):
+        raise ValueError('Select one road target; all roads requires explicit confirmed_all=true')
     image, texture = decode_texture(payload, (1024, 1024))
     world = connect_world()
     road_names = sorted(name for name in world.get_names_of_all_objects()
@@ -1769,13 +1767,13 @@ def apply_road_texture(payload: bytes, scope: str) -> dict:
 
 @simulation_operation
 def apply_building_texture(payload: bytes, target: str) -> dict:
+    if not isinstance(target, str) or not (target == 'BP_House16' or target.startswith('BP_House16_')):
+        raise ValueError('Select an explicit verified BP_House16 wall target')
     image, texture = decode_texture(payload, (1024, 1024))
     world = connect_world()
     building_names = set(world.get_names_of_all_objects())
     if target not in building_names:
         raise RuntimeError(f"Building target is not present: {target}")
-    if not target.startswith("BP_House16"):
-        raise RuntimeError("Only the verified BP_House16 wall target is supported")
     world.apply_color_texture_to_object(
         target, carla.MaterialParameter.Diffuse, texture)
     return {"ok": True, "kind": "building", "object_name": target,
@@ -1841,12 +1839,11 @@ def apply_material_slot(data, payload=None):
 
 @simulation_operation
 def apply_pedestrian_texture(payload: bytes, actor_id: int | None = None) -> dict:
+    if type(actor_id) is not int or not 0 < actor_id < 2**32:
+        raise ValueError('Select an explicit pedestrian Actor ID')
     image, texture = decode_texture(payload, (1024, 1024))
     world = connect_world()
-    actor = world.get_actor(actor_id) if actor_id else None
-    if not actor:
-        walkers = list(world.get_actors().filter("walker.pedestrian.0001"))
-        actor = walkers[-1] if walkers else None
+    actor = world.get_actor(actor_id)
     if not actor:
         raise RuntimeError("Select a running pedestrian before applying clothing")
     if actor.type_id != "walker.pedestrian.0001":
@@ -2242,10 +2239,11 @@ class Handler(BaseHTTPRequestHandler):
                 data = json.loads(payload or b"{}")
                 result = delete_actor(int(data["actor_id"]))
             elif request.path == "/apply/road":
-                scope = parse_qs(request.query).get("scope", ["all"])[0]
-                result = apply_road_texture(payload, scope)
+                scope = parse_qs(request.query).get("scope", [""])[0]
+                confirmed_all = parse_qs(request.query).get('confirmed_all', ['false'])[0] == 'true'
+                result = apply_road_texture(payload, scope, confirmed_all=confirmed_all)
             elif request.path == "/apply/building":
-                target = parse_qs(request.query).get("target", ["BP_House16"])[0]
+                target = parse_qs(request.query).get("target", [""])[0]
                 result = apply_building_texture(payload, target)
             elif request.path == "/apply/environment":
                 object_id = int(parse_qs(request.query)["object_id"][0])

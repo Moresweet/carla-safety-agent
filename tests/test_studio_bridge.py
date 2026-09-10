@@ -18,6 +18,37 @@ def functions(*names, **environment):
     return environment
 
 
+@pytest.mark.parametrize('name,args', [
+    ('apply_livery',(b'',None)), ('apply_livery',(b'',True)),
+    ('apply_pedestrian_texture',(b'',None)), ('apply_pedestrian_texture',(b'',-1)),
+    ('apply_road_texture',(b'','all')), ('apply_road_texture',(b'','')),
+    ('apply_building_texture',(b'','')), ('apply_building_texture',(b'','BP_House160')),
+])
+def test_implicit_texture_target_rejected_before_world_access(name,args):
+    def forbidden(*args,**kwargs): pytest.fail('Implicit target reached native access')
+    env=functions(name,decode_texture=forbidden,connect_world=forbidden,evaluation_active=forbidden)
+    with pytest.raises(ValueError): env[name](*args)
+
+
+def test_missing_selected_pedestrian_never_falls_back_to_another():
+    world=SimpleNamespace(get_actor=lambda actor_id:None)
+    env=functions('apply_pedestrian_texture',decode_texture=lambda *args:(None,None),connect_world=lambda:world)
+    with pytest.raises(RuntimeError,match='Select a running pedestrian'):
+        env['apply_pedestrian_texture'](b'',42)
+
+
+@pytest.mark.parametrize('scope,confirmed,expected', [
+    ('Road_Road_1',False,['Road_Road_1']), ('all',True,['Road_Road_1','Road_Road_2'])])
+def test_road_texture_scope_is_explicit(scope,confirmed,expected):
+    calls=[]
+    world=SimpleNamespace(get_names_of_all_objects=lambda:['Road_Road_2','BP_House16','Road_Road_1'],
+        apply_color_texture_to_objects=lambda names,*args:calls.append(names))
+    env=functions('apply_road_texture',decode_texture=lambda *args:(SimpleNamespace(width=1,height=1),'texture'),
+        connect_world=lambda:world,carla=SimpleNamespace(MaterialParameter=SimpleNamespace(Diffuse=0)))
+    env['apply_road_texture'](b'',scope,confirmed_all=confirmed)
+    assert calls==[expected]
+
+
 def test_generated_mesh_uniform_scale_sets_axis_overrides():
     attributes = {}
     blueprint = SimpleNamespace(set_attribute=lambda key,value:attributes.update({key:value}),

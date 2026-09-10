@@ -79,6 +79,21 @@ try {
     interactions.push('vad_generated_scene_button_enabled');
   }
   const batchFlag=process.argv.indexOf('--batch');
+  if(process.argv.includes('--texture-scope')){
+    await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Edit World').click()`);
+    await evaluate(`[...document.querySelectorAll('.viewtabs button')].find(b=>b.textContent==='Roads').click()`);
+    let ready=false;
+    for(let i=0;i<100;i++){
+      ready=await evaluate(`document.querySelector('.export p')?.textContent.includes('道路集合')`);
+      if(ready)break;await delay(200);
+    }
+    assert(ready,'Road collection scope warning missing');
+    assert(await evaluate(`document.querySelector('.export button.primary').disabled`),'Road collection must not silently edit all roads');
+    await evaluate(`document.querySelector('.export').scrollIntoView({block:'start'})`);
+    const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+    await writeFile(join(output,'texture-scope.png'),Buffer.from(screenshot.data,'base64'));
+    interactions.push('road_collection_requires_exact_object_selection');
+  }
   const stopFlag=process.argv.indexOf('--stop-run');
   if(stopFlag>=0){
     const execution=process.argv[stopFlag+1];

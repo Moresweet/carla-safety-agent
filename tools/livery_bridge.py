@@ -1130,24 +1130,40 @@ def _spawn_editor_object(blueprint_id: str, transform_data: dict) -> dict:
         blueprint.set_attribute("role_name", "hero")
     before = set(world.get_names_of_all_objects())
     actor = world.spawn_actor(blueprint, transform)
-    # Editor placement is static until a scenario executor explicitly takes control.
-    if blueprint_id.startswith("vehicle."):
-        actor.set_autopilot(False)
-        actor.set_simulate_physics(False)
-        actor.set_target_velocity(carla.Vector3D())
-        actor.set_target_angular_velocity(carla.Vector3D())
     _editor_actors.add(actor.id)
-    _provenance.mark(world.id, [actor], 'user')
-    stable_id = _provenance.records(world.id)[str(actor.id)]['stable_id']
-    _provenance.bind(world.id, actor, stable_id, blueprint_id=blueprint_id,
-                     spawn_options={k: transform_data[k] for k in ('mass', 'scale') if k in transform_data})
-    if generated:
-        _generated_actor_assets[actor.id] = blueprint_id
-    after = set(world.get_names_of_all_objects())
-    created_names = sorted(after-before)
-    if len(created_names) == 1:
-        _actor_object_names[actor.id] = created_names[0]
-    return {"ok": True, "object": actor_record(actor)}
+    try:
+        _provenance.mark(world.id, [actor], 'user')
+        # Newly spawned editor vehicles have not been registered with a Traffic
+        # Manager. set_autopilot(False) would unnecessarily create/connect port 8000.
+        if blueprint_id.startswith("vehicle."):
+            actor.set_simulate_physics(False)
+            actor.set_target_velocity(carla.Vector3D())
+            actor.set_target_angular_velocity(carla.Vector3D())
+        stable_id = _provenance.records(world.id)[str(actor.id)]['stable_id']
+        after = set(world.get_names_of_all_objects())
+        created_names = sorted(after-before)
+        metadata = {'blueprint_id':blueprint_id,
+                    'spawn_options':{k: transform_data[k] for k in ('mass','scale') if k in transform_data}}
+        if len(created_names) == 1:
+            metadata['runtime_object_name'] = created_names[0]
+            _actor_object_names[actor.id] = created_names[0]
+        _provenance.bind(world.id, actor, stable_id, **metadata)
+        if generated:
+            _generated_actor_assets[actor.id] = blueprint_id
+        return {"ok": True, "object": actor_record(actor)}
+    except Exception as original:
+        try:
+            replies = _carla_client.apply_batch_sync([carla.command.DestroyActor(actor.id)], False)
+            if len(replies)!=1 or replies[0].error:
+                raise RuntimeError('Native destroy was not acknowledged')
+            if world.wait_for_tick(5.0).find(actor.id) is not None:
+                raise RuntimeError('Destroyed actor remains in world snapshot')
+            _editor_actors.discard(actor.id)
+            _actor_object_names.pop(actor.id,None)
+            _generated_actor_assets.pop(actor.id,None)
+        except Exception as cleanup:
+            raise RuntimeError(f'Editor spawn failed: {original}; cleanup unconfirmed for actor {actor.id}: {cleanup}') from original
+        raise
 
 
 def transform_record(transform):
@@ -1591,6 +1607,10 @@ def runtime_name_for_actor(world, actor):
     names = set(world.get_names_of_all_objects())
     if mapped in names:
         return mapped
+    record = _provenance.records(world.id).get(str(actor.id), {})
+    recorded = record.get('runtime_object_name')
+    if record.get('type_id') == actor.type_id and recorded in names:
+        return recorded
     if actor.type_id == "vehicle.tesla.model3":
         matches = sorted(name for name in names if name.startswith("BP_TeslaM3_C_"))
         if len(matches) == 1:

@@ -237,8 +237,8 @@ def test_weather_restore_uses_saved_values():
 
 
 def test_texture_identity_rejects_same_model_ambiguity():
-    env = functions('runtime_name_for_actor', _actor_object_names={})
-    world = SimpleNamespace(get_names_of_all_objects=lambda:['BP_TeslaM3_C_1','BP_TeslaM3_C_2'])
+    env = functions('runtime_name_for_actor', _actor_object_names={},_provenance=SimpleNamespace(records=lambda _:{}))
+    world = SimpleNamespace(id=10,get_names_of_all_objects=lambda:['BP_TeslaM3_C_1','BP_TeslaM3_C_2'])
     actor = SimpleNamespace(id=7, type_id='vehicle.tesla.model3')
     with pytest.raises(RuntimeError, match='identity is unavailable'):
         env['runtime_name_for_actor'](world, actor)

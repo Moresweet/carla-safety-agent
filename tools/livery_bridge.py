@@ -1054,9 +1054,8 @@ def focus_environment(object_id: int) -> dict:
     loc, ext = record["location"], record["extent"]
     center = carla.Location(x=loc["x"], y=loc["y"], z=loc["z"])
     extent = carla.Vector3D(x=ext["x"], y=ext["y"], z=ext["z"])
-    color = HIGHLIGHT_COLORS[record["kind"]]
-    world.debug.draw_box(carla.BoundingBox(center, extent), obj.transform.rotation,
-                         thickness=0.15, color=color, life_time=8.0)
+    # Native debug lines enter RGB captures (black blocks on this UE build).
+    # Selection feedback belongs to the web UI, not the sensor scene.
     focus_location(world, center, max(10.0, extent.x*2), max(6.0, extent.z*2))
     return {"ok": True, "object": record}
 
@@ -1633,10 +1632,7 @@ def focus_actor(actor_id: int) -> dict:
                             actor.bounding_box.location.y,
                             actor.bounding_box.location.z)
     transform.transform(center)
-    extent = actor.bounding_box.extent
-    world.debug.draw_box(carla.BoundingBox(center, extent), transform.rotation,
-                         thickness=0.12, color=HIGHLIGHT_COLORS[kind],
-                         life_time=8.0)
+    # Do not paint debug geometry into the authoritative RGB preview.
     focus_location(world, center, 8.0 if kind in ("walker", "prop") else 14.0,
                    3.5 if kind in ("walker", "prop") else 6.0)
     return {"ok": True, "actor_id": actor.id, "kind": kind,
@@ -1653,10 +1649,6 @@ def focus_static(kind: str, name: str) -> dict:
     world = connect_world()
     loc, ext = target["location"], target["extent"]
     center = carla.Location(x=loc["x"], y=loc["y"], z=loc["z"])
-    extent = carla.Vector3D(x=ext["x"], y=ext["y"], z=ext["z"])
-    world.debug.draw_box(carla.BoundingBox(center, extent), carla.Rotation(),
-                         thickness=0.16, color=HIGHLIGHT_COLORS[kind],
-                         life_time=8.0)
     focus_location(world, center, 18.0, 12.0)
     return {"ok": True, "kind": kind, "name": name,
             "location": vector(center)}

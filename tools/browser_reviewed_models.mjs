@@ -1,5 +1,6 @@
 // Local isolated Chrome QA. Never launches a model. --stop-run explicitly stops
 // one owned execution; --audit-dataset scans saved files without simulator RPC.
+// --apply-pedestrian explicitly applies a texture to the supplied walker ID.
 // Other modes only read UI/data or compile a plan.
 import {spawn} from 'node:child_process';
 import {mkdtemp,readFile,writeFile,mkdir} from 'node:fs/promises';
@@ -7,6 +8,7 @@ import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import assert from 'node:assert/strict';
+import {textureUploadFlipY} from './livery-designer/app/uvConvention.ts';
 
 const profile=await mkdtemp(join(tmpdir(),'carla-browser-qa-'));
 const output=resolve('runs/validation/browser-models-'+randomUUID());
@@ -79,6 +81,68 @@ try {
     interactions.push('vad_generated_scene_button_enabled');
   }
   const batchFlag=process.argv.indexOf('--batch');
+  if(process.argv.includes('--uv-convention')){
+    const pixels=await evaluate(`(()=>{
+      const canvas=document.createElement('canvas');canvas.width=canvas.height=8;
+      const gl=canvas.getContext('webgl');if(!gl)throw Error('WebGL unavailable');
+      const make=(type,source)=>{const s=gl.createShader(type);gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s};
+      const p=gl.createProgram();gl.attachShader(p,make(gl.VERTEX_SHADER,'attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}'));
+      gl.attachShader(p,make(gl.FRAGMENT_SHADER,'precision mediump float;uniform sampler2D t;uniform vec2 uv;void main(){gl_FragColor=texture2D(t,uv);}'));gl.linkProgram(p);gl.useProgram(p);
+      const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+      const loc=gl.getAttribLocation(p,'p');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+      const image=document.createElement('canvas');image.width=image.height=2;const ctx=image.getContext('2d');
+      for(const [x,y,color] of [[0,0,'red'],[1,0,'lime'],[0,1,'blue'],[1,1,'yellow']]){ctx.fillStyle=color;ctx.fillRect(x,y,1,1)}
+      const texture=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,texture);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,${JSON.stringify(textureUploadFlipY(true))});gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,image);
+      const values=[];for(const uv of [[.25,.25],[.75,.25],[.25,.75],[.75,.75]]){gl.uniform2fv(gl.getUniformLocation(p,'uv'),uv);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);const value=new Uint8Array(4);gl.readPixels(4,4,1,1,gl.RGBA,gl.UNSIGNED_BYTE,value);values.push([...value])}
+      gl.deleteTexture(texture);gl.deleteBuffer(buffer);gl.deleteProgram(p);return values;
+    })()`);
+    assert.deepEqual(pixels,[[255,0,0,255],[0,255,0,255],[0,0,255,255],[255,255,0,255]]);
+    await writeFile(join(output,'uv-pixel-probe.json'),JSON.stringify({pixels,scope:'Source UV samples match top-left canvas rows using production upload convention'},null,2));
+    interactions.push('webgl_source_uv_samples_match_canvas_rows');
+  }
+  const pedestrianFlag=process.argv.indexOf('--pedestrian-id');
+  if(pedestrianFlag>=0){
+    const actor=Number(process.argv[pedestrianFlag+1]);assert(Number.isSafeInteger(actor)&&actor>0);
+    const textureFlag=process.argv.indexOf('--texture');assert(textureFlag>=0);
+    const texture=resolve(process.argv[textureFlag+1]);await readFile(texture);
+    const scene=await (await fetch('http://127.0.0.1:8765/scene/state')).json();
+    const target=scene.objects.find(item=>item.id===actor&&item.name==='walker.pedestrian.0001');assert(target,'Requested walker is not in the current scene');
+    await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Edit World').click()`);
+    await evaluate(`[...document.querySelectorAll('.viewtabs button')].find(b=>b.textContent==='Pedestrians').click()`);
+    let ready=false;
+    for(let i=0;i<100;i++){ready=await evaluate(`[...document.querySelectorAll('#target option')].some(o=>o.value===${JSON.stringify(target.key)})`);if(ready)break;await delay(200)}
+    assert(ready,'Walker target option missing');
+    await evaluate(`(()=>{const select=document.querySelector('#target');select.value=${JSON.stringify(target.key)};select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    for(let i=0;i<100;i++){ready=await evaluate(`!![...document.querySelectorAll('.previewbar b')].find(e=>e.textContent.includes('裤装槽 14'))&&!!document.querySelector('.projection canvas')`);if(ready)break;await delay(200)}
+    assert(ready,'Actual pedestrian mesh preview missing');
+    const documentNode=await cdp('DOM.getDocument');const input=await cdp('DOM.querySelector',{nodeId:documentNode.root.nodeId,selector:'.controls input[type=file]'});
+    await cdp('DOM.setFileInputFiles',{nodeId:input.nodeId,files:[texture]});
+    for(let i=0;i<100;i++){ready=await evaluate(`!document.querySelector('.export button.primary').disabled`);if(ready)break;await delay(100)}
+    assert(ready,'Texture upload did not enable the explicit walker action');
+    await evaluate(`[...document.querySelectorAll('.texture-modes button')].find(b=>b.textContent==='cover').click()`);
+    await delay(200);
+    const atlas=await evaluate(`document.querySelector('canvas.atlas-output').toDataURL('image/png')`);
+    await writeFile(join(output,'pedestrian-atlas.png'),Buffer.from(atlas.split(',')[1],'base64'));
+    await evaluate(`document.querySelector('.visuals').scrollIntoView({block:'start'})`);
+    const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+    await writeFile(join(output,'pedestrian-uv.png'),Buffer.from(screenshot.data,'base64'));
+    if(process.argv.includes('--apply-pedestrian')){
+      let sent=false,error=null;
+      socket.addEventListener('message',async event=>{const value=JSON.parse(event.data);if(value.method!=='Fetch.requestPaused')return;
+        const {requestId,request}=value.params;try{const url=new URL(request.url);
+          if(url.pathname!=='/apply/pedestrian'||url.searchParams.get('actor_id')!==String(actor)){
+            await cdp('Fetch.failRequest',{requestId,errorReason:'Aborted'});throw Error('Unexpected texture target');}
+          if(request.method==='POST')sent=true;await cdp('Fetch.continueRequest',{requestId});
+        }catch(exc){error=String(exc)}});
+      await cdp('Fetch.enable',{patterns:[{urlPattern:'http://127.0.0.1:8765/apply*',requestStage:'Request'}]});
+      await evaluate(`document.querySelector('.export button.primary').click()`);
+      for(let i=0;i<200;i++){ready=await evaluate(`document.querySelector('.export small').textContent.startsWith('Applied texture to ')`);if(ready||error)break;await delay(100)}
+      assert(!error,error);assert(sent&&ready,'Explicit pedestrian texture did not complete');
+      interactions.push('pedestrian_texture_applied_to_explicit_actor_'+actor);
+    }
+    interactions.push('real_pedestrian_slot14_uv_preview_loaded');
+  }
   if(process.argv.includes('--texture-scope')){
     await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Edit World').click()`);
     await evaluate(`[...document.querySelectorAll('.viewtabs button')].find(b=>b.textContent==='Roads').click()`);
@@ -233,7 +297,7 @@ try {
       interactions.push('raw_quality_button_scanned_saved_dataset_and_reported_pass');
     }
   }
-  await writeFile(join(output,'report.json'),JSON.stringify({models,state,interactions,stoppedExecution,scope:'No model start; optional --stop-run only permits the explicitly supplied execution identity',profile},null,2));
+  await writeFile(join(output,'report.json'),JSON.stringify({models,state,interactions,stoppedExecution,scope:'No model start; optional stop/texture writes are restricted to the explicitly supplied execution/actor identity',profile},null,2));
   console.log(JSON.stringify({output,models,state,interactions}));
 } finally {
   socket?.close();

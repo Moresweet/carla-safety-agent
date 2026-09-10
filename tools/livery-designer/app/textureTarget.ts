@@ -8,7 +8,7 @@ export function textureRoute(target:Target|null|undefined):Route{
   const id=Number(target.id);
   if(!Number.isSafeInteger(id)||id<=0)return {error:'所选对象缺少有效 Actor ID，请重新选择。'};
   if(target.kind==='walker'&&target.name!=='walker.pedestrian.0001')return {error:'此行人尚无已验证的衣物槽；不会改用其他行人。'};
-  return {path:`${target.kind==='vehicle'?'apply':'apply/pedestrian'}?actor_id=${id}`,scope:`仅 Actor ${id}`};
+  return {path:`${target.kind==='vehicle'?'apply':'apply/pedestrian'}?actor_id=${id}`,scope:`仅 Actor ${id}${target.kind==='walker'?' · 裤装材质槽 14':''}`};
  }
  if(target.kind==='road'&&target.name.startsWith('Road_Road_'))return {path:`apply/road?scope=${encodeURIComponent(target.name)}`,scope:`仅 ${target.name}`};
  if(target.kind==='building'&&target.id===undefined&&/^BP_House16(?:_.*)?$/.test(target.name))return {path:`apply/building?target=${encodeURIComponent(target.name)}`,scope:`仅 ${target.name} 的已验证墙面`};

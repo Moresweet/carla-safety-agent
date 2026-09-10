@@ -14,3 +14,4 @@ build/
 .runtime/
 data/
 *.tsbuildinfo
+tools/livery-designer/public/pedestrians/

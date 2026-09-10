@@ -1,0 +1,10 @@
+{
+  "walker.pedestrian.0001": {
+    "baseType": "pedestrian",
+    "slot": 14,
+    "slotName": "Cloths03_PANTS · 仅裤装",
+    "url": "/pedestrians/walker-pedestrian-0001-slot14.json",
+    "sourceMesh": "/Game/Carla/Static/Pedestrian/Female/SK_Female.SK_Female",
+    "pose": "source bind pose; not live animation"
+  }
+}

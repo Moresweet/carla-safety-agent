@@ -18,6 +18,17 @@ def functions(*names, **environment):
     return environment
 
 
+def test_focus_never_draws_native_debug_shapes_into_sensor_images():
+    tree = ast.parse((Path(__file__).resolve().parents[1]/'tools/livery_bridge.py').read_text())
+    names = {'focus_actor', 'focus_static', 'focus_environment'}
+    selected = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
+    assert len(selected) == 3
+    for function in selected:
+        assert not any(isinstance(n, ast.Attribute) and
+                       (n.attr == 'debug' or n.attr.startswith('draw_'))
+                       for n in ast.walk(function)), function.name
+
+
 @pytest.mark.parametrize('name,args', [
     ('apply_livery',(b'',None)), ('apply_livery',(b'',True)),
     ('apply_pedestrian_texture',(b'',None)), ('apply_pedestrian_texture',(b'',-1)),

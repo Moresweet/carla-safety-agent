@@ -1457,3 +1457,9 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 排他临时文件flush/fsync、replace后目录fsync及新目录项同步；拒绝目录/队列/锁符号链接。并非引擎事务或恶意本机竞争的完整防护，详见BATCH_LEDGER_INTEGRITY.md。既有18批次通过兼容读取，747项Python测试通过。
 - 新实机batch-lost-response-20e9df7cbee644d18bbae2fad8285634通过响应丢失后绑定88713075578b4e5295e37fe64f772fc4、显式停止、保留旧attempt并重试c044a2acd2bb4b74b6b1cf941261adbd，第二项abb6d31deebb469cbe27e0afa8ab14d1仅一次。尝试数2/1，各成功录制20帧及14/14外参/原始数据通过，异步零传感器。
 - 网页efcb4fee-b24c-4c67-9c0e-d87c01ed2d3c只读验收通过：两个completed行、2/1尝试次数、完成任务重试按钮禁用、调度启动未确认；报告截图已查看。
+
+### S7增量：可见的尝试历史
+
+- 批次报告新增有界只读尝试摘要：独立attempt/execution ID、状态、时间、已有阶段与错误；超长错误明确截断，不改变原执行日志。重新排队后的pending行继续展示旧失败记录，但不继承其当前执行/驾驶结论。返回值不共享可修改的账本引用。
+- 网页“查看尝试历史”展开停止→完成两次执行，完成任务仍不能重新排队。真实批次20e9df7cbee644d18bbae2fad8285634的browser ec6b1e2a-7fb4-4d47-86d2-c5594c7ff337通过次数、历史状态、已绑定执行ID及按钮断言，截图已查看。
+- 750项Python测试、TypeScript与生产构建通过；另拒绝畸形result/execution字段，避免损坏账本使整个报告目录崩溃。

@@ -13,7 +13,7 @@ def queue(tmp_path):
 
 
 @pytest.mark.parametrize('defect',['schema','pause','order','pending_live','multiple_active','duplicate_attempt',
-    'duplicate_execution','historical_live','created_bool','missing_execution','ended','attempt_count'])
+    'duplicate_execution','historical_live','created_bool','missing_execution','ended','attempt_count','result_type','execution_type'])
 def test_corrupt_ownership_is_not_repaired_or_overwritten(tmp_path,defect):
     q=queue(tmp_path);state=q.read();first,second=state['jobs'];attempt=first['attempts'][0]
     if defect=='schema':state['schema_version']='other'
@@ -27,6 +27,8 @@ def test_corrupt_ownership_is_not_repaired_or_overwritten(tmp_path,defect):
     if defect=='historical_live':first['attempts'].append({**attempt,'attempt_id':'attempt2','execution_id':'run2'})
     if defect=='created_bool':attempt['created_at']=True
     if defect=='missing_execution':attempt['execution_id']=None
+    if defect=='result_type':attempt['result']='invalid'
+    if defect=='execution_type':attempt['result']={'execution':'invalid'}
     if defect=='ended':
         first['state']=attempt['state']='failed';attempt.update(ended_at=-1,result={})
     if defect=='attempt_count':first['attempts']*=21

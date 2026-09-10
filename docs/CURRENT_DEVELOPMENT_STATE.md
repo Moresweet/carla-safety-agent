@@ -20,7 +20,7 @@
 - `5d1c9b3`：未知动态对象来源不再猜成场景原有，筛选标签与紧凑布局经过原生重启和浏览器验证。
 - `7870c1f`：行人0001裤装精确槽纹理版本，原生引擎编译、场景重建和网页项目包恢复通过。
 
-截至上述提交：695项Python测试、TypeScript与生产构建通过。其后五模型短闭环矩阵已全部通过，报告`runs/validation/reviewed-models-a13499d155104ec19eb591a75e553a41.json`；VAD/TCP/UniAD-Tiny/UniAD-Base各20帧，AD-MLP60帧，原始采集、预测空间契约和退出清理均通过，五者网页回放截图均已查看。这不是长时间稳定性或驾驶质量认证。
+早期注册GUI基线为695项Python测试、TypeScript与生产构建通过。其后五模型短闭环矩阵已全部通过，报告`runs/validation/reviewed-models-a13499d155104ec19eb591a75e553a41.json`；VAD/TCP/UniAD-Tiny/UniAD-Base各20帧，AD-MLP60帧，原始采集、预测空间契约和退出清理均通过，五者网页回放截图均已查看。这不是长时间稳定性或驾驶质量认证。
 
 行人引擎增量后另跑VAD/TCP各20帧，报告`reviewed-models-6bc0a719b9534e47ba59246c1c593948.json`，两者原始数据、空间预测、清理及网页回放均通过。当前原生episode为12684580936238673218；PID需运行时重新确认。最新单测708项通过（含调度线程启动失败保护）；具体提交和原生异常矩阵见开发计划尾部。
 
@@ -30,6 +30,7 @@
 - [纹理版本边界](ACTOR_MATERIAL_VERSIONS.md)、[真实UV与视觉证据](SOURCE_UV_PREVIEW.md)
 - [场景历史完整性与写入失败边界](SCENE_STORAGE_INTEGRITY.md)：该增量后完整Python测试730项通过。
 - [批量队列完整性](BATCH_LEDGER_INTEGRITY.md)：后续队列增量完整Python测试747项通过，并有原生停止重试证据。
+- 最新尝试历史GUI增量：750项Python测试、TypeScript与生产构建通过；原生批次的停止/完成历史网页截图已查看。
 - [中断采集恢复](CAPTURE_RECOVERY.md)
 - [项目包界面](PROJECT_BUNDLE_UI.md)、[迁移命令与不包含项](PROJECT_MIGRATION.md)
 - [预测空间契约](PREDICTION_SPATIAL_CONTRACT.md)

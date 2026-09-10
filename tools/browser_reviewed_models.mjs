@@ -457,9 +457,14 @@ try {
     await writeFile(join(output,'batch-textures.png'),Buffer.from(screenshot.data,'base64'));
     interactions.push('texture_batch_capability_and_two_rows_visible','batch_start_remains_unconfirmed');
     if(process.argv.includes('--expect-batch-retry')){
-      const rows=await evaluate(`[...document.querySelectorAll('.batch-panel tbody tr')].map(row=>({state:row.cells[2].textContent,attempts:row.cells[4].textContent,retryDisabled:row.cells[5].querySelector('button').disabled}))`);
+      const rows=await evaluate(`[...document.querySelectorAll('.batch-panel tbody tr')].map(row=>({state:row.cells[2].textContent,attempts:row.cells[4].querySelector('[data-attempt-count]').textContent,retryDisabled:row.cells[5].querySelector('button').disabled}))`);
       assert.deepEqual(rows.map(row=>row.attempts),['2','1']);
       assert(rows.every(row=>row.state.startsWith('completed')&&row.retryDisabled));
+      await evaluate(`document.querySelector('.attempt-history').open=true`);
+      const history=await evaluate(`[...document.querySelector('.attempt-history').querySelectorAll('li')].map(item=>item.textContent)`);
+      assert.equal(history.length,2);
+      assert(history[0].includes('stopped')&&history[1].includes('completed'));
+      assert(history.every(text=>text.includes('执行 ID：')&&!text.includes('尚未绑定')));
       await evaluate(`document.querySelector('.batch-panel table').scrollIntoView({block:'center'})`);
       const shot=await cdp('Page.captureScreenshot',{format:'png'});
       await writeFile(join(output,'batch-retry-rows.png'),Buffer.from(shot.data,'base64'));

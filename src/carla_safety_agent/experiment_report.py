@@ -88,6 +88,22 @@ def verified_rule_metrics(execution, results_root):
             'benchmark_passed': result['status'] == 'passed', 'source': str(path)}
 
 
+def attempt_summaries(attempts):
+    rows=[]
+    for attempt in attempts:
+        result=attempt.get('result') or {}
+        execution=result.get('execution')
+        execution=execution if isinstance(execution,dict) else {}
+        error=execution.get('error') or result.get('error')
+        error=error if isinstance(error,str) else None
+        phase=result.get('phase')
+        rows.append({'attempt_id':attempt['attempt_id'],'state':attempt['state'],
+            'execution_id':attempt.get('execution_id'),'created_at':attempt['created_at'],
+            'ended_at':attempt.get('ended_at'),'phase':phase if isinstance(phase,str) else None,
+            'error':error[:2000] if error else None,'error_truncated':bool(error and len(error)>2000)})
+    return rows
+
+
 def summarize_queue(state, results_root=None):
     from .queue_integrity import validate_ledger
     validate_ledger(state)
@@ -126,7 +142,8 @@ def summarize_queue(state, results_root=None):
             'data_quality_verified': None,
             'error': execution.get('error') or result.get('error'),
             'result_reference': (execution.get('configuration') or {}).get('results'),
-            'attempt_ids': [a['attempt_id'] for a in attempts]})
+            'attempt_ids': [a['attempt_id'] for a in attempts],
+            'attempts': attempt_summaries(attempts)})
         if results_root is not None and execution.get('kind') in ('rule-run', 'run') and status == 'completed':
             try:
                 selected_root = results_root[execution['kind']] if isinstance(results_root, dict) else results_root

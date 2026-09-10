@@ -31,6 +31,10 @@ def validate_ledger(state):
             if aid in attempts_seen:raise ValueError('Duplicate queue attempt identity')
             attempts_seen.add(aid)
             phase=attempt.get('state');execution=attempt.get('execution_id')
+            result=attempt.get('result')
+            if result is not None and not isinstance(result,dict):raise ValueError('Invalid attempt result')
+            if isinstance(result,dict) and result.get('execution') is not None and not isinstance(result['execution'],dict):
+                raise ValueError('Invalid attempt execution evidence')
             if phase not in terminal|{'reserved','running'}:raise ValueError('Invalid attempt state')
             if index<len(attempts)-1 and phase not in ('failed','stopped'):
                 raise ValueError('Unresolved or completed historical attempt')

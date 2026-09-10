@@ -26,6 +26,26 @@ def test_pending_retry_does_not_inherit_old_failure(tmp_path):
     row = summarize_queue(q.read())['rows'][0]
     assert row['error'] is None and row['attempt_count'] == 1
     assert row['execution_state'] == 'pending'
+    assert row['attempts'][0]['state']=='failed'
+    assert row['attempts'][0]['error']=='prepare'
+    assert row['attempts'][0]['execution_id'] is None
+
+
+def test_retry_history_remains_visible_without_mutable_ledger_references(tmp_path):
+    q=ExperimentQueue(tmp_path)
+    q.create({**{a:[{'id':'base','configuration':{}}] for a in ('scenes','models','weather','textures')},'seeds':[1]})
+    first=q.claim();job=first['job_id'];aid=first['attempt']['attempt_id']
+    q.update_attempt(job,aid,execution_id='run1')
+    q.update_attempt(job,aid,execution_id='run1',outcome='stopped',result={'phase':'execution','error':'x'*2100})
+    q.retry(job);second=q.claim()['attempt']['attempt_id'];q.update_attempt(job,second,execution_id='run2')
+    q.update_attempt(job,second,execution_id='run2',outcome='completed',result={})
+    state=q.read();history=summarize_queue(state)['rows'][0]['attempts']
+    assert [a['execution_id'] for a in history]==['run1','run2']
+    assert [a['state'] for a in history]==['stopped','completed']
+    assert len(history[0]['error'])==2000 and history[0]['error_truncated']
+    assert history[1]['error'] is None and history[0]['phase']=='execution'
+    history[0]['state']='forged'
+    assert state['jobs'][0]['attempts'][0]['state']=='stopped'
 
 
 @pytest.mark.parametrize('wrong', ['job', 'attempt'])

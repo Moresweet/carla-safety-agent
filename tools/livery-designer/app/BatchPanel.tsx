@@ -5,7 +5,8 @@ import BatchComparison from './BatchComparison';
 
 const bridge='http://127.0.0.1:8765';
 type Batch={batch_id:string;job_count?:number;paused?:boolean;error?:string};
-type Row={job_id:string;execution_state:string;attempt_count:number;seed:number;variants:Record<string,string>;execution_id?:string;benchmark_passed:boolean|null;metrics?:Record<string,unknown>;metrics_error?:string;error?:string};
+type Attempt={attempt_id:string;state:string;execution_id:string|null;created_at:number;ended_at:number|null;phase:string|null;error:string|null;error_truncated:boolean};
+type Row={job_id:string;execution_state:string;attempt_count:number;attempts?:Attempt[];seed:number;variants:Record<string,string>;execution_id?:string;benchmark_passed:boolean|null;metrics?:Record<string,unknown>;metrics_error?:string;error?:string};
 type Report={paused:boolean;job_count:number;rows:Row[];state_counts:Record<string,number>};
 async function api<T>(path:string,body?:unknown):Promise<T>{
  const response=await fetch(bridge+path,{...(body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})});
@@ -56,7 +57,7 @@ export default function BatchPanel(){
     <button disabled={busy} onClick={()=>void control(report.paused?'resume':'pause')}>{report.paused?'恢复排队':'暂停排队'}</button>
    </div>
    <div style={{overflowX:'auto'}}><table style={{width:'100%',textAlign:'left'}}><thead><tr>{['模型 / 场景','天气 / 纹理 / 种子','执行状态','驾驶结论','尝试','操作'].map(label=><th key={label}>{label}</th>)}</tr></thead><tbody>{report.rows.map(row=><tr key={row.job_id}>
-    <td>{row.variants.models} / {row.variants.scenes}</td><td>{row.variants.weather} / {row.variants.textures} / {row.seed}</td><td>{row.execution_state}<small style={{display:'block',overflowWrap:'anywhere'}}>{row.execution_id}</small></td><td>{row.benchmark_passed===null?'未核验':row.benchmark_passed?'通过':'未通过'}{(row.metrics_error||row.error)&&<p role="alert">{row.metrics_error||row.error}</p>}</td><td>{row.attempt_count}</td><td><button disabled={busy||!['failed','stopped'].includes(row.execution_state)} onClick={()=>void control('retry',row.job_id)}>重新排队</button>{row.metrics&&<details><summary>查看指标</summary><pre>{JSON.stringify(row.metrics,null,2)}</pre></details>}</td>
+    <td>{row.variants.models} / {row.variants.scenes}</td><td>{row.variants.weather} / {row.variants.textures} / {row.seed}</td><td>{row.execution_state}<small style={{display:'block',overflowWrap:'anywhere'}}>{row.execution_id}</small></td><td>{row.benchmark_passed===null?'未核验':row.benchmark_passed?'通过':'未通过'}{(row.metrics_error||row.error)&&<p role="alert">{row.metrics_error||row.error}</p>}</td><td><span data-attempt-count>{row.attempt_count}</span>{row.attempts?.length?<details className="attempt-history"><summary>查看尝试历史</summary><ol>{row.attempts.map((attempt,index)=><li key={attempt.attempt_id} style={{minWidth:220,overflowWrap:'anywhere',margin:'10px 0'}}><b>第 {index+1} 次 · {attempt.state}</b><div>尝试 ID：{attempt.attempt_id}</div><div>执行 ID：{attempt.execution_id??'尚未绑定'}</div>{attempt.phase&&<div>阶段：{attempt.phase}</div>}{attempt.error&&<p>{attempt.error}{attempt.error_truncated?'（已截断，完整错误见执行记录）':''}</p>}</li>)}</ol><small>只读历史；重新排队不会删除旧记录。</small></details>:null}</td><td><button disabled={busy||!['failed','stopped'].includes(row.execution_state)} onClick={()=>void control('retry',row.job_id)}>重新排队</button>{row.metrics&&<details><summary>查看指标</summary><pre>{JSON.stringify(row.metrics,null,2)}</pre></details>}</td>
    </tr>)}</tbody></table></div>
    <p>执行完成不等于驾驶通过；数据质量尚未自动核验。报告每两秒自动刷新。重新排队保留历史；活跃后台调度会处理待执行项。</p>
    <BatchComparison key={selected} batchId={selected} rows={report.rows}/>

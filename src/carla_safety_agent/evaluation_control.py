@@ -274,6 +274,7 @@ class EvaluationControl:
                     return {"id": str(match.id), "visible": enabled}
             raise RuntimeError(f"Environment object {object_id} was not found")
         if action == "spawn":
+            self.provenance.records(world.id)
             blueprint_id = str(data["blueprint_id"])
             if not blueprint_id.startswith(("vehicle.", "walker.", "static.prop.")):
                 raise RuntimeError("Unsupported blueprint type")

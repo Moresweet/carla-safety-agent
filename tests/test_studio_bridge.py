@@ -29,6 +29,14 @@ def test_focus_never_draws_native_debug_shapes_into_sensor_images():
                        for n in ast.walk(function)), function.name
 
 
+def test_corrupt_origin_store_refuses_editor_spawn_before_native_mutation():
+    def fail(_): raise ValueError('Corrupt provenance')
+    env=functions('_spawn_editor_object',connect_world=lambda:SimpleNamespace(id=1),
+        _provenance=SimpleNamespace(records=fail))
+    with pytest.raises(ValueError,match='Corrupt provenance'):
+        env['_spawn_editor_object']('vehicle.test',{})
+
+
 @pytest.mark.parametrize('name,args', [
     ('apply_livery',(b'',None)), ('apply_livery',(b'',True)),
     ('apply_pedestrian_texture',(b'',None)), ('apply_pedestrian_texture',(b'',-1)),
@@ -64,9 +72,10 @@ def test_generated_mesh_uniform_scale_sets_axis_overrides():
     attributes = {}
     blueprint = SimpleNamespace(set_attribute=lambda key,value:attributes.update({key:value}),
                                 has_attribute=lambda key:True)
-    world = SimpleNamespace(get_blueprint_library=lambda:SimpleNamespace(find=lambda _:blueprint))
+    world = SimpleNamespace(id=1,get_blueprint_library=lambda:SimpleNamespace(find=lambda _:blueprint))
     def stop_before_spawn(**kwargs): raise RuntimeError('parameters observed')
     env = functions('_spawn_editor_object', connect_world=lambda:world,
+        _provenance=SimpleNamespace(records=lambda _:{}),
         BLENDER=SimpleNamespace(registry=lambda:{'generated.prop.test':{'mesh_path':'/Game/Test','default_scale':100}}),
         carla=SimpleNamespace(Location=stop_before_spawn))
     with pytest.raises(RuntimeError,match='parameters observed'):

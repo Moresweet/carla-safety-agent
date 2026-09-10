@@ -1086,6 +1086,8 @@ def spawn_object(blueprint_id: str, transform_data: dict) -> dict:
 
 def _spawn_editor_object(blueprint_id: str, transform_data: dict) -> dict:
     world = connect_world()
+    # Refuse known-corrupt provenance before creating an untracked actor.
+    _provenance.records(world.id)
     generated = BLENDER.registry().get(blueprint_id)
     runtime_blueprint_id = "static.prop.mesh" if generated else blueprint_id
     blueprint = world.get_blueprint_library().find(runtime_blueprint_id)

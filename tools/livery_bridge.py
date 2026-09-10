@@ -91,6 +91,8 @@ _world_episode = None
 _provenance = ActorProvenance(PROJECT_ROOT / '.runtime/actor-provenance.json')
 from carla_safety_agent.bundle_workbench import BundleWorkbench
 BUNDLES = BundleWorkbench(PROJECT_ROOT)
+from carla_safety_agent.bundle_restore_review import RestoreReviews
+BUNDLE_RESTORE_REVIEWS = RestoreReviews()
 _uv_audit = audit_uv(PROJECT_ROOT / 'tools/livery-designer/public')
 _e2e_log = PROJECT_ROOT / ".runtime" / "uniad-ui.log"
 _e2e_pid = PROJECT_ROOT / ".runtime" / "uniad.pid"
@@ -1246,6 +1248,37 @@ def restore_bundle_scene(data):
             'note': 'World restored from bundle; save a scene to retain it in the current project catalog'}
 
 
+@simulation_operation
+def preview_bundle_restore(data):
+    world=connect_world()
+    manifest,_,saved=BUNDLES.scene_snapshot(data)
+    baseline=capture_scene_document()
+    return BUNDLE_RESTORE_REVIEWS.issue(data,manifest,saved['document'],baseline,world.id)
+
+
+@simulation_operation
+def confirm_bundle_restore(data):
+    if not isinstance(data,dict) or set(data)!={'review_token','confirmed'} or data['confirmed'] is not True:
+        raise ValueError('Explicit restore review confirmation required')
+    world=connect_world()
+    selection=BUNDLE_RESTORE_REVIEWS.selection(data['review_token'])
+    manifest,files,saved=BUNDLES.scene_snapshot(selection)
+    baseline=capture_scene_document()
+    BUNDLE_RESTORE_REVIEWS.consume(data,manifest,baseline,world.id)
+    # Save the managed baseline before any texture installation or world mutation.
+    backup=SCENES.save(baseline,'项目包恢复前自动快照')
+    try:
+        from carla_safety_agent.material_library import material_edits
+        for digest in set(material_edits(saved['document'].get('environment_materials',[])).values()):
+            MATERIALS.put_texture(files['textures/'+digest+'.png'])
+            MATERIALS.texture(digest)
+        result=restore_scene_document(saved)
+    except Exception as exc:
+        raise RuntimeError(f'Bundle restore not confirmed successful: {exc}; baseline scene {backup["head"]["scene_id"]} version {backup["head"]["version"]}; review cannot be reused') from exc
+    return {**result,'bundle_id':selection['bundle_id'],'backup':backup['head'],
+            'scene_history_installed':False,'review_consumed':True}
+
+
 def restore_scene_document(saved):
     """Caller holds simulation lock; shared preflight and compensation path."""
     world = connect_world()
@@ -2158,6 +2191,7 @@ class Handler(BaseHTTPRequestHandler):
         request = urlparse(self.path)
         if request.path not in ("/apply", "/apply/road", "/apply/building",
                                 '/projects/bundle/export','/projects/bundle/upload','/projects/bundle/import','/projects/bundle/doctor',
+                                '/projects/bundle/restore-preview','/projects/bundle/restore-confirm',
                                 '/batches/create', '/datasets/quality',
                                 '/batches/control',
                                 '/batches/scheduler',
@@ -2192,6 +2226,10 @@ class Handler(BaseHTTPRequestHandler):
                 result=BUNDLES.import_isolated(json.loads(payload or b'{}'))
             elif request.path == '/projects/bundle/doctor':
                 result=diagnose_bundle(json.loads(payload or b'{}'))
+            elif request.path == '/projects/bundle/restore-preview':
+                result=preview_bundle_restore(json.loads(payload or b'{}'))
+            elif request.path == '/projects/bundle/restore-confirm':
+                result=confirm_bundle_restore(json.loads(payload or b'{}'))
             elif request.path == '/datasets/quality':
                 data = json.loads(payload or b'{}')
                 if not isinstance(data, dict) or set(data) != {'run_id'}:

@@ -1,5 +1,6 @@
 "use client";
 import {useRef,useState} from 'react';
+import BundleRestorePanel from './BundleRestorePanel';
 const bridge='http://127.0.0.1:8765';
 type Bundle={bundle_id:string;archive:string;download_url:string;scenes:{scene_id:string;name:string;history:string[]}[];manifest:{files:Record<string,unknown>;dependencies:{maps:string[];blueprints:string[];material_slots:unknown[];generated_asset_sources?:Record<string,string>;model_ids?:string[]}}};
 type Diagnostic={bundle_id:string;observed_at:number;episode:string;current_map:string;all_declared_dependencies_available:boolean;checks:{kind:string;reference:string|string[];state:string;reason?:string}[]};
@@ -61,6 +62,7 @@ export default function ProjectBundlePanel({sceneId}:{sceneId:string}){
    <p>隔离导入只创建 data/imported-projects 下的新目录，不覆盖当前项目、不执行包中脚本、不切换地图。包中源资产仍须显式导入 Unreal。</p>
    <label><input type="checkbox" checked={confirmed} disabled={busy} onChange={e=>setConfirmed(e.target.checked)}/>确认创建隔离项目目录，不直接恢复实景</label>
    <button disabled={busy||!confirmed} onClick={()=>void execute('/projects/bundle/import',JSON.stringify({bundle_id:bundle.bundle_id,confirmed:true}))}>隔离导入已检查项目包</button>
+   <BundleRestorePanel key={bundle.bundle_id} bundleId={bundle.bundle_id} scenes={bundle.scenes} disabled={busy} onBusy={setBusy}/>
   </div>}
  </section>;
 }

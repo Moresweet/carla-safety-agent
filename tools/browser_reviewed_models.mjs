@@ -122,7 +122,26 @@ try {
     await evaluate(`document.querySelector('.bundle-panel').scrollIntoView({block:'start'})`);
     const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
     await writeFile(join(output,'project-bundle.png'),Buffer.from(shot.data,'base64'));
-    await writeFile(join(output,'bundle-report.json'),JSON.stringify({sceneId,exportedId,uploadedId,imported,diagnostic},null,2));
+    let restoreStatus=null;
+    if(process.argv.includes('--bundle-restore')){
+      await evaluate(`[...document.querySelectorAll('[aria-label="项目包实景恢复"] button')].find(b=>b.textContent==='预览实景恢复范围').click()`);
+      let ready=false;
+      for(let i=0;i<100;i++){ready=await evaluate(`!!document.querySelector('[aria-label="实景恢复范围"]')`);if(ready)break;await delay(200)}
+      assert(ready,'World restore preview unavailable');
+      assert(await evaluate(`[...document.querySelectorAll('[aria-label="项目包实景恢复"] button')].find(b=>b.textContent==='确认恢复当前实景').disabled`));
+      await evaluate(`document.querySelector('[aria-label="项目包实景恢复"]').scrollIntoView({block:'start'})`);
+      const preview=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      await writeFile(join(output,'bundle-restore-preview.png'),Buffer.from(preview.data,'base64'));
+      await evaluate(`document.querySelector('input[aria-label="确认实景恢复"]').click()`);await delay(100);
+      await evaluate(`[...document.querySelectorAll('[aria-label="项目包实景恢复"] button')].find(b=>b.textContent==='确认恢复当前实景').click()`);
+      for(let i=0;i<150;i++){restoreStatus=await evaluate(`document.querySelector('[aria-label="项目包实景恢复"] [role=status]').textContent`);if(restoreStatus.startsWith('实景已同地图合并恢复'))break;await delay(200)}
+      assert(restoreStatus.startsWith('实景已同地图合并恢复'),restoreStatus);
+      assert(!await evaluate(`!!document.querySelector('[aria-label="项目包实景恢复"] [role=alert]')`));
+      const restored=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      await writeFile(join(output,'bundle-restore-completed.png'),Buffer.from(restored.data,'base64'));
+      interactions.push('reviewed_confirmed_same_map_world_restore_with_baseline_backup');
+    }
+    await writeFile(join(output,'bundle-report.json'),JSON.stringify({sceneId,exportedId,uploadedId,imported,diagnostic,restoreStatus},null,2));
     interactions.push('saved_scene_export_uploaded_validated_and_explicitly_imported_to_isolated_directory');
   }
   if(process.argv.includes('--idle-controls')){

@@ -158,3 +158,15 @@ class BundleWorkbench:
             path=self.path(bundle_id)
             read_bundle(path)
             return path.read_bytes()
+
+    def scene_snapshot(self, selection):
+        if not isinstance(selection,dict) or set(selection)!={'bundle_id','scene_id','version'}:
+            raise ValueError('Choose an explicit bundle scene and version')
+        for value in selection.values():identifier(value)
+        with self.operation():
+            manifest,files=read_bundle(self.path(selection['bundle_id']))
+            prefix='scenes/'+selection['scene_id']+'/'
+            if prefix+'head.json' not in files or prefix+selection['version']+'.json' not in files:
+                raise ValueError('Scene version is absent from the selected package')
+            return manifest,files,{'head':json.loads(files[prefix+'head.json']),
+                                  'document':json.loads(files[prefix+selection['version']+'.json'])}

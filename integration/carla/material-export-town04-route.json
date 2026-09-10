@@ -1,0 +1,5 @@
+{
+  "map": "/Game/Carla/Maps/Town04",
+  "targets": ["Road_Road_Town04_319", "Road_Road_Town04_320", "Road_Road_Town04_321", "Road_Road_Town04_322"],
+  "output": "/home/moresweet/Documents/ChatGPT/SafeAgent/carla-safety-agent/runs/validation/material-route-export-sep10"
+}

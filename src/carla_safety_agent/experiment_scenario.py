@@ -4,10 +4,12 @@ import json
 from .experiment_matrix import canonical, compile_matrix
 from .io import scenario_from_dict
 from .scenario_archive import archive_scenario
+from .batch_textures import texture_records
 
 
 def materialize_scenario(root, job):
     configuration = job['configuration']
+    texture_records(configuration['textures']['configuration'])
     # Validate this combination using the same matrix contract and identity.
     single = compile_matrix({k: [v] for k, v in configuration.items()})['jobs'][0]
     if single['job_id'] != job['job_id']:
@@ -35,6 +37,7 @@ def materialize_scenario(root, job):
     provenance['experiment_matrix'] = {'job_id': job['job_id'],
         'source_scenario_sha256': scene['scenario_sha256'],
         'variant_ids': {k: configuration[k]['id'] for k in ('scenes', 'models', 'weather', 'textures')}}
+    provenance['experiment_matrix']['texture_configuration'] = configuration['textures']['configuration']
     scenario_from_dict(scenario)
     path, digest = archive_scenario(root, scenario)
     return {'scenario_path': str(path), 'scenario_sha256': digest,

@@ -19,9 +19,11 @@ def batch_capabilities(algorithms):
                        'configuration': {'action': 'run', 'algorithm': model},
                        'adapter_supported': True,
                        'dependencies_available': entry.get('status') == 'available'})
-    return {'models': models, 'max_jobs': MAX_JOBS, 'texture_variants_supported': False,
+    return {'models': models, 'max_jobs': MAX_JOBS, 'texture_variants_supported': True,
+            'texture_scope': 'current_map_verified_environment_material_slots',
             'unified_capture': True, 'background_scheduler': True,
             'preflight_required': True,
             'limitations': ['Installed model files are not proof of current simulator readiness',
-                            'Texture configuration must be empty',
+                            'Texture variants overlay the current editor state; empty means unchanged',
+                            'Exact UV0-exported environment slots only; no map switching or actor skins',
                             'No automatic failed-job retry']}

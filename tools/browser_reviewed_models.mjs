@@ -75,6 +75,33 @@ try {
     assert(await evaluate(`![...document.querySelectorAll('button')].find(b=>b.textContent==='Run generated scene').disabled`));
     interactions.push('vad_generated_scene_button_enabled');
   }
+  const batchFlag=process.argv.indexOf('--batch');
+  if(batchFlag>=0){
+    const batch=process.argv[batchFlag+1];
+    assert(/^[a-f0-9]{32}$/.test(batch),'Expected a batch ID');
+    await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='End-to-End Test').click()`);
+    let ready=false;
+    for(let i=0;i<100;i++){
+      ready=await evaluate(`[...document.querySelectorAll('select[aria-label="选择批次"] option')].some(o=>o.value===${JSON.stringify(batch)})`);
+      if(ready)break;
+      await evaluate(`(()=>{const b=[...document.querySelectorAll('button')].find(b=>b.textContent==='加载更多批次');if(b&&!b.disabled)b.click()})()`);
+      await delay(200);
+    }
+    assert(ready,'Batch not listed');
+    await evaluate(`(()=>{const s=document.querySelector('select[aria-label="选择批次"]');s.value=${JSON.stringify(batch)};s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    for(let i=0;i<100;i++){
+      ready=await evaluate(`document.querySelectorAll('.batch-panel tbody tr').length===2&&document.querySelector('[aria-label="后台批量调度"]').textContent.includes('空配置保持当前编辑状态')`);
+      if(ready)break;await delay(200);
+    }
+    assert(ready,'Texture capability or paired batch rows missing');
+    assert(await evaluate(`[...document.querySelectorAll('.algorithm-card>div:nth-child(2)')].every(e=>e.scrollWidth<=e.clientWidth+1)`),'Model descriptions overflow their sidebar cards');
+    assert(await evaluate(`[...document.querySelectorAll('.batch-panel button')].find(b=>b.textContent==='开始后台串行测试').disabled`),'Read-only viewing must not authorize a start');
+    await evaluate(`document.querySelector('.batch-panel').scrollIntoView({block:'start'})`);
+    await delay(150);
+    const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+    await writeFile(join(output,'batch-textures.png'),Buffer.from(screenshot.data,'base64'));
+    interactions.push('texture_batch_capability_and_two_rows_visible','batch_start_remains_unconfirmed');
+  }
   const datasetFlag=process.argv.indexOf('--dataset');
   if(datasetFlag>=0){
     const dataset=process.argv[datasetFlag+1];

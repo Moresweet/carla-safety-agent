@@ -37,8 +37,6 @@ def _advance(queue, journal, scenario_root, request):
         model = config['models']['configuration']
         if not supported_configuration(model):
             raise ValueError('Batch dispatcher model adapter is not implemented for this configuration')
-        if config['textures']['configuration']:
-            raise ValueError('Batch texture application adapter is not implemented')
         plan = materialize_scenario(scenario_root, {'job_id': job_id, 'configuration': config})
     except (ValueError, KeyError, TypeError) as exc:
         queue.update_attempt(job_id, attempt, outcome='failed', result={'phase': 'prepare', 'error': str(exc)})

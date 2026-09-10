@@ -2,7 +2,7 @@
 import {useEffect,useRef,useState} from 'react';
 
 type Scheduler={state:string;batch_id?:string;scheduler_id?:string;cancel_requested?:boolean;error?:string;last_step?:{action?:string}};
-type Capabilities={models:{id:string;name:string;dependencies_available:boolean|null}[];max_jobs:number};
+type Capabilities={models:{id:string;name:string;dependencies_available:boolean|null}[];max_jobs:number;texture_variants_supported?:boolean};
 const endpoint='http://127.0.0.1:8765/batches/';
 async function request<T>(path:string,body?:unknown):Promise<T>{
  const response=await fetch(endpoint+path,body===undefined?undefined:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -39,7 +39,7 @@ export default function BatchScheduler({batchId,paused,onSelect}:{batchId:string
  const active=scheduler?.state==='running';
  return <section aria-label="后台批量调度" style={{padding:'16px 0',fontSize:'1rem'}}>
   <p>{capabilities?`执行适配器：${capabilities.models.map(model=>model.name+(model.dependencies_available===false?'（依赖未就绪）':'')).join('、')}。每批最多 ${capabilities.max_jobs} 项。`:'正在读取模型能力…'}</p>
-  <p>纹理配置目前必须为空。启动前仍需环境预检；后台串行执行，失败后等待处理，不自动重试。</p>
+  <p>{capabilities?.texture_variants_supported?'纹理变体仅支持当前地图已验证的环境材质槽；空配置保持当前编辑状态，每组结束恢复原纹理，不支持跨地图或车辆皮肤。':'当前服务尚未确认纹理变体能力，请使用空纹理配置。'}启动前仍需环境预检；后台串行执行，恢复失败后等待处理，不自动重试。</p>
   <p>后台调度：{scheduler?.state||'读取中'}{scheduler?.cancel_requested?' · 正在取消后续调度':''}{scheduler?.last_step?.action?` · ${scheduler.last_step.action}`:''}</p>
   {scheduler?.batch_id&&<p style={{overflowWrap:'anywhere'}}>批次：{scheduler.batch_id} <button onClick={()=>onSelect(scheduler.batch_id!)}>查看调度批次</button></p>}
   <label><input type="checkbox" checked={confirmed} disabled={busy||active||!batchId||paused} onChange={e=>setConfirmed(e.target.checked)}/>我允许后台依次启动所选批次中的真实评测任务</label>

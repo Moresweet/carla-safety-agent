@@ -40,6 +40,7 @@ from carla_safety_agent.batch_catalog import BatchCatalog
 from carla_safety_agent.batch_control import control_batch
 from carla_safety_agent.batch_service import BatchService
 from carla_safety_agent.batch_capabilities import batch_capabilities
+from carla_safety_agent.batch_textures import texture_records, overlay_materials, require_texture_world
 from carla_safety_agent.experiment_report import summarize_queue, compare_variants
 from carla_safety_agent.scene_store import SceneStore, validate_scene
 from carla_safety_agent.material_library import MaterialLibrary, MaterialTransaction, exact_environment_target
@@ -349,6 +350,7 @@ def start_e2e(data: dict) -> dict:
     with _e2e_lock:
         if _e2e_process is not None and _e2e_process.poll() is None:
             raise RuntimeError("A UniAD task is already running")
+        texture_transaction, texture_recovery = None, None
         if action == "doctor":
             command = [str(UNIAD_PYTHON), str(PROJECT_ROOT / "integration/uniad/doctor.py"),
                        "--root", str(E2E_ROOT), "--carla-port", str(CARLA_PORT)]
@@ -359,7 +361,16 @@ def start_e2e(data: dict) -> dict:
             allowed = {Path(item["path"]).resolve() for item in e2e_routes()}
             if route not in allowed:
                 raise RuntimeError("Select a generated ScenarioSpec from the local catalog")
-            _, scenario_digest = read_verified_scenario(route, data.get('scenario_sha256'))
+            scenario_document, scenario_digest = read_verified_scenario(route, data.get('scenario_sha256'))
+            texture_configuration = scenario_document.get('provenance', {}).get('experiment_matrix', {}).get('texture_configuration', {})
+            if texture_records(texture_configuration):
+                texture_world = connect_world()
+                require_texture_world(texture_world, scenario_document)
+                texture_before = list(MATERIALS.overrides(texture_world.id).values())
+                texture_desired = overlay_materials(texture_before, texture_configuration)
+                texture_transaction = prepare_scene_materials(texture_world, {'environment_materials': texture_desired})
+                texture_recovery = {'episode': texture_world.id, 'map': texture_world.get_map().name,
+                                    'before': texture_before, 'desired': texture_desired}
             if not isinstance(data.get('unified_capture',False),bool):
                 raise ValueError('unified_capture must be boolean')
             command = ([sys.executable, str(PROJECT_ROOT/'tools/run_rule_scenario.py')]
@@ -444,6 +455,7 @@ def start_e2e(data: dict) -> dict:
                        BENCH2DRIVE_ZOO=str(BENCH2DRIVE_ZOO),
                        BENCH2DRIVE_TCP_ZOO=str(BENCH2DRIVE_TCP_ZOO))
         execution_id = SESSION.begin(action, {'request': data, 'command': command,
+                              'texture_recovery': texture_recovery,
                               'starting_scene': starting_scene,
                               'scenario_sha256': scenario_digest if action in ('run','rule-run') else None,
                               'python': sys.executable if action in ('sensor-rig','rule-run') else str(UNIAD_PYTHON), 'carla_port': CARLA_PORT,
@@ -458,6 +470,9 @@ def start_e2e(data: dict) -> dict:
                         results=str(results_path) if action in ("run", "preset-run", "rule-run") else None)
         launched = None
         try:
+            if texture_transaction:
+                # Recovery references are durable before the first native write.
+                texture_transaction.apply()
             _e2e_process = subprocess.Popen(
                 command, cwd=PROJECT_ROOT, env=env, stdout=log_stream,
                 stderr=subprocess.STDOUT, start_new_session=True)
@@ -474,6 +489,13 @@ def start_e2e(data: dict) -> dict:
                 _abort_e2e_start(launched, exc)
             else:
                 _e2e_job.update(state='failed', startup_error=str(exc))
+                if texture_transaction:
+                    SESSION.transition('recovering', error=str(exc))
+                    try:
+                        restore_editor_world()
+                    except Exception as recovery_error:
+                        _e2e_job.update(cleanup_error=str(recovery_error))
+                        raise RuntimeError(f'Texture recovery required: {recovery_error}') from exc
                 SESSION.transition('failed', error=str(exc))
             raise
         finally:
@@ -807,12 +829,29 @@ def restore_editor_world():
         _carla_client = carla.Client(HOST, CARLA_PORT)
         _carla_client.set_timeout(5.0)
     world = _carla_client.get_world()
+    recovery = SESSION.snapshot().get('configuration', {}).get('texture_recovery')
+    if recovery and (world.id != recovery['episode'] or world.get_map().name != recovery['map']):
+        raise RuntimeError('Texture recovery world changed; refusing to modify another episode')
     settings = world.get_settings()
     if settings.synchronous_mode:
         settings.synchronous_mode = False
         settings.fixed_delta_seconds = None
         settings.spectator_as_ego = True
         world.apply_settings(settings)
+    restore_execution_textures(world)
+
+
+def restore_execution_textures(world):
+    recovery = SESSION.snapshot().get('configuration', {}).get('texture_recovery')
+    if not recovery:
+        return
+    if world.id != recovery['episode'] or world.get_map().name != recovery['map']:
+        raise RuntimeError('Texture recovery world changed; refusing to modify another episode')
+    # Include every possibly applied slot, even if RPC failed before the local
+    # override record was saved. Retrying recovery remains idempotent.
+    transaction = prepare_scene_materials(world, {'environment_materials': recovery['before']},
+                                         previous=recovery['desired'])
+    transaction.apply()
 
 
 @simulation_operation
@@ -1274,10 +1313,11 @@ def prepare_scene_visibility(world, document):
                                  lambda number: find_environment(world, number)[1].name, apply)
 
 
-def prepare_scene_materials(world, document):
+def prepare_scene_materials(world, document, previous=None):
     if 'environment_materials' not in document:
         return None  # Older scenes must not erase edits they never recorded.
-    previous = list(MATERIALS.overrides(world.id).values())
+    if previous is None:
+        previous = list(MATERIALS.overrides(world.id).values())
     payloads = {}
     def apply(key, digest):
         target, component, slot = key

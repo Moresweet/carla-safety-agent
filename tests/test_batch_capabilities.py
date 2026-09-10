@@ -13,6 +13,7 @@ def test_capabilities_share_dispatch_registry_and_keep_readiness_separate():
     assert models['uniad-base']['dependencies_available'] is False
     assert models['rule-run']['dependencies_available'] is None
     assert result['preflight_required'] is True
-    assert result['texture_variants_supported'] is False
+    assert result['texture_variants_supported'] is True
+    assert result['texture_scope'] == 'current_map_verified_environment_material_slots'
     assert not supported_configuration({'action': 'run', 'algorithm': 'unknown'})
     assert not supported_configuration({'action': 'run', 'algorithm': 'vad', 'command': 'extra'})

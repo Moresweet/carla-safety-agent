@@ -33,3 +33,12 @@ def test_rejects_source_tampering_and_unsupported_weather(tmp_path):
     d = matrix(); d['weather'][0]['configuration'] = {'friction_scale': .5}
     with pytest.raises(ValueError, match='Unsupported'): materialize_scenario(tmp_path, compile_matrix(d)['jobs'][0])
     assert not list(tmp_path.iterdir())
+
+
+def test_texture_variant_is_bound_into_verified_scenario(tmp_path):
+    d = matrix()
+    textures = {'environment_materials': [{'target':'house', 'component':'mesh', 'slot':0, 'texture':'a'*64}]}
+    d['textures'][0]['configuration'] = textures
+    output = materialize_scenario(tmp_path, compile_matrix(d)['jobs'][0])
+    saved, _ = read_verified_scenario(output['scenario_path'], output['scenario_sha256'])
+    assert saved['provenance']['experiment_matrix']['texture_configuration'] == textures

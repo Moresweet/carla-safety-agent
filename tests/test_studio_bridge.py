@@ -51,6 +51,89 @@ def test_repeated_batch_start_returns_before_native_access():
     assert result['replayed'] is True and result['execution_id'] == 'original'
 
 
+def test_texture_recovery_uses_durable_desired_even_if_override_write_was_lost():
+    before, desired, calls = [], [{'target':'house', 'component':'mesh', 'slot':0,'texture':'a'*64}], []
+    recovery = {'episode':7, 'map':'Town04', 'before':before, 'desired':desired}
+    world = SimpleNamespace(id=7, get_map=lambda:SimpleNamespace(name='Town04'))
+    def prepare(w, document, previous):
+        assert w is world and previous == desired
+        assert document == {'environment_materials':before}
+        return SimpleNamespace(apply=lambda:calls.append('restored'))
+    env = functions('restore_execution_textures',
+        SESSION=SimpleNamespace(snapshot=lambda:{'configuration':{'texture_recovery':recovery}}),
+        prepare_scene_materials=prepare)
+    env['restore_execution_textures'](world)
+    env['restore_execution_textures'](world)
+    assert calls == ['restored', 'restored']
+    world.id = 8
+    with pytest.raises(RuntimeError, match='world changed'): env['restore_execution_textures'](world)
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize('failure', ['apply', 'launch', 'recovery', 'attach'])
+def test_texture_start_failures_restore_or_retain_recovery_ownership(failure):
+    source = Path(__file__).resolve().parents[1]/'tools/livery_bridge.py'
+    start = next(n for n in ast.parse(source.read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='start_e2e')
+    block = next(n for n in ast.walk(start) if isinstance(n,ast.Try)
+        and any(isinstance(c,ast.Call) and isinstance(c.func,ast.Attribute) and c.func.attr=='Popen' for s in n.body for c in ast.walk(s)))
+    calls = []
+    def operation(name, fails=False):
+        calls.append(name)
+        if fails: raise RuntimeError(name+' failed')
+    child = SimpleNamespace(pid=123)
+    env = {'launched':None, 'texture_transaction':SimpleNamespace(apply=lambda:operation('apply',failure=='apply')),
+        'subprocess':SimpleNamespace(STDOUT=-2, Popen=lambda *a,**kw:operation('launch',failure in ('launch','recovery')) or child),
+        'command':[], 'PROJECT_ROOT':Path('/local'), 'env':{},
+        'log_stream':SimpleNamespace(close=lambda:operation('close')),
+        'SESSION':SimpleNamespace(attach=lambda _:operation('attach',failure=='attach'),
+                                  transition=lambda state,**kw:operation(state)),
+        '_e2e_job':{}, 'restore_editor_world':lambda:operation('restore',failure=='recovery'),
+        '_abort_e2e_start':lambda proc,exc:operation('retain_child'),
+        'action':'run', 'data':{}, '_e2e_pid':SimpleNamespace(write_text=lambda _:None)}
+    with pytest.raises(RuntimeError): exec(compile(ast.Module(body=[block],type_ignores=[]),str(source),'exec'),env)
+    assert calls[0]=='apply' and calls[-1]=='close'
+    if failure=='attach':
+        assert 'retain_child' in calls and 'restore' not in calls
+    else:
+        assert calls.index('recovering') < calls.index('restore')
+        assert ('failed' in calls) == (failure!='recovery')
+
+
+def test_texture_recovery_rejects_changed_episode_before_settings_write():
+    def forbidden(*args): pytest.fail('Foreign world must not be modified')
+    world = SimpleNamespace(id=8, get_settings=forbidden)
+    env = functions('restore_editor_world', _carla_client=SimpleNamespace(get_world=lambda:world),
+        SESSION=SimpleNamespace(snapshot=lambda:{'configuration':{'texture_recovery':{'episode':7,'map':'Town04'}}}))
+    with pytest.raises(RuntimeError,match='world changed'): env['restore_editor_world']()
+
+
+@pytest.mark.parametrize('invalid', ['target','slot','digest',None])
+def test_material_transaction_preflights_all_references_before_writing(invalid):
+    from carla_safety_agent.material_library import MaterialTransaction
+    calls = []
+    records = [{'target':'road','component':'mesh','slot':0,'texture':'a'*64}]
+    world = SimpleNamespace(id=7, get_map=lambda:SimpleNamespace(name='Town04'),
+        get_names_of_all_objects=lambda:[] if invalid=='target' else ['road'],
+        apply_color_texture_to_object=lambda *args:calls.append('rpc'))
+    def texture(digest):
+        if invalid=='digest': raise ValueError('Texture checksum mismatch')
+        return b'image'
+    library = SimpleNamespace(overrides=lambda _: {}, texture=texture,
+        catalog=lambda _:{'actors':{'road':[{'component':'mesh','slots':[{'slot':0,
+            'status':'missing' if invalid=='slot' else 'uv0_ready'}]}]}},
+        record=lambda *args:calls.append('record'))
+    env = functions('prepare_scene_materials', MATERIALS=library, MaterialTransaction=MaterialTransaction,
+        decode_texture=lambda *args:(None,'decoded'), carla=SimpleNamespace(MaterialParameter=SimpleNamespace(Diffuse='diffuse')))
+    if invalid:
+        with pytest.raises(ValueError): env['prepare_scene_materials'](world,{'environment_materials':records})
+        assert calls==[]
+    else:
+        tx=env['prepare_scene_materials'](world,{'environment_materials':records})
+        assert calls==[]
+        tx.apply()
+        assert calls==['rpc','record']
+
+
 def test_weather_restore_rejects_stale_execution_before_rpc():
     def forbidden(*args): pytest.fail('Stale weather restore touched world')
     env = functions('restore_execution_weather', SESSION=SimpleNamespace(snapshot=lambda: {'run_id': 'new', 'state': 'completed'}),

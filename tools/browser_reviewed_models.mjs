@@ -15,7 +15,8 @@ const output=resolve('runs/validation/browser-models-'+randomUUID());
 await mkdir(output,{recursive:true});
 const chrome=spawn('/usr/bin/google-chrome',['--headless=new','--disable-gpu','--no-first-run',
   '--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{stdio:'ignore'});
-let socket;
+let socket, diagnosticCDP;
+const browserErrors=[];
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 try {
   let port;
@@ -31,8 +32,19 @@ try {
   socket.addEventListener('message',event=>{const value=JSON.parse(event.data);const item=pending.get(value.id);if(item){pending.delete(value.id);clearTimeout(item.timer);value.error?item.reject(Error(value.error.message)):item.resolve(value.result)}});
   const cdp=(method,params={})=>new Promise((resolve,reject)=>{const id=++next;const timer=setTimeout(()=>{pending.delete(id);reject(Error('CDP timeout: '+method))},20000);pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params}))});
   const evaluate=async expression=>{const response=await cdp('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(response.exceptionDetails)throw Error(JSON.stringify(response.exceptionDetails));return response.result.value};
+  diagnosticCDP=cdp;
+  socket.addEventListener('message',event=>{const value=JSON.parse(event.data);if(value.method==='Runtime.exceptionThrown')browserErrors.push(value.params)});
+  await cdp('Runtime.enable');
+  await cdp('Page.enable');
   await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+  if(process.argv.includes('--simulate-no-webgl')){
+    await cdp('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{const original=HTMLCanvasElement.prototype.getContext;HTMLCanvasElement.prototype.getContext=function(kind,...args){return kind==='webgl'?null:original.call(this,kind,...args)}})()`});
+  }
   await cdp('Page.navigate',{url:'http://localhost:3000/'});
+  if(process.argv.includes('--simulate-no-webgl')){
+    for(let i=0;i<100;i++){if(await evaluate(`document.readyState==='complete'`))break;await delay(100)}
+    assert(await evaluate(`document.createElement('canvas').getContext('webgl')===null`),'WebGL fault injection did not activate');
+  }
   for(let i=0;i<100;i++){if(await evaluate(`!![...document.querySelectorAll('button')].find(b=>b.textContent==='Generate Scene')`))break;await delay(200)}
   const buttons=await evaluate(`[...document.querySelectorAll('nav button')].map(b=>b.textContent)`);
   assert(buttons.includes('Generate Scene'));
@@ -40,7 +52,11 @@ try {
   let models=[];
   for(let i=0;i<100;i++){
     models=await evaluate(`[...document.querySelectorAll('select[aria-label="生成场景测试模型"] option')].map(o=>({id:o.value,disabled:o.disabled}))`);
-    if(models.length===5)break;await delay(200);
+    if(models.length===5)break;
+    // Server-rendered navigation can precede React hydration. Re-selecting
+    // this read-only tab is idempotent; never retry mutation buttons here.
+    if(i%5===0)await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Generate Scene')?.click()`);
+    await delay(200);
   }
   assert.deepEqual(models.map(m=>m.id).sort(),['admlp','tcp','uniad-base','uniad-tiny','vad']);
   const state=await evaluate(`(()=>{const section=document.querySelector('[aria-label="确认计划并选择模型"]');return {buttons:[...section.querySelectorAll('button')].map(b=>({text:b.textContent,disabled:b.disabled})),checkboxes:[...section.querySelectorAll('input')].map(b=>({checked:b.checked,disabled:b.disabled}))}})()`);
@@ -179,6 +195,10 @@ try {
     await cdp('DOM.setFileInputFiles',{nodeId:input.nodeId,files:[texture]});
     for(let i=0;i<100;i++){ready=await evaluate(`![...document.querySelectorAll('.material-slot-editor button')].find(b=>b.textContent==='应用到此材质槽').disabled`);if(ready)break;await delay(200)}
     assert(ready,'Material upload or mesh load failed');
+    if(process.argv.includes('--simulate-no-webgl')){
+      assert(await evaluate(`document.querySelector('.preview [role=alert]')?.textContent.includes('WebGL unavailable')`));
+      interactions.push('missing_webgl_is_local_preview_error');
+    }
     await delay(300);
     const atlas=await evaluate(`document.querySelector('canvas.atlas-output').toDataURL('image/png')`);
     await writeFile(join(output,'material-atlas.png'),Buffer.from(atlas.split(',')[1],'base64'));
@@ -341,6 +361,18 @@ try {
   }
   await writeFile(join(output,'report.json'),JSON.stringify({models,state,interactions,stoppedExecution,scope:'No model start; optional stop/texture writes are restricted to the explicitly supplied execution/actor identity',profile},null,2));
   console.log(JSON.stringify({output,models,state,interactions}));
+} catch(error) {
+  await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),browserErrors},null,2));
+  if(diagnosticCDP){
+    try {
+      const shot=await diagnosticCDP('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      await writeFile(join(output,'failure.png'),Buffer.from(shot.data,'base64'));
+      const body=await diagnosticCDP('Runtime.evaluate',{expression:'document.body.innerText',returnByValue:true});
+      await writeFile(join(output,'failure-page.txt'),body.result.value||'');
+    } catch(diagnosticError){console.error('Failure diagnostics:',String(diagnosticError))}
+  }
+  console.error('Failure evidence:',output);
+  throw error;
 } finally {
   socket?.close();
   if(chrome.exitCode===null)chrome.kill('SIGTERM');

@@ -1,29 +1,46 @@
 "use client";
-import {RefObject,useEffect,useRef} from "react";
+import {RefObject,useEffect,useRef,useState} from "react";
 import {textureUploadFlipY} from './uvConvention';
 import {previewBounds,previewCamera} from './previewCamera';
 export type MeshData={source:string;triangleCount:number;vertices:number[]};
-function shader(gl:WebGLRenderingContext,type:number,source:string){const s=gl.createShader(type)!;gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s)??"Shader error");return s}
-function program(gl:WebGLRenderingContext){const p=gl.createProgram()!;gl.attachShader(p,shader(gl,gl.VERTEX_SHADER,`attribute vec3 p;attribute vec2 uv;uniform mat4 m;varying vec2 v;void main(){v=uv;gl_Position=m*vec4(p,1.);}`));gl.attachShader(p,shader(gl,gl.FRAGMENT_SHADER,`precision mediump float;uniform sampler2D atlas;varying vec2 v;void main(){vec4 c=texture2D(atlas,v);gl_FragColor=vec4(mix(vec3(.72),c.rgb,c.a),1.);}`));gl.linkProgram(p);return p}
+function shader(gl:WebGLRenderingContext,type:number,source:string){const s=gl.createShader(type);if(!s)throw new Error('Shader allocation failed');gl.shaderSource(s,source);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)){const error=gl.getShaderInfoLog(s);gl.deleteShader(s);throw new Error(error??"Shader error")}return s}
+function program(gl:WebGLRenderingContext){
+ const p=gl.createProgram();if(!p)throw new Error('Program allocation failed');const shaders:WebGLShader[]=[];
+ try{
+  shaders.push(shader(gl,gl.VERTEX_SHADER,`attribute vec3 p;attribute vec2 uv;uniform mat4 m;varying vec2 v;void main(){v=uv;gl_Position=m*vec4(p,1.);}`));
+  shaders.push(shader(gl,gl.FRAGMENT_SHADER,`precision mediump float;uniform sampler2D atlas;varying vec2 v;void main(){vec4 c=texture2D(atlas,v);gl_FragColor=vec4(mix(vec3(.72),c.rgb,c.a),1.);}`));
+  for(const s of shaders)gl.attachShader(p,s);gl.linkProgram(p);
+  if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(p)??'Program linking failed');
+  return p;
+ }catch(error){gl.deleteProgram(p);throw error}finally{for(const s of shaders)gl.deleteShader(s)}
+}
 export default function CarPreview({mesh,atlas,revision,useSourceUV=false,repeatTexture=false,label="3D BODY PREVIEW",axisLabels=['Front','Sides','Roof']}:{mesh:MeshData|null;atlas:RefObject<HTMLCanvasElement|null>;revision:number;useSourceUV?:boolean;repeatTexture?:boolean;label?:string;axisLabels?:[string,string,string]}){
  const canvas=useRef<HTMLCanvasElement>(null),angle=useRef({yaw:-.7,pitch:.42}),drag=useRef<{x:number;y:number;yaw:number;pitch:number}|null>(null);
+ const [error,setError]=useState('');
  useEffect(()=>{
-  const c=canvas.current;if(!c||!mesh)return;const gl=c.getContext("webgl",{antialias:true});if(!gl)return;
-  const p=program(gl),raw=mesh.vertices,positions=new Float32Array(raw.length/5*3),uvs=new Float32Array(raw.length/5*2),mins=[Infinity,Infinity,Infinity],maxs=[-Infinity,-Infinity,-Infinity];
+  setError('');
+  const c=canvas.current;if(!c||!mesh)return;
+  let bounds:ReturnType<typeof previewBounds>;
+  try{bounds=previewBounds(mesh.vertices)}catch(e){setError(String(e));return}
+  const gl=c.getContext("webgl",{antialias:true});if(!gl){setError('WebGL unavailable');return}
+  let p:WebGLProgram;try{p=program(gl)}catch(e){setError(String(e));return}
+  const raw=mesh.vertices,positions=new Float32Array(raw.length/5*3),uvs=new Float32Array(raw.length/5*2),mins=[Infinity,Infinity,Infinity],maxs=[-Infinity,-Infinity,-Infinity],buffers:WebGLBuffer[]=[];
   for(let i=0;i<raw.length;i+=5)for(let q=0;q<3;q++){mins[q]=Math.min(mins[q],raw[i+q]);maxs[q]=Math.max(maxs[q],raw[i+q])}
   const norm=(v:number,q:number)=>(v-mins[q])/(maxs[q]-mins[q]);
   for(let i=0,j=0,k=0;i<raw.length;i+=15){
    const a=[raw[i],raw[i+1],raw[i+2]],b=[raw[i+5],raw[i+6],raw[i+7]],d=[raw[i+10],raw[i+11],raw[i+12]],u=[b[0]-a[0],b[1]-a[1],b[2]-a[2]],v=[d[0]-a[0],d[1]-a[1],d[2]-a[2]],n=[u[1]*v[2]-u[2]*v[1],u[2]*v[0]-u[0]*v[2],u[0]*v[1]-u[1]*v[0]],side=Math.abs(n[1])>Math.abs(n[2]),right=(a[1]+b[1]+d[1])/3>0;
    for(let q=0;q<3;q++){const point=[a,b,d][q];positions.set(point,j);let px:number,py:number;if(useSourceUV){px=raw[i+q*5+3];py=raw[i+q*5+4]}else if(!side){px=norm(point[0],0)/3;py=1-norm(point[1],1)}else if(!right){px=(1+norm(point[0],0))/3;py=1-norm(point[2],2)}else{px=(2+norm(point[0],0))/3;py=1-norm(point[2],2)}uvs.set([px,py],k);j+=3;k+=2}
   }
-  const bind=(name:string,data:Float32Array,size:number)=>{const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,data,gl.STATIC_DRAW);const a=gl.getAttribLocation(p,name);gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,size,gl.FLOAT,false,0,0)};
+  const bind=(name:string,data:Float32Array,size:number)=>{const b=gl.createBuffer();if(b)buffers.push(b);gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,data,gl.STATIC_DRAW);const a=gl.getAttribLocation(p,name);gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,size,gl.FLOAT,false,0,0)};
   gl.useProgram(p);bind("p",positions,3);bind("uv",uvs,2);const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.enable(gl.DEPTH_TEST);gl.enable(gl.CULL_FACE);
-  const bounds=previewBounds(raw);
   const draw=()=>{c.width=Math.max(1,c.clientWidth*devicePixelRatio);c.height=Math.max(1,c.clientHeight*devicePixelRatio);gl.viewport(0,0,c.width,c.height);gl.clearColor(.035,.055,.085,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.uniformMatrix4fv(gl.getUniformLocation(p,"m"),false,previewCamera(angle.current.yaw,angle.current.pitch,c.width/c.height,bounds.center,bounds.radius));if(atlas.current){gl.bindTexture(gl.TEXTURE_2D,tex);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,textureUploadFlipY(useSourceUV));gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,atlas.current)}gl.drawArrays(gl.TRIANGLES,0,positions.length/3)};
   if(repeatTexture){gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.REPEAT);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.REPEAT)}
-  draw();(c as HTMLCanvasElement&{redraw?:()=>void}).redraw=draw;return()=>{delete (c as HTMLCanvasElement&{redraw?:()=>void}).redraw;gl.deleteProgram(p);gl.deleteTexture(tex);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT)}
+  draw();(c as HTMLCanvasElement&{redraw?:()=>void}).redraw=draw;return()=>{delete (c as HTMLCanvasElement&{redraw?:()=>void}).redraw;for(const buffer of buffers)gl.deleteBuffer(buffer);gl.deleteProgram(p);gl.deleteTexture(tex);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT)}
  },[mesh,atlas,useSourceUV,repeatTexture]);
  useEffect(()=>{(canvas.current as HTMLCanvasElement&{redraw?:()=>void})?.redraw?.()},[revision]);
  function move(e:React.PointerEvent<HTMLCanvasElement>){if(!drag.current)return;angle.current={yaw:drag.current.yaw+(e.clientX-drag.current.x)*.01,pitch:Math.max(-1,Math.min(1,drag.current.pitch+(e.clientY-drag.current.y)*.01))};(e.currentTarget as HTMLCanvasElement&{redraw?:()=>void}).redraw?.()}
- return <div className="preview"><div className="previewbar"><b>{label}</b><span>Drag to orbit · live texture feedback</span></div><canvas ref={canvas} onPointerDown={e=>{e.currentTarget.setPointerCapture(e.pointerId);drag.current={x:e.clientX,y:e.clientY,...angle.current}}} onPointerMove={move} onPointerUp={()=>drag.current=null}/><div className="axis"><i className="front"/>{axisLabels[0]}<i className="left"/>{axisLabels[1]}<i className="top"/>{axisLabels[2]}</div></div>
+ return <div className="preview"><div className="previewbar"><b>{label}</b><span>Drag to orbit · live texture feedback</span></div>
+  {error&&<p role="alert">真实3D预览不可用：{error}。请检查网格或浏览器图形支持。</p>}
+  <canvas ref={canvas} onPointerDown={e=>{e.currentTarget.setPointerCapture(e.pointerId);drag.current={x:e.clientX,y:e.clientY,...angle.current}}} onPointerMove={move} onPointerUp={()=>drag.current=null}/>
+  <div className="axis"><i className="front"/>{axisLabels[0]}<i className="left"/>{axisLabels[1]}<i className="top"/>{axisLabels[2]}</div></div>
 }

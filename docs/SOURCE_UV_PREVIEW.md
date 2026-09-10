@@ -56,3 +56,8 @@ stays in the web UI. This avoids injecting UI markers into sensor imagery.
 The source preview does not reproduce Unreal lighting, normals, material
 layers or animation. Additional vehicle and environment visual regression is
 required whenever the shared source-UV upload convention changes.
+# 预览故障隔离增量
+
+CarPreview 对无效几何、WebGL不可用、着色器编译/链接失败显示局部错误；网格切换或卸载时释放顶点/UV缓冲、程序与纹理，编译失败也释放已创建的着色器。此处不保证所有浏览器上下文丢失或其他编辑组件的异常均已覆盖。
+
+真实浏览器无WebGL注入通过，纹理画布仍正常：browser-models-3b1b560c-b90a-4299-8ce6-66d0f78037b2/material-uv.png。正常WebGL回归通过且截图已查看：browser-models-05de0eff-f2cc-40ee-ba76-23730e777f25/material-uv.png。测试先验证注入生效；导航等待服务端页面完成交互初始化，失败保存异常、正文与截图，不重试写操作。

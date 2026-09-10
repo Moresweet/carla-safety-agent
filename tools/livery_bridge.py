@@ -840,12 +840,12 @@ def connect_world():
             _carla_client.set_timeout(5.0)
         world = _carla_client.get_world()
         if _world_episode != world.id:
-            _world_episode = world.id
             _editor_actors.clear()
             _environment_cache.clear()
             _actor_object_names.clear()
             _provenance.mark(world.id, [a for a in world.get_actors()
-                if a.type_id.startswith(('vehicle.', 'walker.', 'static.prop.'))], 'existing', overwrite=False)
+                if a.type_id.startswith(('vehicle.', 'walker.', 'static.prop.'))], 'unknown', overwrite=False)
+            _world_episode = world.id
         return world
 
 
@@ -1037,7 +1037,7 @@ def catalog_objects(category: str, query: str, offset: int, limit: int, origin: 
             raise RuntimeError(f"Unknown category: {category}")
         records = [item for item in snapshot.get("objects", []) if item.get("kind") == kind]
         if origin != "all":
-            records = [item for item in records if item.get('origin', 'existing') == origin]
+            records = [item for item in records if item.get('origin', 'unknown') == origin]
         if query:
             needle = query.casefold()
             records = [item for item in records if needle in item["name"].casefold()
@@ -1062,7 +1062,7 @@ def catalog_objects(category: str, query: str, offset: int, limit: int, origin: 
                                              "group": "dynamic"}
                    for actor in world.get_actors().filter(pattern)]
     if origin != "all":
-        records = [item for item in records if item.get('origin', 'existing') == origin]
+        records = [item for item in records if item.get('origin', 'unknown') == origin]
     if query:
         needle = query.casefold()
         records = [item for item in records

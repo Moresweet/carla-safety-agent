@@ -4,6 +4,18 @@ import pytest
 from carla_safety_agent.provenance import ActorProvenance
 
 
+def test_unobserved_origin_is_unknown_and_reconnect_preserves_known_origin(tmp_path):
+    store = ActorProvenance(tmp_path/'actors.json')
+    actor = SimpleNamespace(id=3, type_id='vehicle.test')
+    assert store.origin(1, actor) == 'unknown'
+    for origin in ('existing', 'user', 'evaluation', 'unknown'):
+        store.mark(1, [actor], origin)
+        store.mark(1, [actor], 'unknown', overwrite=False)
+        assert store.origin(1, actor) == origin
+        assert store.origin(2, actor) == 'unknown'
+        assert store.origin(1, SimpleNamespace(id=3, type_id='vehicle.other')) == 'unknown'
+
+
 def test_reclassification_preserves_generated_asset_metadata(tmp_path):
     store = ActorProvenance(tmp_path/'provenance.json')
     actor = SimpleNamespace(id=3,type_id='static.prop.mesh')

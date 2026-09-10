@@ -1,15 +1,27 @@
 # CARLA Safety Agent
 
-Portable runtime: see [Docker setup](integration/docker/README.md) for a local
-image containing the modified CARLA/UE build, ROS/RViz and UniAD dependencies,
-with application code mounted from your checkout.
+Current development runs locally, without Docker. Start with the maintained
+[current development state](docs/CURRENT_DEVELOPMENT_STATE.md),
+[development plan](docs/DEVELOPMENT_PLAN.md) and
+[project migration guide](docs/PROJECT_MIGRATION.md); they record verified
+features, evidence and remaining limitations independently of chat history.
+Historical [Docker setup](integration/docker/README.md) is not the current
+development or acceptance path.
+
+The studio now supports scene versions, exact material slots, confirmed Blender
+source registration and package restore, five native end-to-end model adapters,
+unified raw capture, replay and explicitly marked interrupted-capture recovery.
+See [source UV](docs/SOURCE_UV_PREVIEW.md), [actor texture versions](docs/ACTOR_MATERIAL_VERSIONS.md),
+[project package UI](docs/PROJECT_BUNDLE_UI.md) and [capture recovery](docs/CAPTURE_RECOVERY.md).
+Support is bounded by the documented assets/contracts; a successful short test
+does not establish driving safety or guarantee a crash-free simulator.
 
 An original, risk-directed scenario generation agent for CARLA 0.9.16. It borrows
 the useful architectural idea of task packets, adapters, execution and evidence
 from GameFactory-3A, but defines a safety-specific scenario model, sampler,
 oracles and CARLA runtime boundary.
 
-## What the MVP does
+## Original CLI MVP (legacy capture format)
 
 - Generates deterministic `cut_in`, `hard_brake`, and `occluded_crossing` families.
 - Compiles Chinese or English descriptions into a reviewable scenario JSON file.
@@ -36,7 +48,7 @@ Use it directly; a native-extension wheel cannot be imported by merely adding
 the compressed `.whl` file to `PYTHONPATH`.
 
 ```bash
-cd /home/moresweet/Documents/Codex/2026-08-26/gi/outputs/carla-safety-agent
+cd /home/moresweet/Documents/ChatGPT/SafeAgent/carla-safety-agent
 PYTHONPATH=src /home/moresweet/carla/.venv/bin/python -m carla_safety_agent.cli --help
 ```
 
@@ -234,12 +246,11 @@ Container images can override `CARLA_ROOT`, `UE4_ROOT`, `CARLA_PYTHONPATH`,
 `CARLA_MAP`, and `CARLA_PORT` without editing the scripts. Surface Studio and
 the bridge intentionally retain their browser contract on ports 3000 and 8765.
 
-The Surface Studio also includes a **Road** workspace. It tiles an uploaded
-image into a 1024x1024 diffuse texture and applies it to every `Road_Road_*`
-mesh in the loaded town while preserving separate lane-marking, curb,
-crosswalk, sidewalk, and grass objects. This requires the runtime road material
-and CARLA source extension documented in
-`integration/ENVIRONMENT_CHANGES.md`.
+Use **Edit World → exact road object → Edit texture** for a verified exported
+component/material slot. The legacy whole-town road selector is not permission
+to edit every road: an explicit supported target is required. Repeated source
+UVs repeat the uploaded texture. The runtime material and CARLA source extension
+are documented in `integration/ENVIRONMENT_CHANGES.md`.
 
 The **Building** workspace provides the same live workflow for the verified
 Town04 `BP_House16` asset. It tiles, scales, offsets, and rotates an uploaded
@@ -258,9 +269,9 @@ render-proxy reconstruction in CARLA 0.9.15/UE 4.26.
 
 Surface Studio polls the running CARLA world and fills the target selector with
 real vehicles and walkers plus the verified road and building surfaces.
-Selecting a target or pressing **Focus & highlight** moves the spectator once
-and draws an eight-second category-colored bounding box: vehicles are blue,
-walkers yellow, buildings purple, and road targets red.
+Selecting a target or pressing **Focus & highlight** moves the spectator once.
+Native debug boxes have been removed because they appeared in authoritative
+RGB captures; selection feedback stays in the web interface.
 
 The live BEV uses sampled CARLA waypoints rather than a static image. It shows
 dynamic actors, the verified surface targets, the hero marker, and the current

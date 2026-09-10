@@ -371,6 +371,38 @@ def test_client_is_reused():
     assert len(clients) == 1
 
 
+def test_first_connection_cannot_infer_dynamic_actor_history(tmp_path):
+    import threading
+    from carla_safety_agent.provenance import ActorProvenance
+    store = ActorProvenance(tmp_path/'actors.json')
+    known = SimpleNamespace(id=1, type_id='vehicle.test')
+    unobserved = SimpleNamespace(id=2, type_id='vehicle.test')
+    store.mark(10, [known], 'user')
+    world = SimpleNamespace(id=10, get_actors=lambda: [known, unobserved])
+    env = functions('connect_world', evaluation_active=lambda:False,
+        _simulation_lock=threading.RLock(), _world_episode=None,
+        _carla_client=SimpleNamespace(get_world=lambda:world), _provenance=store,
+        _editor_actors=set(), _environment_cache={}, _actor_object_names={})
+    assert env['connect_world']() is world
+    assert store.origin(10, known) == 'user'
+    assert store.origin(10, unobserved) == 'unknown'
+    assert env['_world_episode'] == 10
+
+
+def test_failed_provenance_initialization_is_not_cached():
+    import threading
+    def fail(*args, **kwargs): raise OSError('disk unavailable')
+    world = SimpleNamespace(id=10, get_actors=lambda:[])
+    env = functions('connect_world', evaluation_active=lambda:False,
+        _simulation_lock=threading.RLock(), _world_episode=None,
+        _carla_client=SimpleNamespace(get_world=lambda:world),
+        _provenance=SimpleNamespace(mark=fail), _editor_actors=set(),
+        _environment_cache={}, _actor_object_names={})
+    for _ in range(2):
+        with pytest.raises(OSError): env['connect_world']()
+        assert env['_world_episode'] is None
+
+
 def test_stop_does_not_interrupt_cleanup_twice():
     import threading
     env = functions('stop_e2e', _e2e_lock=threading.Lock(), _e2e_job={'state': 'stopping'})

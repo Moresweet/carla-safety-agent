@@ -1,6 +1,6 @@
 # 本机场景与 Blender 源资产迁移
 
-当前提供 CLI；完整项目一键迁移仍开发中。以下命令在仓库根目录运行，
+当前提供图形项目包导出/隔离导入、显式Unreal源资产注册与同地图实景恢复，详见[项目包界面](PROJECT_BUNDLE_UI.md)。完整跨机环境安装与验收仍开发中。以下CLI命令在仓库根目录运行，
 `PROJECT`、`SCENE`、`OUTPUT` 等需替换为实际路径或 ID。
 
 ## 导出
@@ -77,7 +77,7 @@ PYTHONPATH=src python3 tools/register_bundle_assets.py OUTPUT.zip \
 再次执行是一次新操作，不是断点续跑。输出包写入失败也可能留下部分文件，需检查报告。
 
 将成功生成的REMAPPED.zip交给现有stage及场景恢复流程，仍需目标同地图。
-当前CLI不会自动修改运行世界或启动目标CARLA，完整图形界面向导和跨机验收仍未完成。
+当前CLI不会自动修改运行世界或启动目标CARLA。图形界面已有独立确认的源注册→新包→恢复链路；跨机验收仍未完成。
 
 不要覆盖旧资产或手改 ID 跳过冲突。当前恢复接口只支持目标同地图，且要求目标注册表
 已能解析对应生成 ID；源文件在包内并不代表模型已经能在目标 CARLA 中生成。
@@ -88,3 +88,5 @@ PYTHONPATH=src python3 tools/register_bundle_assets.py OUTPUT.zip \
 已覆盖真实生成护栏随场景打包、隔离导入后源文件字节一致、准备任务不执行/不注册，
 以及在已有同一资产注册的原 CARLA 中删除后恢复、稳定 ID 保留和重复恢复无副本。
 这不等同于另一台机器上的 Unreal 导入或全项目迁移验收。
+
+后续本机GUI端到端证据：browser-registered-restore-dd86fbab310142408c84e50845694a5b，已完成源资产重新导入、唯一Blueprint引用新包、单独确认实景生成及mesh_path核验，测试对象清理。原生资产和本机环境并不因此自动出现在另一台机器；迁移时仍须分别准备源码、引擎补丁/构建、Python/CUDA、模型文件与采集数据。

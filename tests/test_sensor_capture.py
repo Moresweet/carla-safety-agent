@@ -79,8 +79,8 @@ def test_provenance_survives_restart_not_episode_change(tmp_path):
     assert restored.origin(1,actor) == 'user'
     restored.mark(1,[actor],'evaluation',overwrite=False)
     assert restored.origin(1,actor) == 'user'
-    assert restored.origin(2,actor) == 'existing'
-    assert restored.origin(1,SimpleNamespace(id=12,type_id='walker.test')) == 'existing'
+    assert restored.origin(2,actor) == 'unknown'
+    assert restored.origin(1,SimpleNamespace(id=12,type_id='walker.test')) == 'unknown'
 
 
 def test_replay_is_confined_to_indexed_frames(tmp_path):

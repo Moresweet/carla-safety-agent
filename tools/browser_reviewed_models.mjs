@@ -62,6 +62,31 @@ try {
   const state=await evaluate(`(()=>{const section=document.querySelector('[aria-label="确认计划并选择模型"]');return {buttons:[...section.querySelectorAll('button')].map(b=>({text:b.textContent,disabled:b.disabled})),checkboxes:[...section.querySelectorAll('input')].map(b=>({checked:b.checked,disabled:b.disabled}))}})()`);
   assert(state.buttons[0].disabled,'Unreviewed plan must not start');
   const interactions=[];
+  const unknownActorFlag=process.argv.indexOf('--unknown-actor');
+  if(unknownActorFlag>=0){
+    const actorId=process.argv[unknownActorFlag+1];assert(/^\d+$/.test(actorId));
+    await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Edit World').click()`);
+    for(let i=0;i<100;i++){
+      if(await evaluate(`!![...document.querySelectorAll('.catalog-groups button')].find(b=>b.textContent.includes('spawned props'))`))break;
+      await delay(200);
+    }
+    await evaluate(`[...document.querySelectorAll('.catalog-groups button')].find(b=>b.textContent.includes('spawned props')).click()`);
+    await evaluate(`(()=>{const e=document.querySelector('select[aria-label="对象来源"]');e.value='unknown';e.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+    let found=false;
+    for(let i=0;i<100;i++){
+      found=await evaluate(`!![...document.querySelectorAll('.catalog-list select[size] option')].find(o=>o.value===${JSON.stringify('actor:'+actorId)}&&o.textContent.startsWith('[来源未知]'))`);
+      if(found)break;await delay(200);
+    }
+    assert(found,'Untracked native actor must be shown as unknown');
+    const originHeight=await evaluate(`document.querySelector('select[aria-label="对象来源"]').getBoundingClientRect().height`);
+    assert(originHeight>=30&&originHeight<=50,'Origin dropdown must not inherit the tall object-list layout');
+    assert(await evaluate(`![...document.querySelectorAll('.catalog-list select[size] option')].some(o=>o.textContent.includes('[场景原有]'))`));
+    await evaluate(`document.querySelector('.object-manager').scrollIntoView()`);
+    const shot=await cdp('Page.captureScreenshot',{format:'png'});
+    await writeFile(join(output,'unknown-origin.png'),Buffer.from(shot.data,'base64'));
+    interactions.push('native_unknown_origin_filter_visible');
+    await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Generate Scene').click()`);
+  }
   let stoppedExecution=null;
   const bundleSceneFlag=process.argv.indexOf('--bundle-scene');
   if(bundleSceneFlag>=0){

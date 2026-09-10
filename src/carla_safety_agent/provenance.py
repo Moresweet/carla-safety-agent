@@ -79,7 +79,7 @@ class ActorProvenance:
         try: os.fsync(descriptor)
         finally: os.close(descriptor)
 
-    def origin(self, episode, actor, default='existing'):
+    def origin(self, episode, actor, default='unknown'):
         item = self.records(episode).get(str(actor.id), {})
         return item.get('origin', default) if item.get('type_id') == actor.type_id else default
 

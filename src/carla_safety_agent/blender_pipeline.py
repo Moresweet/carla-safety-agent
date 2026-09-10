@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import fcntl
 import json
 import os
 import subprocess
@@ -58,7 +59,13 @@ class BlenderPipeline:
         manifest.update({"job_id": job_id, "log": completed.stdout[-2000:]})
         return manifest
 
-    def import_to_carla(self, job_id: str, asset_name: str | None = None) -> dict[str, Any]:
+    def import_to_carla(self, job_id: str, asset_name: str | None = None, *, require_clean_exit=False) -> dict[str, Any]:
+        self.runtime.mkdir(parents=True, exist_ok=True)
+        with (self.runtime / 'import.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            return self._import_to_carla(job_id, asset_name, require_clean_exit=require_clean_exit)
+
+    def _import_to_carla(self, job_id: str, asset_name: str | None = None, *, require_clean_exit=False) -> dict[str, Any]:
         if not job_id.isalnum():
             raise ValueError("invalid Blender job id")
         job = self.runtime / job_id
@@ -70,6 +77,8 @@ class BlenderPipeline:
             asset_name or blender_manifest.get("name") or job_id)).strip("_")[:48]
         if not safe_name:
             safe_name = "Generated_" + job_id
+        if 'generated.prop.' + safe_name.lower() in self.registry():
+            raise ValueError('Generated asset ID already registered; choose a new name')
         attempt_id = uuid.uuid4().hex
         result_path = job / ("unreal-import-" + attempt_id + ".json")
         request_path = job / ("unreal-request-" + attempt_id + ".json")
@@ -97,9 +106,17 @@ class BlenderPipeline:
             "stdout_truncated": len(completed.stdout) > 1024*1024,
             "stderr_truncated": len(completed.stderr) > 1024*1024,
         }, indent=2), encoding="utf-8")
+        if require_clean_exit and completed.returncode:
+            raise RuntimeError(f'Unreal import failed with exit {completed.returncode}; log: {log_path}')
         if not result_path.is_file():
             raise RuntimeError((completed.stderr or completed.stdout)[-6000:])
         result = json.loads(result_path.read_text(encoding="utf-8"))
+        if require_clean_exit and (result.get('ok') is not True
+                or result.get('asset_id') != safe_name
+                or result.get('blueprint_id') != 'generated.prop.' + safe_name.lower()
+                or not isinstance(result.get('mesh_path'), str)
+                or not result['mesh_path'].startswith('/Game/Carla/Static/Generated/' + safe_name + '/')):
+            raise RuntimeError(f'Unreal import result identity mismatch; log: {log_path}')
         result.update(import_attempt_id=attempt_id, import_returncode=completed.returncode,
                       import_log=str(log_path))
         if completed.returncode:

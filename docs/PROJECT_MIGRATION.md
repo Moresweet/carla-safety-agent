@@ -34,7 +34,23 @@ PYTHONPATH=src python3 tools/project_bundle.py prepare-assets OUTPUT.zip --proje
 新任务 ID 和建议导入名，重写本机文件路径。它不启动 Blender/Unreal，不写资产注册表，
 不修改运行世界；重复调用会创建新任务。磁盘故障时已准备的任务可能保留，暂不提供批量回滚。
 
-随后仍需显式执行目标 Unreal 导入注册，并处理目标同名资产冲突。
+随后显式执行目标 Unreal 导入注册：
+
+```bash
+PYTHONPATH=src python3 tools/register_bundle_assets.py OUTPUT.zip \
+  --project TARGET_INSTALLED_PROJECT --output REMAPPED.zip --execute-unreal-import
+```
+
+目标必须有本项目代码与可用的Unreal导入脚本。该操作采用全新唯一名称导入，不覆盖
+目标同名资产，并生成替换了模型引用的新场景包；原包不改动，场景稳定对象ID保留。
+只有退出码0且结果身份符合请求才注册成功。同项目导入通过文件锁串行化。
+每次操作在`.runtime/blender-assets/migrations/操作ID/report.json`留存进度。
+失败保留已导入资产及任务，并标记needs_attention，不自动重试或回滚已有资产；
+再次执行是一次新操作，不是断点续跑。输出包写入失败也可能留下部分文件，需检查报告。
+
+将成功生成的REMAPPED.zip交给现有stage及场景恢复流程，仍需目标同地图。
+当前CLI不会自动修改运行世界或启动目标CARLA，完整图形界面向导和跨机验收仍未完成。
+
 不要覆盖旧资产或手改 ID 跳过冲突。当前恢复接口只支持目标同地图，且要求目标注册表
 已能解析对应生成 ID；源文件在包内并不代表模型已经能在目标 CARLA 中生成。
 `doctor` 对生成 ID 报告注册/网格状态未验证，而不是用原生 Blueprint 列表误判。

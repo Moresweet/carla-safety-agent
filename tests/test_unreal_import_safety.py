@@ -44,7 +44,8 @@ def test_old_import_result_cannot_mask_new_failure(tmp_path, monkeypatch):
     assert all(json.loads(path.read_text())['returncode']==1 for path in logs)
 
 
-def test_import_exit_warning_persists_in_registry(tmp_path, monkeypatch):
+@pytest.mark.parametrize('strict', [False, True])
+def test_import_exit_warning_persists_in_registry(tmp_path, monkeypatch, strict):
     pipeline=BlenderPipeline(tmp_path)
     job=pipeline.runtime/'job';job.mkdir(parents=True)
     fbx=job/'asset.fbx';fbx.write_bytes(b'fixture')
@@ -54,8 +55,30 @@ def test_import_exit_warning_persists_in_registry(tmp_path, monkeypatch):
         Path(request['result_path']).write_text(json.dumps({'blueprint_id':'generated.prop.new'}))
         return SimpleNamespace(returncode=-11,stdout='saved',stderr='shutdown fault')
     monkeypatch.setattr('carla_safety_agent.blender_pipeline.subprocess.run',completed)
+    if strict:
+        with pytest.raises(RuntimeError,match='exit -11'):
+            pipeline.import_to_carla('job','New',require_clean_exit=True)
+        assert not pipeline.registry_path.exists()
+        assert list(job.glob('unreal-log-*.json'))
+        return
     result=pipeline.import_to_carla('job','New')
     stored=pipeline.registry()['generated.prop.new']
     assert stored['warning']==result['warning']
     assert stored['import_returncode']==-11
     assert json.loads(Path(stored['import_log']).read_text())['stderr_tail']=='shutdown fault'
+
+
+def test_strict_import_rejects_wrong_identity_before_registration(tmp_path, monkeypatch):
+    pipeline = BlenderPipeline(tmp_path)
+    job = pipeline.runtime/'job'; job.mkdir(parents=True)
+    fbx = job/'asset.fbx'; fbx.write_bytes(b'fixture')
+    (job/'manifest.json').write_text(json.dumps({'outputs':{'fbx':str(fbx)}}))
+    def completed(*args, **kwargs):
+        request = json.loads(Path(kwargs['env']['CSA_UNREAL_IMPORT_REQUEST']).read_text())
+        Path(request['result_path']).write_text(json.dumps({'ok':True, 'asset_id':'Other',
+            'blueprint_id':'generated.prop.other','mesh_path':'/Game/Carla/Static/Generated/Other/SM'}))
+        return SimpleNamespace(returncode=0,stdout='saved',stderr='')
+    monkeypatch.setattr('carla_safety_agent.blender_pipeline.subprocess.run',completed)
+    with pytest.raises(RuntimeError,match='identity mismatch'):
+        pipeline.import_to_carla('job','Expected',require_clean_exit=True)
+    assert not pipeline.registry_path.exists()

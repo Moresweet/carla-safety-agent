@@ -1208,3 +1208,10 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 
 - 空闲检查后成功重载最终版桥接，PID1177011。真实护栏联合场景包e9789292183a433dac1939b15fcf7dc1回归通过，稳定ID2fa0139782ab4e82acba7a9ee5f500a2，Actor1643删除后恢复1644，重复恢复无副本，测试对象清理完成。
 - 隔离目标runs/validation/bundle-generated-n0wnb_rk/carla-project-4dk7dxa6，准备任务c2f36009d8bf4f6e9bd5070060787aac；所有源文件字节一致，未执行或注册目标资产。报告runs/validation/bundle-actor-e9789292183a433dac1939b15fcf7dc1.json。此次覆盖最终依赖标志版本，补齐前一天被额度限制阻止的原生回归；目标Unreal导入及跨机器验收仍未完成。
+
+### 2026-09-10 迁移源包实际注册与场景重映射
+
+- 新增register_bundle_assets CLI，显式执行原生导入、唯一名称避免覆盖、新场景包重映射原生成ID，保留原包与稳定对象ID。操作逐项写报告，失败needs_attention且不自动重试；已导入资产留存。导入增加同项目文件锁、已注册ID拒绝覆盖及迁移严格退出码/结果身份校验。
+- 真实操作a4dc34b9d5454ed09939f2f546af961e将护栏注册为generated.prop.migrated_a4dc34b9d5454ed09939_0，退出0。任务0620300c926e48c597f89d48f800394e；生成runs/validation/registered-scene-bundle-sep10.zip，未改原包。
+- 验收时桥接和UE场景进程均未运行，读进程/端口证据后启动本机Town04与桥接15763，不将原因擅自归为崩溃。新包原生恢复报告registered-bundle-071b5ded1ae8437591fec3145dc36775：网格路径正确、尺寸2.4×0.35×0.8米、重复恢复无副本、Actor124清理。首图偏灰；复用同包registered-bundle-a8fbe6e89e2b4e2aa6cd041bea096f03已查看蓝色材质，Actor126清理。首次材质就绪机制仍未解决。
+- 当前验证是同机全新资产导入与重映射恢复，不等于另一台机器验收。图形界面向导、失败断点续跑/资产清理、跨项目并发和完整八阶段目标仍未完成；最终身份校验/文件锁增量由单测覆盖，此次真实导入发生在这两项增量之前。

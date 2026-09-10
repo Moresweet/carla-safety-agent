@@ -704,8 +704,36 @@ def test_reviewed_plan_executes_exact_archive_without_recompilation():
     payload={'confirmed':True,'scenario_path':'/local/plan.json','scenario_sha256':'a'*64}
     assert env['execute_reviewed_scenario'](payload)['ok']
     assert calls==[{'action':'run','algorithm':'uniad-tiny','route':'/local/plan.json',
-                   'scenario_sha256':'a'*64,'confirmed':True}]
+                   'scenario_sha256':'a'*64,'confirmed':True,'unified_capture':False}]
     for patch in ({'confirmed':False},{'confirmed':'true'},{'scenario_sha256':'invalid'},
                   {'scenario_sha256':'A'*64},{'scenario_path':None}):
         with pytest.raises(ValueError): env['execute_reviewed_scenario']({**payload,**patch})
     assert len(calls)==1
+
+
+@pytest.mark.parametrize('algorithm', ['uniad-tiny','uniad-base','vad','tcp','admlp'])
+def test_reviewed_plan_preserves_selected_model_and_capture(algorithm):
+    calls=[]
+    env=functions('execute_reviewed_scenario',start_e2e=lambda value:calls.append(value) or {'ok':True})
+    payload={'confirmed':True,'scenario_path':'/local/plan.json','scenario_sha256':'a'*64,
+             'algorithm':algorithm,'unified_capture':True}
+    env['execute_reviewed_scenario'](payload)
+    assert calls[0]['algorithm']==algorithm and calls[0]['unified_capture'] is True
+    for patch in ({'algorithm':'unknown'},{'unified_capture':'false'}):
+        with pytest.raises(ValueError): env['execute_reviewed_scenario']({**payload,**patch})
+    assert len(calls)==1
+
+
+@pytest.mark.parametrize('data,expected', [({},'1'),({'unified_capture':True},'1'),({'unified_capture':False},'0')])
+def test_model_capture_option_reaches_child_environment(data, expected):
+    source=Path(__file__).resolve().parents[1]/'tools/livery_bridge.py'
+    tree=ast.parse(source.read_text())
+    start=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='start_e2e')
+    assignment=next(n for n in ast.walk(start) if isinstance(n,ast.Assign)
+        and any(isinstance(t,ast.Name) and t.id=='model_capture' for t in n.targets))
+    call=next(n for n in ast.walk(start) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call)
+        and any(k.arg=='CSA_SENSOR_CAPTURE' for k in n.value.keywords))
+    env={'data':data,'env':{},'E2E_ROOT':'root','UNIAD_PYTHON':'python',
+         '_evaluation_control_dir':'control','DATASET_ROOT':'datasets'}
+    exec(compile(ast.Module(body=[assignment,call],type_ignores=[]),str(source),'exec'),env)
+    assert env['env']['CSA_SENSOR_CAPTURE']==expected

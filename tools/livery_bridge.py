@@ -324,6 +324,9 @@ def start_e2e(data: dict) -> dict:
     action = str(data.get("action", "doctor"))
     if action not in ("doctor", "model-smoke", "run", "preset-run", "sensor-rig", "rule-run"):
         raise RuntimeError(f"Unknown UniAD action: {action}")
+    model_capture = data.get('unified_capture', True)
+    if not isinstance(model_capture, bool):
+        raise ValueError('unified_capture must be boolean')
     if action not in ('sensor-rig','rule-run') and not UNIAD_PYTHON.is_file():
         raise RuntimeError(f"UniAD environment is missing: {UNIAD_PYTHON}")
     if evaluation_active():
@@ -400,7 +403,7 @@ def start_e2e(data: dict) -> dict:
         env.pop("PYTHONPATH", None)
         env.update(E2E_ROOT=str(E2E_ROOT), UNIAD_PYTHON=str(UNIAD_PYTHON),
                    CSA_EVALUATION_CONTROL_DIR=str(_evaluation_control_dir),
-                   CSA_SENSOR_CAPTURE="1", CSA_DATASET_ROOT=str(DATASET_ROOT))
+                   CSA_SENSOR_CAPTURE="1" if model_capture else "0", CSA_DATASET_ROOT=str(DATASET_ROOT))
         if action in ('sensor-rig','rule-run'):
             env['PYTHONPATH'] = os.pathsep.join((str(PROJECT_ROOT/'src'),os.environ.get('PYTHONPATH','')))
         if action in ("run", "preset-run", "sensor-rig", "rule-run"):
@@ -716,8 +719,14 @@ def execute_reviewed_scenario(data: dict) -> dict:
     route = data.get('scenario_path')
     if not isinstance(route, str) or not route:
         raise ValueError('Select the reviewed scenario archive')
-    return start_e2e({'action':'run', 'algorithm':'uniad-tiny', 'route':route,
-                      'scenario_sha256':digest, 'confirmed':True})
+    algorithm = data.get('algorithm', 'uniad-tiny')
+    if algorithm not in ('uniad-tiny', 'uniad-base', 'vad', 'tcp', 'admlp'):
+        raise ValueError('Select a supported generated-scenario model')
+    capture = data.get('unified_capture', False)
+    if not isinstance(capture, bool):
+        raise ValueError('unified_capture must be boolean')
+    return start_e2e({'action':'run', 'algorithm':algorithm, 'route':route,
+                      'scenario_sha256':digest, 'confirmed':True, 'unified_capture':capture})
 
 
 def evaluate_scenario(data: dict) -> dict:

@@ -1,0 +1,106 @@
+// Local isolated Chrome QA. Never launches a model or modifies the CARLA world.
+import {spawn} from 'node:child_process';
+import {mkdtemp,readFile,writeFile,mkdir} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {randomUUID} from 'node:crypto';
+import assert from 'node:assert/strict';
+
+const profile=await mkdtemp(join(tmpdir(),'carla-browser-qa-'));
+const output=resolve('runs/validation/browser-models-'+randomUUID());
+await mkdir(output,{recursive:true});
+const chrome=spawn('/usr/bin/google-chrome',['--headless=new','--disable-gpu','--no-first-run',
+  '--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{stdio:'ignore'});
+let socket;
+const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+try {
+  let port;
+  for(let i=0;i<100;i++){
+    if(chrome.exitCode!==null)throw new Error('Chrome exited before debugging became ready');
+    try {port=(await readFile(join(profile,'DevToolsActivePort'),'utf8')).split('\n')[0];break}catch{await delay(100)}
+  }
+  assert(port,'Chrome debugging port unavailable');
+  const tab=await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`,{method:'PUT'})).json();
+  socket=new WebSocket(tab.webSocketDebuggerUrl);
+  await new Promise((resolve,reject)=>{socket.addEventListener('open',resolve,{once:true});socket.addEventListener('error',reject,{once:true})});
+  let next=0;const pending=new Map();
+  socket.addEventListener('message',event=>{const value=JSON.parse(event.data);const item=pending.get(value.id);if(item){pending.delete(value.id);clearTimeout(item.timer);value.error?item.reject(Error(value.error.message)):item.resolve(value.result)}});
+  const cdp=(method,params={})=>new Promise((resolve,reject)=>{const id=++next;const timer=setTimeout(()=>{pending.delete(id);reject(Error('CDP timeout: '+method))},20000);pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({id,method,params}))});
+  const evaluate=async expression=>{const response=await cdp('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(response.exceptionDetails)throw Error(JSON.stringify(response.exceptionDetails));return response.result.value};
+  await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+  await cdp('Page.navigate',{url:'http://localhost:3000/'});
+  for(let i=0;i<100;i++){if(await evaluate(`!![...document.querySelectorAll('button')].find(b=>b.textContent==='Generate Scene')`))break;await delay(200)}
+  const buttons=await evaluate(`[...document.querySelectorAll('nav button')].map(b=>b.textContent)`);
+  assert(buttons.includes('Generate Scene'));
+  await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Generate Scene').click()`);
+  let models=[];
+  for(let i=0;i<100;i++){
+    models=await evaluate(`[...document.querySelectorAll('select[aria-label="生成场景测试模型"] option')].map(o=>({id:o.value,disabled:o.disabled}))`);
+    if(models.length===5)break;await delay(200);
+  }
+  assert.deepEqual(models.map(m=>m.id).sort(),['admlp','tcp','uniad-base','uniad-tiny','vad']);
+  const state=await evaluate(`(()=>{const section=document.querySelector('[aria-label="确认计划并选择模型"]');return {buttons:[...section.querySelectorAll('button')].map(b=>({text:b.textContent,disabled:b.disabled})),checkboxes:[...section.querySelectorAll('input')].map(b=>({checked:b.checked,disabled:b.disabled}))}})()`);
+  assert(state.buttons[0].disabled,'Unreviewed plan must not start');
+  const interactions=[];
+  if(process.argv.includes('--idle-controls')){
+    const current=await (await fetch('http://127.0.0.1:8765/e2e/status')).json();
+    assert(!['running','stopping'].includes(current.job.state),'Idle-only control test must not run during evaluation');
+    await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='Compile & preview').click()`);
+    let ready=false;
+    for(let i=0;i<100;i++){
+      ready=await evaluate(`(()=>{const inputs=document.querySelectorAll('[aria-label="确认计划并选择模型"] input');return inputs.length===2&&!inputs[1].disabled})()`);
+      if(ready)break;await delay(200);
+    }
+    assert(ready,'Compiled plan did not enable review');
+    await evaluate(`document.querySelectorAll('[aria-label="确认计划并选择模型"] input')[1].click()`);
+    await delay(100);
+    assert(await evaluate(`!document.querySelector('[aria-label="确认计划并选择模型"] button').disabled`));
+    await evaluate(`(()=>{const s=document.querySelector('select[aria-label="生成场景测试模型"]');s.value='vad';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await delay(100);
+    assert(await evaluate(`!document.querySelectorAll('[aria-label="确认计划并选择模型"] input')[1].checked&&document.querySelector('[aria-label="确认计划并选择模型"] button').disabled`));
+    interactions.push('compile_enables_review','confirmation_enables_start','model_change_invalidates_confirmation');
+  }
+  const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
+  await writeFile(join(output,'model-selection.png'),Buffer.from(screenshot.data,'base64'));
+  if(process.argv.includes('--idle-controls')){
+    await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='End-to-End Test').click()`);
+    let ready=false;
+    for(let i=0;i<100;i++){
+      ready=await evaluate(`!![...document.querySelectorAll('button.algorithm-card')].find(b=>b.querySelector('strong')?.textContent==='VAD'&&!b.disabled)`);
+      if(ready)break;await delay(200);
+    }
+    assert(ready,'VAD model card unavailable');
+    await evaluate(`[...document.querySelectorAll('button.algorithm-card')].find(b=>b.querySelector('strong')?.textContent==='VAD').click()`);
+    await delay(100);
+    assert(await evaluate(`![...document.querySelectorAll('button')].find(b=>b.textContent==='Run generated scene').disabled`));
+    interactions.push('vad_generated_scene_button_enabled');
+  }
+  const datasetFlag=process.argv.indexOf('--dataset');
+  if(datasetFlag>=0){
+    const dataset=process.argv[datasetFlag+1];
+    assert(/^capture-[A-Za-z0-9-]+$/.test(dataset),'Expected a capture dataset ID');
+    await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Collect Data').click()`);
+    let ready=false;
+    for(let i=0;i<100;i++){
+      ready=await evaluate(`[...document.querySelectorAll('select[aria-label="数据集"] option')].some(o=>o.value===${JSON.stringify(dataset)})`);
+      if(ready)break;await delay(200);
+    }
+    assert(ready,'Recorded dataset not listed');
+    await evaluate(`(()=>{const s=document.querySelector('select[aria-label="数据集"]');s.value=${JSON.stringify(dataset)};s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    for(let i=0;i<100;i++){
+      ready=await evaluate(`!!document.querySelector('[aria-label="回放索引质量"]')&&!!document.querySelector('.replay-controls a[download]')`);
+      if(ready)break;await delay(200);
+    }
+    assert(ready,'Replay metadata did not load');
+    const quality=await evaluate(`document.querySelector('[aria-label="回放索引质量"]').textContent`);
+    assert(quality.includes('严格递增')&&quality.includes('不等于传感器丢帧数量'));
+    const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
+    await writeFile(join(output,'replay-quality.png'),Buffer.from(screenshot.data,'base64'));
+    interactions.push('recorded_dataset_quality_visible');
+  }
+  await writeFile(join(output,'report.json'),JSON.stringify({models,state,interactions,scope:'Actual browser model options, review gates and optional recorded quality; no model start',profile},null,2));
+  console.log(JSON.stringify({output,models,state,interactions}));
+} finally {
+  socket?.close();
+  if(chrome.exitCode===null)chrome.kill('SIGTERM');
+}

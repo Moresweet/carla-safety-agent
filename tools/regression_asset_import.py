@@ -15,6 +15,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--require-first-material',action='store_true')
     parser.add_argument('--require-inherited-lock',action='store_true')
+    parser.add_argument('--job-id',help='Reuse this explicitly selected exported job instead of generating a new asset')
     args=parser.parse_args()
     assert request('/system/preflight')['ready']
     assert request('/batches/scheduler')['scheduler']['state'] != 'running'
@@ -31,8 +32,16 @@ def main():
             'retained_assets':'Unique test source and registered Unreal asset remain traceable; no existing asset overwritten'}
     actor_id=None
     try:
-        asset=request('/blender/create',{'name':name,'shape':'cube','dimensions':[2,.4,.8],
-                                       'color':[.1,.7,.2,1],'roughness':.45})
+        if args.job_id:
+            import re
+            assert re.fullmatch('[a-zA-Z0-9]{1,64}',args.job_id)
+            generation=next(a for a in request('/blender/generations')['attempts'] if a['job_id']==args.job_id)
+            assert generation['state']=='exported'
+            asset={'job_id':args.job_id}
+            report['generation']=generation
+        else:
+            asset=request('/blender/create',{'name':name,'shape':'cube','dimensions':[2,.4,.8],
+                                           'color':[.1,.7,.2,1],'roughness':.45})
         report['job_id']=asset['job_id']
         (output/'report.json').write_text(json.dumps(report,indent=2))
         result=request('/blender/import',{'job_id':asset['job_id'],'name':name})

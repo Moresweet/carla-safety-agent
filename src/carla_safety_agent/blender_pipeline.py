@@ -36,7 +36,20 @@ class BlenderPipeline:
             return {"ok": True, "available": False, "executable": self.executable,
                     "error": str(exc), "output_root": str(self.runtime)}
 
-    def run(self, request: dict[str, Any]) -> dict[str, Any]:
+    def preview_plan(self, data):
+        from .asset_plan import archive_plan
+        if not isinstance(data, dict) or set(data) != {'description'}:
+            raise ValueError('Expected only an asset description')
+        return archive_plan(self.runtime / 'plans', data['description'])
+
+    def execute_plan(self, data):
+        from .asset_plan import read_plan
+        if not isinstance(data, dict) or set(data) != {'plan_sha256', 'confirmed'} or data['confirmed'] is not True:
+            raise ValueError('Confirm exactly one archived asset plan')
+        plan = read_plan(self.runtime / 'plans', data['plan_sha256'])
+        return self.run(plan['spec'], plan_sha256=data['plan_sha256'])
+
+    def run(self, request: dict[str, Any], *, plan_sha256=None) -> dict[str, Any]:
         spec = self._normalize(request)
         from .owned_resources import durable_write
         from .session import observed_process_identity
@@ -57,6 +70,8 @@ class BlenderPipeline:
                   'owner': observed_process_identity(os.getpid()), 'report_path': str(report_path),
                   'destination': str(output), 'live_world_modified': False,
                   'automatic_retry': False, 'automatic_rollback': False}
+        if plan_sha256 is not None:
+            report['plan_sha256'] = plan_sha256
         durable_write(report_path, report, exclusive=True)
         try:
             if raw is not None:

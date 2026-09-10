@@ -68,3 +68,7 @@
 再后续S6：[完整资产检索](ASSET_SEARCH.md)修复前200项截断，完整目录过滤后分页，加入明确中文关键词和Generated分类。904项Python/类型通过，最终浏览器315f236f-5ca7-4ece-8fec-78ae4744975f分页/中文/11生成资产/空结果通过，截图已查看；桥接450333，原生未重启。不是按颜色/几何的语义检索。
 
 最新S8：[源码快照包](SOURCE_BUNDLE.md)可导出本地准确Git提交的程序/测试/文档/ROS/引擎补丁，独立SHA-256/大小/权限校验，不含未提交文件、权重或运行环境，不推送远程。921项完整Python测试通过。原生与桥接未因该离线工具重启；实际导出包记录以包内manifest提交为准。
+
+源码迁移实测：runs/validation/source-migration-20260910-v1.zip绑定1ae764ba59260bd1fe5a433a99d6a112a67e2641，513文件、75349548源字节，校验通过；解压到/tmp/carla-source-migration-rYAGbL/source后921项测试通过。该包早于后续自然语言Blender增量，不是后续全部提交快照。
+
+最新S6：[自然语言Blender计划](NATURAL_BLENDER_PLAN.md)接通明确中文基本体→SHA归档→独立确认→真实Blender导出，并实测后续唯一Unreal注册与CARLA Actor1546实景、清理/相机恢复。934项Python/类型通过，最终GUI15147cb9-845f-424a-9ee7-c46926ebf52a已查看；桥接456265。不是任意自由形状生成。

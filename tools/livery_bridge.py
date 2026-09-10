@@ -2622,6 +2622,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         request = urlparse(self.path)
         if request.path not in ("/apply", "/apply/road", "/apply/building",
+                                '/blender/plan', '/blender/execute-plan',
                                 '/scenes/handoff/preview','/scenes/handoff/confirm','/scenes/handoff/acknowledge',
                                 '/projects/bundle/export','/projects/bundle/upload','/projects/bundle/import','/projects/bundle/doctor',
                                 '/projects/bundle/restore-preview','/projects/bundle/restore-confirm','/projects/bundle/registration',
@@ -2725,6 +2726,10 @@ class Handler(BaseHTTPRequestHandler):
             elif request.path in ("/scenario/compile", "/scenario/run"):
                 data = json.loads(payload or b"{}")
                 result = compile_scenario(data, request.path.endswith("/run"))
+            elif request.path == '/blender/plan':
+                result = BLENDER.preview_plan(json.loads(payload or b'{}'))
+            elif request.path == '/blender/execute-plan':
+                result = BLENDER.execute_plan(json.loads(payload or b'{}'))
             elif request.path in ("/blender/create", "/blender/retexture"):
                 data = json.loads(payload or b"{}")
                 if request.path.endswith("retexture") and not data.get("source_path"):

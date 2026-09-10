@@ -64,6 +64,27 @@ try {
   const state=await evaluate(`(()=>{const section=document.querySelector('[aria-label="确认计划并选择模型"]');return {buttons:[...section.querySelectorAll('button')].map(b=>({text:b.textContent,disabled:b.disabled})),checkboxes:[...section.querySelectorAll('input')].map(b=>({checked:b.checked,disabled:b.disabled}))}})()`);
   assert(state.buttons[0].disabled,'Unreviewed plan must not start');
   const interactions=[];
+  if(process.argv.includes('--natural-asset')){
+    await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Asset Workshop').click()`);
+    let ready=false;
+    for(let i=0;i<200;i++){ready=await evaluate(`!!document.querySelector('[aria-label="自然语言 Blender 计划"] button')&&!document.querySelector('[aria-label="自然语言 Blender 计划"] button').disabled`);if(ready)break;await delay(200)}assert(ready);
+    await evaluate(`document.querySelector('[aria-label="自然语言 Blender 计划"] button').click()`);
+    for(let i=0;i<100;i++){ready=await evaluate(`!!document.querySelector('[aria-label="自然语言 Blender 计划"] pre')`);if(ready)break;await delay(100)}assert(ready);
+    assert(await evaluate(`[...document.querySelectorAll('[aria-label="自然语言 Blender 计划"] button')].find(b=>b.textContent==='按确认计划生成并导出').disabled`));
+    const preview=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(join(output,'natural-asset-preview.png'),Buffer.from(preview.data,'base64'));
+    const before=(await(await fetch('http://127.0.0.1:8765/blender/generations')).json()).attempts;
+    await evaluate(`document.querySelector('[aria-label="自然语言 Blender 计划"] input[type=checkbox]').click()`);
+    await evaluate(`[...document.querySelectorAll('[aria-label="自然语言 Blender 计划"] button')].find(b=>b.textContent==='按确认计划生成并导出').click()`);
+    for(let i=0;i<1000;i++){ready=await evaluate(`document.querySelector('[aria-label="自然语言 Blender 计划"] [role=status]').textContent.includes('已按归档计划导出')`);if(ready)break;await delay(200)}assert(ready);
+    const attempts=(await(await fetch('http://127.0.0.1:8765/blender/generations')).json()).attempts.filter(r=>!before.some(b=>b.job_id===r.job_id));
+    assert.equal(attempts.length,1);assert.equal(attempts[0].state,'exported');assert.match(attempts[0].plan_sha256,/^[a-f0-9]{64}$/);
+    const request=JSON.parse(await readFile(join(attempts[0].destination,'request.json'),'utf8'));
+    assert.deepEqual(request.dimensions,[2,.4,.8]);assert.equal(request.roughness,.6);
+    await evaluate(`document.querySelector('.blender-result').scrollIntoView({block:'center'})`);
+    const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(join(output,'natural-asset-exported.png'),Buffer.from(shot.data,'base64'));
+    await writeFile(join(output,'natural-asset.json'),JSON.stringify({attempt:attempts[0],request},null,2));
+    interactions.push('natural_asset_explicit_plan_confirmation_real_blender_export_bound_to_sha');
+  }
   if(process.argv.includes('--asset-search')){
     await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Create Objects').click()`);
     const settled=async()=>{let ready=false;for(let i=0;i<100;i++){ready=await evaluate(`!!document.querySelector('[aria-label="资产检索统计"]')&&!document.querySelector('[aria-label="资产检索统计"]').textContent.includes('检索中')`);if(ready)break;await delay(200)}assert(ready)};

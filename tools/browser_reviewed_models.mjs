@@ -64,6 +64,27 @@ try {
   const state=await evaluate(`(()=>{const section=document.querySelector('[aria-label="确认计划并选择模型"]');return {buttons:[...section.querySelectorAll('button')].map(b=>({text:b.textContent,disabled:b.disabled})),checkboxes:[...section.querySelectorAll('input')].map(b=>({checked:b.checked,disabled:b.disabled}))}})()`);
   assert(state.buttons[0].disabled,'Unreviewed plan must not start');
   const interactions=[];
+  if(process.argv.includes('--asset-search')){
+    await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Create Objects').click()`);
+    const settled=async()=>{let ready=false;for(let i=0;i<100;i++){ready=await evaluate(`!!document.querySelector('[aria-label="资产检索统计"]')&&!document.querySelector('[aria-label="资产检索统计"]').textContent.includes('检索中')`);if(ready)break;await delay(200)}assert(ready)};
+    await delay(250);await settled();
+    const first=await evaluate(`[...document.querySelectorAll('.asset-card b')].map(b=>b.textContent)`);
+    assert.equal(first.length,48);
+    await evaluate(`[...document.querySelectorAll('.asset-browser button')].find(b=>b.textContent==='下一页').click()`);await delay(250);await settled();
+    const second=await evaluate(`[...document.querySelectorAll('.asset-card b')].map(b=>b.textContent)`);
+    assert(second.length>0);assert(!second.some(id=>first.includes(id)));
+    const setQuery=async text=>{await evaluate(`(()=>{const e=document.querySelector('[aria-label="检索资产"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,${JSON.stringify(text)});e.dispatchEvent(new Event('input',{bubbles:true}))})()`);await delay(250);await settled()};
+    await setQuery('车辆 奥迪');
+    const audi=await evaluate(`[...document.querySelectorAll('.asset-card b')].map(b=>b.textContent)`);
+    assert(audi.length>0&&audi.every(id=>id.includes('audi')));
+    await setQuery('');await evaluate(`[...document.querySelectorAll('.asset-tabs button')].find(b=>b.textContent==='Generated').click()`);await delay(250);await settled();
+    const generated=await evaluate(`({count:document.querySelectorAll('.asset-card').length,images:document.querySelectorAll('.asset-card img').length,text:document.querySelector('[aria-label="资产检索统计"]').textContent})`);
+    assert(generated.count>0);assert.equal(generated.images,0);
+    const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});await writeFile(join(output,'asset-search.png'),Buffer.from(shot.data,'base64'));
+    await setQuery('definitely_missing_asset_7931');assert.equal(await evaluate(`document.querySelectorAll('.asset-card').length`),0);
+    await writeFile(join(output,'asset-search.json'),JSON.stringify({first,second,audi,generated},null,2));
+    interactions.push('full_catalog_pagination_chinese_name_aliases_generated_without_false_thumbnail_empty_results');
+  }
   if(process.argv.includes('--blender-generation')){
     // Explicitly exports one primitive and attempts an invalid-source retexture;
     // never imports into Unreal or spawns into CARLA. Retain both job directories.

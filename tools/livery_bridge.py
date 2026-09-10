@@ -1872,21 +1872,18 @@ def delete_actor(actor_id: int) -> dict:
 
 
 @simulation_operation
-def spawnable_blueprints(query: str, limit: int) -> dict:
+def spawnable_blueprints(query: str, limit: int, offset: int = 0, kind: str = 'all') -> dict:
+    from carla_safety_agent.asset_search import search_assets
+    search_assets([], query, kind=kind, offset=offset, limit=limit)
     if evaluation_active():
         ids = list((evaluation_snapshot() or {}).get("blueprints", []))
-        if query:
-            ids = [item for item in ids if query.casefold() in item.casefold()]
-        return {"ok": True, "total": len(ids), "blueprints": ids[:limit],
-                "evaluation_active": True}
+        return {**search_assets(ids, query, kind=kind, offset=offset, limit=limit), 'evaluation_active': True}
     world = connect_world()
     patterns = ("vehicle.*", "walker.pedestrian.*", "static.prop.*")
     ids = sorted({bp.id for pattern in patterns
                   for bp in world.get_blueprint_library().filter(pattern)})
     ids.extend(sorted(BLENDER.registry()))
-    if query:
-        ids = [item for item in ids if query.casefold() in item.casefold()]
-    return {"ok": True, "total": len(ids), "blueprints": ids[:limit]}
+    return search_assets(ids, query, kind=kind, offset=offset, limit=limit)
 
 
 @simulation_operation
@@ -2572,11 +2569,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._headers(400 if isinstance(exc,ValueError) else 503)
             self.wfile.write(payload)
             return
-        self._headers()
         if request.path == "/catalog/blueprints":
-            result = spawnable_blueprints(params.get("q", [""])[0], 200)
+            try:
+                result = spawnable_blueprints(params.get('q', [''])[0], int(params.get('limit', ['200'])[0]),
+                                             int(params.get('offset', ['0'])[0]), params.get('kind', ['all'])[0])
+                self._headers()
+            except (ValueError, RuntimeError) as exc:
+                result = {'ok': False, 'error': str(exc)}
+                self._headers(400)
             self.wfile.write(json.dumps(result).encode())
-        elif request.path == "/scene/state":
+            return
+        self._headers()
+        if request.path == "/scene/state":
             self.wfile.write(json.dumps(scene_state()).encode())
         elif request.path == "/e2e/status":
             self.wfile.write(json.dumps(e2e_status()).encode())

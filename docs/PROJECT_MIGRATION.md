@@ -3,7 +3,30 @@
 当前提供图形项目包导出/隔离导入、显式Unreal源资产注册与同地图实景恢复，详见[项目包界面](PROJECT_BUNDLE_UI.md)。完整跨机环境安装与验收仍开发中。以下CLI命令在仓库根目录运行，
 `PROJECT`、`SCENE`、`OUTPUT` 等需替换为实际路径或 ID。
 
-## 导出
+## 目标机器路径预检
+
+启动与维护脚本现在共用 `scripts/studio_paths.sh`。迁移前显式配置下面的路径；
+默认值只是开发机兼容值，不意味着目标机器已经安装依赖：
+
+```bash
+export CARLA_ROOT=/new/path/to/carla
+export UE4_ROOT=/new/path/to/UnrealEngine_4.26
+export E2E_ROOT=/new/path/to/e2e
+export CARLA_PYTHONPATH=/new/path/to/native/python/site-packages
+export UNIAD_PYTHON=/new/path/to/model/environment/bin/python
+export BLENDER_BIN=/new/path/to/blender
+source scripts/studio_paths.sh
+PYTHONPATH=src python3 tools/runtime_paths_doctor.py
+```
+
+需要时还可单独覆盖 `UE4_EDITOR`、`UE4_EDITOR_CMD`、`CARLA_PROJECT`。
+原生维护重启会在任何保存/停止服务之前运行 native 范围预检；缺少文件就拒绝重启。
+检查只读取上述指定路径，不扫描其他目录、不执行对应程序、不访问仿真、不加载模型。
+`paths_present=true` **仅表示路径/可执行权限存在**；`runtime_verified`始终为false。
+Python ABI、CUDA、引擎补丁构建、模型指纹/推理和场景恢复仍须分别验收。
+原生桥接Python目录与模型Python环境可能不同，切勿把Python3.14的CARLA扩展加入Python3.10模型环境。
+
+## 导出命令
 
 ```bash
 PYTHONPATH=src python3 tools/project_bundle.py export \

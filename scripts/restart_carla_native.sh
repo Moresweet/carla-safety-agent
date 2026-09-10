@@ -2,11 +2,14 @@
 set -eo pipefail
 STUDIO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$STUDIO_ROOT"
+source "$STUDIO_ROOT/scripts/studio_paths.sh"
 NATIVE_MAP="${CSA_NATIVE_MAP:-Town04}"
 [[ "$NATIVE_MAP" =~ ^Town[0-9]+(HD)?(_Opt)?$ ]] || { echo 'Invalid native town name' >&2; exit 1; }
 if [[ "${1:-}" != '' && "${1:-}" != '--after-crash' ]]; then
   echo 'Usage: restart_carla_native.sh [--after-crash]' >&2; exit 1
 fi
+# Fail before saving/stopping anything when relocated prerequisites are absent.
+PYTHONPATH=src python3 tools/runtime_paths_doctor.py --scope native || exit 1
 if [[ "${1:-}" == '--after-crash' ]]; then
   PYTHONPATH=src python3 -c 'from carla_safety_agent.session import SessionJournal; assert SessionJournal("data").owned_pid() is None, "Stop live evaluation worker first"'
   if pgrep -x UE4Editor > /dev/null; then
@@ -57,8 +60,8 @@ if [[ "${CSA_NATIVE_DEBUG:-0}" == '1' ]]; then
     -ex 'p ((FStaticMeshSceneProxy*)PrimitiveSceneProxy)->DistanceFieldData'
     -ex 'thread apply all bt 20' --args)
 fi
-setsid "${NATIVE_LAUNCH[@]}" /home/moresweet/UnrealEngine_4.26/Engine/Binaries/Linux/UE4Editor \
-  /home/moresweet/carla/Unreal/CarlaUE4/CarlaUE4.uproject "/Game/Carla/Maps/$NATIVE_MAP" \
+setsid "${NATIVE_LAUNCH[@]}" "$UE4_EDITOR" \
+  "$CARLA_PROJECT" "/Game/Carla/Maps/$NATIVE_MAP" \
   -game -windowed -ResX=1280 -ResY=720 -carla-server -carla-port=2000 \
   -quality-level=Low '-ExecCmds=r.GPUScene 0' >> .runtime/carla.log 2>&1 < /dev/null &
 NATIVE_LAUNCH_PID="$!"
@@ -72,7 +75,7 @@ for attempt in {1..60}; do
     NATIVE_INFERIOR_PID="$(pgrep -P "$NATIVE_LAUNCH_PID" -x UE4Editor || true)"
     if [[ "$NATIVE_INFERIOR_PID" =~ ^[0-9]+$ ]]; then echo "$NATIVE_INFERIOR_PID" > .runtime/carla.pid; fi
   fi
-  if PYTHONPATH=/home/moresweet/carla/.venv/lib/python3.14/site-packages python3 -c 'import carla; c=carla.Client("127.0.0.1",2000); c.set_timeout(2); print(c.get_world().get_map().name)' 2>/dev/null; then
+  if PYTHONPATH="$CARLA_PYTHONPATH" python3 -c 'import carla; c=carla.Client("127.0.0.1",2000); c.set_timeout(2); print(c.get_world().get_map().name)' 2>/dev/null; then
     bash scripts/restart_studio_bridge.sh
     exit 0
   fi

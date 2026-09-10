@@ -2,6 +2,7 @@
 set -eo pipefail
 STUDIO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$STUDIO_ROOT"
+source "$STUDIO_ROOT/scripts/studio_paths.sh"
 if [[ "${1:-}" != '' && "${1:-}" != '--stop' && "${1:-}" != '--after-crash-stop' && "${1:-}" != '--resume-recovery' ]]; then
   echo 'Usage: restart_studio_bridge.sh [--stop|--after-crash-stop|--resume-recovery]' >&2; exit 1
 fi

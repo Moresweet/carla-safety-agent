@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/scripts/studio_paths.sh"
 RUNTIME_DIR="${SURFACE_RUNTIME_DIR:-$ROOT_DIR/.runtime}"
 CARLA_ROOT="${CARLA_ROOT:-/home/moresweet/carla}"
 UE4_ROOT="${UE4_ROOT:-/home/moresweet/UnrealEngine_4.26}"

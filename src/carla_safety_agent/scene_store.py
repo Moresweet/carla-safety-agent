@@ -3,7 +3,9 @@ import copy
 import fcntl
 import json
 import math
+import os
 import re
+import stat
 import time
 import uuid
 from contextlib import contextmanager
@@ -17,9 +19,40 @@ def identifier(value):
 
 
 def atomic(path, payload):
-    temporary = path.with_suffix('.tmp')
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, allow_nan=False, indent=2))
+    if path.is_symlink():raise ValueError('Refusing to replace a linked state file')
+    encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False, indent=2).encode('utf-8')
+    temporary = path.with_name(path.name+'.'+uuid.uuid4().hex+'.tmp')
+    with temporary.open('xb') as stream:
+        stream.write(encoded)
+        stream.flush()
+        os.fsync(stream.fileno())
     temporary.replace(path)
+    descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    except OSError as exc:
+        raise OSError('State file was replaced but directory sync failed; inspect current state before retrying') from exc
+    finally: os.close(descriptor)
+
+
+def read_json(path):
+    """Bounded regular-file reads; reject duplicate keys and special JSON numbers."""
+    def pairs(items):
+        result={}
+        for key,value in items:
+            if key in result: raise ValueError('Duplicate scene JSON key')
+            result[key]=value
+        return result
+    def invalid(value): raise ValueError('Non-finite scene JSON number: '+value)
+    if path.is_symlink(): raise ValueError('Scene files must not be symbolic links')
+    descriptor=os.open(path,os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(descriptor,'rb') as stream:
+        info=os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size>16*1024*1024:
+            raise ValueError('Invalid scene file type or size')
+        raw=stream.read(16*1024*1024+1)
+    if len(raw)>16*1024*1024: raise ValueError('Scene file exceeds size limit')
+    return json.loads(raw,object_pairs_hook=pairs,parse_constant=invalid)
 
 
 def finite_number(value):
@@ -91,28 +124,76 @@ class SceneStore:
     def __init__(self, root):
         self.root = Path(root)
 
+    def folder(self, scene_id):
+        folder=self.root/identifier(scene_id)
+        if folder.is_symlink() or folder.resolve().parent!=self.root.resolve():
+            raise ValueError('Scene directory is outside the configured store')
+        return folder
+
+    def head(self, folder, scene_id):
+        head=read_json(folder/'head.json')
+        if not isinstance(head,dict) or head.get('scene_id')!=scene_id:
+            raise ValueError('Scene head identity mismatch')
+        history=head.get('history');cursor=head.get('cursor')
+        if (not isinstance(history,list) or not 1<=len(history)<=10000 or
+                any(not isinstance(value,str) for value in history) or len(set(history))!=len(history) or
+                type(cursor) is not int or not 0<=cursor<len(history)):
+            raise ValueError('Invalid scene history')
+        for version in history: identifier(version)
+        if head.get('version')!=history[cursor]: raise ValueError('Scene history cursor mismatch')
+        if (not isinstance(head.get('name'),str) or not head['name'].strip() or len(head['name'])>120 or
+                not isinstance(head.get('map'),str) or not head['map'] or
+                type(head.get('object_count')) is not int or not 0<=head['object_count']<=2000 or
+                not finite_number(head.get('updated_at'))):
+            raise ValueError('Invalid scene head metadata')
+        return head
+
+    def document(self, folder, scene_id, version):
+        document=validate_scene(read_json(folder/(identifier(version)+'.json')))
+        if document.get('scene_id')!=scene_id or document.get('version')!=version:
+            raise ValueError('Scene version identity mismatch')
+        if not isinstance(document.get('name'),str) or not document['name'].strip() or len(document['name'])>120:
+            raise ValueError('Invalid scene version name')
+        if not finite_number(document.get('saved_at')):raise ValueError('Invalid scene save timestamp')
+        return document
+
+    @staticmethod
+    def verify_current(head, document):
+        if (head['name']!=document['name'] or head['map']!=document['map'] or
+                head['object_count']!=len(document['objects'])):
+            raise ValueError('Scene head metadata differs from its current version')
+
     @contextmanager
     def locked(self, scene_id):
-        folder = self.root/identifier(scene_id)
+        folder = self.folder(scene_id)
+        existed=folder.exists()
         folder.mkdir(parents=True, exist_ok=True)
-        with (folder/'.lock').open('a') as stream:
+        if not existed:
+            parent=os.open(folder.parent,os.O_RDONLY | os.O_DIRECTORY)
+            try:os.fsync(parent)
+            finally:os.close(parent)
+        if (folder/'.lock').is_symlink():raise ValueError('Scene lock must not be a symbolic link')
+        descriptor=os.open(folder/'.lock',os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,0o600)
+        with os.fdopen(descriptor,'a') as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):raise ValueError('Invalid scene lock type')
             fcntl.flock(stream, fcntl.LOCK_EX)
             yield folder
 
     def list(self):
         result = []
         for path in self.root.glob('*/head.json'):
-            try: result.append(json.loads(path.read_text()))
+            try: result.append(self.head(self.folder(path.parent.name),path.parent.name))
             except (OSError, ValueError): continue
         return sorted(result, key=lambda v:v.get('updated_at',0), reverse=True)
 
     def read(self, scene_id, version=None):
-        folder = self.root/identifier(scene_id)
+        folder = self.folder(scene_id)
         if not folder.is_dir(): raise ValueError('Scene not found')
         with self.locked(scene_id):
-            head = json.loads((folder/'head.json').read_text())
+            head = self.head(folder,scene_id)
             version = version or head['version']
-            payload = validate_scene(json.loads((folder/(identifier(version)+'.json')).read_text()))
+            payload = self.document(folder,scene_id,version)
+            if version==head['version']:self.verify_current(head,payload)
             return {'head': head, 'document': payload}
 
     def save(self, document, name, scene_id=None, expected_version=None):
@@ -121,12 +202,16 @@ class SceneStore:
         scene_id = scene_id or uuid.uuid4().hex
         with self.locked(scene_id) as folder:
             head_file = folder/'head.json'
-            previous = json.loads(head_file.read_text()) if head_file.exists() else None
+            previous = self.head(folder,scene_id) if head_file.exists() or head_file.is_symlink() else None
             if previous and expected_version != previous['version']:
                 raise ValueError('Scene changed; reload before saving')
+            if previous:self.verify_current(previous,self.document(folder,scene_id,previous['version']))
+            if previous and previous['cursor']>=9999:raise ValueError('Scene history limit reached')
             version = uuid.uuid4().hex
             document.update(scene_id=scene_id, version=version, name=str(name), saved_at=time.time())
-            atomic(folder/(version+'.json'), document)
+            destination=folder/(version+'.json')
+            if destination.exists() or destination.is_symlink():raise ValueError('Scene version already exists')
+            atomic(destination, document)
             history = previous['history'][:previous['cursor']+1] if previous else []
             history.append(version)
             head = dict(scene_id=scene_id, name=str(name), version=version, history=history,
@@ -136,16 +221,16 @@ class SceneStore:
             return {'head': head, 'document': document}
 
     def move(self, scene_id, direction, expected_version):
-        if direction not in (-1,1): raise ValueError('History direction must be -1 or 1')
+        if type(direction) is not int or direction not in (-1,1): raise ValueError('History direction must be -1 or 1')
         with self.locked(scene_id) as folder:
-            head = json.loads((folder/'head.json').read_text())
+            head = self.head(folder,scene_id)
             if expected_version != head['version']: raise ValueError('Scene changed; reload history')
             cursor = head['cursor']+direction
             if not 0 <= cursor < len(head['history']): raise ValueError('No earlier/later version')
             version = head['history'][cursor]
             # Reject corrupted history before changing the durable cursor. The
             # world restore preflight runs later and cannot protect this write.
-            document = validate_scene(json.loads((folder/(identifier(version)+'.json')).read_text()))
+            document = self.document(folder,scene_id,version)
             head.update(cursor=cursor, version=version, name=document['name'], map=document['map'],
                         object_count=len(document.get('objects', [])), updated_at=time.time())
             atomic(folder/'head.json', head)

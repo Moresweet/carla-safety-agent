@@ -1541,11 +1541,11 @@ def prepare_scene_materials(world, document, previous=None):
 @simulation_operation
 def scene_history(data):
     connect_world()  # Reject during evaluation before changing the document cursor.
-    saved = SCENES.move(data['scene_id'], int(data['direction']), data['expected_version'])
+    saved = SCENES.move(data['scene_id'], data['direction'], data['expected_version'])
     try:
         return restore_scene({'scene_id': data['scene_id'], 'version': saved['head']['version']})
     except Exception:
-        SCENES.move(data['scene_id'], -int(data['direction']), saved['head']['version'])
+        SCENES.move(data['scene_id'], -data['direction'], saved['head']['version'])
         raise
 
 

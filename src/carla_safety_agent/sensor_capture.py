@@ -110,8 +110,9 @@ def sample_storage_reserve(arrays, rgb, auxiliary):
 
 class SensorCapture:
     def __init__(self, world, ego, specs, runtime, source='model-input', dataset_root=None,
-                 scenario=None, client=None):
+                 scenario=None, client=None, journal=None):
         import carla
+        from .owned_resources import OwnedActors
         self.client, self._carla = client, carla
         if source not in ('model-input', 'sensor-rig'):
             raise ValueError('Unknown capture source')
@@ -125,7 +126,7 @@ class SensorCapture:
         self.root = Path(runtime)
         self.live = self.root/'capture'
         self.live.mkdir(parents=True, exist_ok=True)
-        self.samples, self.sensors = {}, []
+        self.samples, self.sensors = {}, OwnedActors(journal)
         self.collisions = CollisionEvents()
         self.lock = threading.Condition()
         self.closed = False

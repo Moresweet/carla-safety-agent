@@ -3,13 +3,15 @@ import argparse
 import os
 import socket
 import subprocess
-from carla_safety_agent.restart_guard import verify_idle, verify_crash_restart
+from carla_safety_agent.restart_guard import verify_idle, verify_crash_restart, verify_recovery_restart
 from regression_scene_versions import request
 
 
 if __name__ == '__main__':
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--after-crash',action='store_true')
+    modes=parser.add_mutually_exclusive_group()
+    modes.add_argument('--after-crash',action='store_true')
+    modes.add_argument('--resume-recovery',action='store_true')
     args=parser.parse_args()
     session=request('session/status')['session']
     scheduler=request('batches/scheduler')['scheduler']
@@ -22,6 +24,8 @@ if __name__ == '__main__':
         except ConnectionRefusedError:
             port_open=False
         verify_crash_restart(session,scheduler,native.returncode==0,port_open)
+    elif args.resume_recovery:
+        verify_recovery_restart(session,scheduler)
     else:
         verify_idle(session,scheduler)
     print('Bridge restart gate passed; no live execution or active batch scheduler')

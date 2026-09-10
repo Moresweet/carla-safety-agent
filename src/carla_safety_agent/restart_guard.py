@@ -27,3 +27,10 @@ def verify_crash_restart(session, scheduler, native_alive, port_open,
     # Reuse all scheduler and process-identity protections. Only a dead server's
     # recovery state is relaxed in this local check, never in the journal.
     verify_idle({**session, 'state':'failed'}, scheduler, observe)
+
+
+def verify_recovery_restart(session, scheduler, observe=observed_process_identity):
+    """Reload recovery code only after the recorded worker has exited."""
+    if not isinstance(session, dict) or session.get('state') != 'recovering':
+        raise ValueError('Recovery restart requires a recovering session')
+    verify_idle({**session, 'state': 'failed'}, scheduler, observe)

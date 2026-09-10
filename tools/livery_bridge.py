@@ -465,6 +465,8 @@ def start_e2e(data: dict) -> dict:
                               'python': sys.executable if action in ('sensor-rig','rule-run') else str(UNIAD_PYTHON), 'carla_port': CARLA_PORT,
                               'results': str(results_path) if action in ('run', 'preset-run', 'rule-run') else None})
         env['CSA_EXECUTION_ID'] = execution_id
+        if action == 'run':
+            env['CSA_RESOURCE_DATA_ROOT'] = str(PROJECT_ROOT/'data')
         _e2e_job.clear()
         _e2e_job.update(state="running", kind=action, started_at=time.time(),
                         ended_at=None, returncode=None, command=command,
@@ -851,6 +853,11 @@ def restore_editor_world():
     recovery = SESSION.snapshot().get('configuration', {}).get('texture_recovery')
     if recovery and (world.id != recovery['episode'] or world.get_map().name != recovery['map']):
         raise RuntimeError('Texture recovery world changed; refusing to modify another episode')
+    from carla_safety_agent.owned_resources import recover_owned_resources
+    resource_recovery = recover_owned_resources(PROJECT_ROOT/'data', SESSION.snapshot(), _carla_client, carla)
+    if resource_recovery and resource_recovery['state'] == 'different_world':
+        # Restarted server/map: never apply the old worker's settings to it.
+        return observe_idle(_carla_client, world.get_map().name)
     settings = world.get_settings()
     if settings.synchronous_mode:
         settings.synchronous_mode = False

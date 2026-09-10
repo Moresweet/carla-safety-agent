@@ -23,10 +23,11 @@ from agents.navigation.local_planner import RoadOption
 
 
 class NativeSensorRig:
-    def __init__(self, carla: Any, world: Any, ego: Any, interface: Any, client=None) -> None:
+    def __init__(self, carla: Any, world: Any, ego: Any, interface: Any, client=None, journal=None) -> None:
+        from carla_safety_agent.owned_resources import OwnedActors
         self.carla, self.world, self.ego, self.interface = carla, world, ego, interface
         self.client = client
-        self.sensors: list[Any] = []
+        self.sensors: list[Any] = OwnedActors(journal)
         self.has_speedometer = False
 
     def setup(self, specs: list[dict[str, Any]]) -> None:
@@ -129,7 +130,9 @@ class NativeScenarioExecutor:
         settings = world.get_settings()
         settings.synchronous_mode = True
         settings.fixed_delta_seconds = 0.05
-        actors: list[Any] = []
+        from .owned_resources import OwnedActors, journal_from_environment
+        journal = journal_from_environment(world)
+        actors: list[Any] = OwnedActors(journal)
         agent = None
         rig = None
         capture = None
@@ -181,11 +184,11 @@ class NativeScenarioExecutor:
             agent.setup(agent_config)
             from .sensor_schedule import synchronous_specs
             sensor_specs = synchronous_specs(agent.sensors(), settings.fixed_delta_seconds)
-            rig = NativeSensorRig(carla, world, ego, agent.sensor_interface, client=client)
+            rig = NativeSensorRig(carla, world, ego, agent.sensor_interface, client=client, journal=journal)
             rig.setup(sensor_specs)
             if os.environ.get('CSA_SENSOR_CAPTURE') == '1':
                 from .sensor_capture import SensorCapture
-                capture = SensorCapture(world, ego, sensor_specs, os.environ['CSA_EVALUATION_CONTROL_DIR'], scenario=spec.to_dict(), client=client)
+                capture = SensorCapture(world, ego, sensor_specs, os.environ['CSA_EVALUATION_CONTROL_DIR'], scenario=spec.to_dict(), client=client, journal=journal)
             rig.warmup()
             self._focus_spectator(carla, world, ego)
             world.tick()

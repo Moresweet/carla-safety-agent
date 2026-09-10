@@ -6,7 +6,7 @@ import {spawn} from 'node:child_process';
 import {mkdtemp,readFile,writeFile,mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {textureUploadFlipY} from './livery-designer/app/uvConvention.ts';
 
@@ -474,7 +474,7 @@ try {
   const datasetFlag=process.argv.indexOf('--dataset');
   if(datasetFlag>=0){
     let dataset=process.argv[datasetFlag+1];
-    assert(/^(capture-[A-Za-z0-9-]+|recovered-[a-f0-9]{32})$/.test(dataset),'Expected a capture dataset ID');
+    assert(/^(capture-[A-Za-z0-9-]+|(?:recovered|excerpt)-[a-f0-9]{32})$/.test(dataset),'Expected a capture dataset ID');
     await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Collect Data').click()`);
     let ready=false;
     for(let i=0;i<100;i++){
@@ -546,6 +546,49 @@ try {
       await evaluate(`(()=>{const slider=document.querySelector('input[aria-label="回放时间轴"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(slider,${position});slider.dispatchEvent(new Event('input',{bubbles:true}));slider.dispatchEvent(new Event('change',{bubbles:true}));})()`);
       for(let i=0;i<100;i++){ready=await evaluate(`document.querySelector('[aria-label="真实轨迹与预测对比"]')?.getAttribute('data-frame')===${JSON.stringify(String(wanted))}`);if(ready)break;await delay(200)}
       assert(ready,'Requested replay frame did not render');
+    }
+    if(process.argv.includes('--export-window')){
+      assert(await evaluate(`document.querySelector('[aria-label="诊断片段归档"] button').disabled`));
+      await evaluate(`(()=>{for(const label of ['片段向前秒数','片段向后秒数']){const e=document.querySelector('input[aria-label="'+label+'"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(e,.1);e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))}})()`);
+      await delay(300);
+      await evaluate(`document.querySelector('[aria-label="确认保存诊断片段"]').click()`);
+      await delay(100);
+      await evaluate(`document.querySelector('[aria-label="诊断片段归档"] button').click()`);
+      let result,requestId;
+      for(let i=0;i<620;i++){
+        requestId=await evaluate(`sessionStorage.getItem('capture-excerpt:'+${JSON.stringify(dataset)})`);
+        if(requestId){
+          result=await (await fetch('http://127.0.0.1:8765/datasets/excerpt?request_id='+requestId)).json();
+          assert(!['failed','needs_attention'].includes(result.state),JSON.stringify(result));
+          if(result.state==='ready')break;
+        }
+        await delay(500);
+      }
+      assert.equal(result?.state,'ready',JSON.stringify(result));
+      assert.equal(result.selection.before_s,.1);assert.equal(result.selection.after_s,.1);
+      await writeFile(join(output,'excerpt-report.json'),JSON.stringify(result,null,2));
+      for(let i=0;i<30;i++){
+        ready=await evaluate(`!!document.querySelector('[aria-label="诊断片段归档"] a[download]')`);
+        if(ready)break;await delay(200);
+      }
+      assert(ready,'Excerpt download not displayed');
+      const url=await evaluate(`document.querySelector('[aria-label="诊断片段归档"] a[download]').href`);
+      const response=await fetch(url);assert(response.ok);
+      const digest=createHash('sha256');let bytes=0;
+      for await(const chunk of response.body){digest.update(chunk);bytes+=chunk.length}
+      assert.equal(bytes,result.archive.bytes);assert.equal(digest.digest('hex'),result.archive.sha256);
+      await evaluate(`document.querySelector('[aria-label="诊断片段归档"]').scrollIntoView({block:'center'})`);
+      const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      await writeFile(join(output,'excerpt-complete.png'),Buffer.from(shot.data,'base64'));
+      await evaluate(`[...document.querySelectorAll('[aria-label="诊断片段归档"] button')].find(b=>b.textContent==='打开诊断片段回放').click()`);
+      dataset=result.excerpt_run_id;
+      for(let i=0;i<100;i++){
+        ready=await evaluate(`document.querySelector('select[aria-label="数据集"]').value===${JSON.stringify(dataset)}&&!!document.querySelector('[aria-label="诊断片段提示"]')&&!!document.querySelector('.replay-controls a[download]')`);
+        if(ready)break;await delay(200);
+      }
+      assert(ready,'Excerpt playback unavailable');
+      assert.equal(await evaluate(`document.querySelectorAll('[aria-label="诊断片段归档"]').length`),0,'Recursive excerpt is not supported');
+      interactions.push('explicit_window_export_download_hash_and_subset_playback_verified');
     }
     const quality=await evaluate(`document.querySelector('[aria-label="回放索引质量"]').textContent`);
     assert(quality.includes('严格递增')&&quality.includes('不等于传感器丢帧数量'));

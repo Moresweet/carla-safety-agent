@@ -31,6 +31,7 @@ from carla_safety_agent.blender_pipeline import BlenderPipeline
 from carla_safety_agent.dataset import list_datasets
 from carla_safety_agent.quality_service import QualityService
 from carla_safety_agent.recovery_service import RecoveryService
+from carla_safety_agent.excerpt_service import ExcerptService
 from carla_safety_agent.bundle_registration_service import BundleRegistrationService,native_import_busy
 from carla_safety_agent.provenance import ActorProvenance
 from carla_safety_agent.uv_audit import audit_uv
@@ -118,6 +119,8 @@ QUALITY = QualityService(DATASET_ROOT, PROJECT_ROOT / '.runtime/dataset-quality'
                          PROJECT_ROOT / 'tools/validate_capture_dataset.py', UNIAD_PYTHON)
 RECOVERY = RecoveryService(DATASET_ROOT, PROJECT_ROOT / '.runtime/dataset-recovery',PROJECT_ROOT/'data',
                            PROJECT_ROOT/'tools/validate_capture_dataset.py',UNIAD_PYTHON)
+EXCERPTS = ExcerptService(DATASET_ROOT, PROJECT_ROOT / '.runtime/dataset-excerpts', PROJECT_ROOT/'data',
+                         PROJECT_ROOT/'tools/validate_capture_dataset.py', UNIAD_PYTHON)
 BLENDER = BlenderPipeline(PROJECT_ROOT)
 SESSION = SessionJournal(PROJECT_ROOT / 'data')
 BATCHES = BatchCatalog(PROJECT_ROOT / 'data/experiment-queues')
@@ -2148,10 +2151,28 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError,OSError) as exc:
                 self._headers(400);self.wfile.write(json.dumps({'ok':False,'error':str(exc)}).encode())
             return
-        if request.path in ('/datasets/quality','/datasets/recovery'):
+        if request.path == '/datasets/excerpt/download':
+            try:
+                path=EXCERPTS.download(params.get('request_id',[''])[0])
+                stream=path.open('rb')
+            except (ValueError,OSError) as exc:
+                self._headers(400);self.wfile.write(json.dumps({'ok':False,'error':str(exc)}).encode())
+                return
+            with stream:
+                self.send_response(200)
+                self.send_header('Content-Type','application/zip')
+                self.send_header('Content-Length',str(os.fstat(stream.fileno()).st_size))
+                self.send_header('Access-Control-Allow-Origin',FRONTEND_ORIGIN)
+                self.send_header('Content-Disposition','attachment; filename="diagnostic-excerpt.zip"')
+                self.end_headers()
+                try:
+                    for chunk in iter(lambda:stream.read(1024*1024),b''):self.wfile.write(chunk)
+                except (BrokenPipeError,ConnectionResetError):pass
+            return
+        if request.path in ('/datasets/quality','/datasets/recovery','/datasets/excerpt'):
             try:
                 result = (QUALITY.status(params.get('run_id', [''])[0]) if request.path=='/datasets/quality'
-                          else RECOVERY.status(params.get('request_id',[''])[0]))
+                          else (EXCERPTS if request.path=='/datasets/excerpt' else RECOVERY).status(params.get('request_id',[''])[0]))
                 self._headers()
                 self.wfile.write(json.dumps({'ok': True, **result}).encode())
             except (ValueError, OSError) as exc:
@@ -2332,7 +2353,7 @@ class Handler(BaseHTTPRequestHandler):
         if request.path not in ("/apply", "/apply/road", "/apply/building",
                                 '/projects/bundle/export','/projects/bundle/upload','/projects/bundle/import','/projects/bundle/doctor',
                                 '/projects/bundle/restore-preview','/projects/bundle/restore-confirm','/projects/bundle/registration',
-                                '/batches/create', '/datasets/quality', '/datasets/recovery',
+                                '/batches/create', '/datasets/quality', '/datasets/recovery', '/datasets/excerpt',
                                 '/batches/control',
                                 '/batches/scheduler',
                                 "/apply/environment",
@@ -2374,6 +2395,8 @@ class Handler(BaseHTTPRequestHandler):
                 result=confirm_bundle_restore(json.loads(payload or b'{}'))
             elif request.path == '/datasets/recovery':
                 result={'ok':True,**RECOVERY.start(json.loads(payload or b'{}'))}
+            elif request.path == '/datasets/excerpt':
+                result={'ok':True,**EXCERPTS.start(json.loads(payload or b'{}'))}
             elif request.path == '/datasets/quality':
                 data = json.loads(payload or b'{}')
                 if not isinstance(data, dict) or set(data) != {'run_id'}:

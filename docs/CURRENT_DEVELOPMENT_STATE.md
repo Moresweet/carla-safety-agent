@@ -32,6 +32,7 @@
 - [批量队列完整性](BATCH_LEDGER_INTEGRITY.md)：后续队列增量完整Python测试747项通过，并有原生停止重试证据。
 - 最新尝试历史GUI增量：750项Python测试、TypeScript与生产构建通过；原生批次的停止/完成历史网页截图已查看。
 - [中断采集恢复](CAPTURE_RECOVERY.md)
+- [诊断片段归档](CAPTURE_EXCERPTS.md)：新增保存/ZIP下载/独立回放，规则与VAD真实录制验证通过；最新完整Python测试764项、TypeScript通过。
 - [项目包界面](PROJECT_BUNDLE_UI.md)、[迁移命令与不包含项](PROJECT_MIGRATION.md)
 - [预测空间契约](PREDICTION_SPATIAL_CONTRACT.md)
 

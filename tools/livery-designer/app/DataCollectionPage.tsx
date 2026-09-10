@@ -6,8 +6,9 @@ import ReplayEvents from "./ReplayEvents";
 import ReplayQuality, {type TemporalQuality} from './ReplayQuality';
 import CaptureQuality from './CaptureQuality';
 import CaptureRecovery from './CaptureRecovery';
+import CaptureExcerpt from './CaptureExcerpt';
 const bridge="http://127.0.0.1:8765";
-type Dataset={run_id:string;scenario_id:string;status:string;map:string;frame_count:number;replay?:boolean;skipped_frames?:number;manifest_path:string;recovery?:{source_run_id:string;omitted_uncommitted_tail:string[]}};
+type Dataset={run_id:string;scenario_id:string;status:string;map:string;frame_count:number;replay?:boolean;skipped_frames?:number;manifest_path:string;excerpt?:{source_run_id:string};recovery?:{source_run_id:string;omitted_uncommitted_tail:string[]}};
 type Entry={frame:number;timestamp:number};
 export default function DataCollectionPage(){
  const [quality,setQuality]=useState<{runId:string;value:TemporalQuality}|null>(null);
@@ -26,6 +27,8 @@ export default function DataCollectionPage(){
  {dataset?.recovery&&<p role="note" aria-label="中断采集恢复提示">这是中断采集的恢复副本，不是完整录制。来源：{dataset.recovery.source_run_id}；排除 {dataset.recovery.omitted_uncommitted_tail.length} 个未提交尾帧目录，原始目录保留。可回放已验证样本，不能据此认定任务正常完成；暂不允许自动加入训练划分。</p>}
  {selected&&<ReplayQuality quality={quality?.runId===selected?quality.value:null}/>}
  {selected&&<CaptureQuality key={'quality:'+selected} runId={selected}/>}
+ {dataset?.excerpt&&<p role="note" aria-label="诊断片段提示">这是诊断片段，不是完整录制或自动批准的训练数据。来源：{dataset.excerpt.source_run_id}。原任务的时间及跳帧计数保留，不代表本片段的统计。</p>}
+ {dataset&&['saved','saved_limit','saved_recovered'].includes(dataset.status)&&<CaptureExcerpt key={'excerpt:'+selected} runId={selected} frame={visibleFrame?.frame??null} onOpen={id=>{setPlaying(false);void refresh();setSelected(id)}}/>}
  {dataset&&['recording','saved_cleanup_error'].includes(dataset.status)&&<CaptureRecovery key={'recovery:'+selected} runId={selected} onRecovered={id=>{void refresh();setSelected(id)}}/>}
  {selected&&<ReplayEvents key={'events:'+selected} runId={selected} onSeek={target=>{
   const next=index.findIndex(entry=>entry.frame===target);

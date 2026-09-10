@@ -79,14 +79,26 @@ try {
     if(process.argv.includes('--bundle-previews')){
       await evaluate(`document.querySelector('.bundle-panel input[type=checkbox]').click()`);await delay(100);
     }
-    await evaluate(`document.querySelector('.bundle-panel button').click()`);
+    if(process.argv.includes('--bundle-sources')){
+      await evaluate(`document.querySelectorAll('.bundle-panel input[type=checkbox]')[1].click()`);await delay(100);
+    }
+    const referenceFlag=process.argv.indexOf('--bundle-reference');
+    if(referenceFlag>=0){
+      const referencePath=resolve(process.argv[referenceFlag+1]);await readFile(referencePath);
+      const root=await cdp('DOM.getDocument'),input=await cdp('DOM.querySelector',{nodeId:root.root.nodeId,selector:'input[aria-label="模型引用 JSON"]'});
+      await cdp('DOM.setFileInputFiles',{nodeId:input.nodeId,files:[referencePath]});
+      let loaded=false;
+      for(let i=0;i<100;i++){loaded=await evaluate(`[...document.querySelectorAll('.bundle-panel button')].some(b=>b.textContent==='移除模型引用'&&!b.disabled)`);if(loaded)break;await delay(100)}
+      assert(loaded,'Runtime reference did not load');
+    }
+    await evaluate(`[...document.querySelectorAll('.bundle-panel button')].find(b=>b.textContent==='导出选中场景包').click()`);
     let download;
     for(let i=0;i<150;i++){download=await evaluate(`document.querySelector('.bundle-panel a')?.href`);if(download)break;await delay(200)}
     assert(download,'Export download was not provided');
     const exportedId=new URL(download).searchParams.get('bundle_id');
     const response=await fetch(download);assert(response.ok);
     const packagePath=join(output,'browser-export.zip');await writeFile(packagePath,Buffer.from(await response.arrayBuffer()));
-    const documentNode=await cdp('DOM.getDocument'),input=await cdp('DOM.querySelector',{nodeId:documentNode.root.nodeId,selector:'.bundle-panel input[type=file]'});
+    const documentNode=await cdp('DOM.getDocument'),input=await cdp('DOM.querySelector',{nodeId:documentNode.root.nodeId,selector:'input[aria-label="项目 ZIP"]'});
     await cdp('DOM.setFileInputFiles',{nodeId:input.nodeId,files:[packagePath]});
     let uploadedId;
     for(let i=0;i<150;i++){

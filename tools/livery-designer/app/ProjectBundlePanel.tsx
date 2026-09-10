@@ -6,6 +6,7 @@ type Diagnostic={bundle_id:string;observed_at:number;episode:string;current_map:
 export default function ProjectBundlePanel({sceneId}:{sceneId:string}){
  const [bundle,setBundle]=useState<Bundle|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[status,setStatus]=useState(''),[confirmed,setConfirmed]=useState(false),[previews,setPreviews]=useState(false);
  const active=useRef(false);
+ const [sources,setSources]=useState(false),[reference,setReference]=useState<unknown|null>(null),[referenceName,setReferenceName]=useState('');
  const [diagnostic,setDiagnostic]=useState<Diagnostic|null>(null);
  async function execute(path:string,body:BodyInit,contentType='application/json'){
   if(active.current)return;active.current=true;setBusy(true);setError('');setStatus('正在校验与处理；不会改动当前仿真场景。');
@@ -30,10 +31,20 @@ export default function ProjectBundlePanel({sceneId}:{sceneId:string}){
  const dependencies=bundle?.manifest.dependencies;
  return <section aria-label="项目打包迁移" className="bundle-panel">
   <h2>项目包 · 导出与隔离导入</h2>
-  <p>导出上方选中场景的全部保存版本和引用纹理，可附带精准材质预览。当前图形导出不包含 Blender 源资产包、模型引用、权重、采集数据或源码；完整源资产与模型引用请使用项目打包命令行。</p>
+  <p>导出上方选中场景的全部保存版本和引用纹理，可附带精准材质预览、已登记 Blender 源文件及模型文件校验引用。不包含权重、采集数据、源码、Unreal 编译资产或 Python/CUDA 环境。</p>
   <label><input type="checkbox" checked={previews} disabled={busy} onChange={e=>setPreviews(e.target.checked)}/>包含引用材质的真实网格预览</label>
-  <button disabled={busy||!sceneId} onClick={()=>void execute('/projects/bundle/export',JSON.stringify({scene_ids:[sceneId],include_material_previews:previews}))}>导出选中场景包</button>
-  <label>上传并检查项目 ZIP（最多 16 MiB；更大文件使用命令行）<input type="file" accept=".zip,application/zip" disabled={busy} onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(!file)return;if(file.size>16*1024*1024){setError('文件超过浏览器16 MiB限制，请使用命令行导入。');return}void execute('/projects/bundle/upload',file,'application/zip')}}/></label>
+  <label><input type="checkbox" checked={sources} disabled={busy} onChange={e=>setSources(e.target.checked)}/>包含历史版本引用的全部已登记 Blender 源资产</label>
+  <p>源文件必须仍位于本项目的 Blender 任务目录；缺失、旧目录或材质参数不明确时会拒绝导出，不悄悄省略。源包不等于已经在目标机器注册。</p>
+  <label>可选模型引用 JSON（最多 1 MiB；只包含文件路径别名与校验和）<input aria-label="模型引用 JSON" type="file" accept=".json,application/json" disabled={busy} onChange={e=>{
+   const file=e.target.files?.[0];e.target.value='';if(!file||active.current)return;
+   if(file.size>1024*1024){setError('模型引用超过1 MiB');return}
+   active.current=true;setBusy(true);setError('');setReference(null);setReferenceName('');
+   void file.text().then(text=>{const value:unknown=JSON.parse(text);if(!value||typeof value!=='object'||!('schema_version' in value)||value.schema_version!=='carla-runtime-reference/1')throw Error('不是模型文件引用格式');setReference(value);setReferenceName(file.name)})
+    .catch(e=>setError(String(e))).finally(()=>{active.current=false;setBusy(false)});
+  }}/></label>
+  {referenceName&&<p>待附加：{referenceName} · 导出时校验结构，未重新读取或核验本机权重。<button disabled={busy} onClick={()=>{setReference(null);setReferenceName('')}}>移除模型引用</button></p>}
+  <button disabled={busy||!sceneId} onClick={()=>void execute('/projects/bundle/export',JSON.stringify({scene_ids:[sceneId],include_material_previews:previews,include_generated_sources:sources,runtime_reference:reference}))}>导出选中场景包</button>
+  <label>上传并检查项目 ZIP（最多 16 MiB；更大文件使用命令行）<input aria-label="项目 ZIP" type="file" accept=".zip,application/zip" disabled={busy} onChange={e=>{const file=e.target.files?.[0];e.target.value='';if(!file)return;if(file.size>16*1024*1024){setError('文件超过浏览器16 MiB限制，请使用命令行导入。');return}void execute('/projects/bundle/upload',file,'application/zip')}}/></label>
   {error&&<p role="alert">{error}</p>}<p role="status">{status}</p>
   {bundle&&dependencies&&<div className="bundle-details">
    <h3>已验证文件的项目包</h3><p>包 ID：{bundle.bundle_id}</p>

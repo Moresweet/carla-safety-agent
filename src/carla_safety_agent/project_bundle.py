@@ -170,6 +170,19 @@ def export_bundle(scene_root, material_root, scene_ids, output, *, include_mater
         for name, catalog in catalogs.items(): files[name] = canonical(catalog)
         if sum(map(len, files.values())) > LIMIT: raise ValueError('Bundle exceeds size limit')
         _validate(files)
+    return _write_bundle(files, output, generated_assets=generated_assets, runtime_reference=runtime_reference)
+
+
+def extend_bundle(source, output, *, generated_assets=None, runtime_reference=None):
+    """Extend the validated snapshot, without rereading changing scene histories."""
+    _, files = read_bundle(source)
+    if any(name.startswith(('generated-assets/', 'runtime/')) for name in files):
+        raise ValueError('Only a scene snapshot without source bindings can be extended')
+    return _write_bundle(files, output, generated_assets=generated_assets, runtime_reference=runtime_reference)
+
+
+def _write_bundle(files, output, *, generated_assets=None, runtime_reference=None):
+    _validate(files)
     if generated_assets is not None:
         bindings = {}
         for blueprint, package in generated_assets.items():
@@ -184,8 +197,10 @@ def export_bundle(scene_root, material_root, scene_ids, output, *, include_mater
             bindings[blueprint] = digest
         files['generated-assets/index.json'] = canonical(bindings)
     if runtime_reference is not None:
-        if Path(runtime_reference).stat().st_size>1024*1024:raise ValueError('Runtime reference exceeds 1 MiB')
-        add('runtime/reference.json',runtime_reference)
+        path = Path(runtime_reference)
+        if path.is_symlink() or not path.is_file() or path.stat().st_size>1024*1024:
+            raise ValueError('Invalid runtime reference or exceeds 1 MiB')
+        files['runtime/reference.json'] = path.read_bytes()
     if sum(map(len, files.values())) > LIMIT: raise ValueError('Bundle exceeds size limit')
     dependencies = _validate(files)
     manifest = {'schema_version': SCHEMA, 'dependencies': dependencies,

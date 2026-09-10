@@ -13,12 +13,30 @@ def main():
     parser.add_argument('report',type=Path)
     parser.add_argument('--require-material-preview',action='store_true')
     parser.add_argument('--native-diagnostic',action='store_true')
+    parser.add_argument('--require-generated-sources',action='store_true')
+    parser.add_argument('--reference',type=Path)
     args=parser.parse_args()
     report=json.loads(args.report.read_text())
     exported=ROOT/'data/project-bundles'/(report['exportedId']+'.zip')
     uploaded=ROOT/'data/project-bundles'/(report['uploadedId']+'.zip')
     assert exported.read_bytes()==uploaded.read_bytes()
     manifest,files=read_bundle(uploaded)
+    if args.require_generated_sources:
+        from carla_safety_agent.blender_package import read_asset
+        from carla_safety_agent.blender_pipeline import BlenderPipeline
+        import io
+        sources=manifest['dependencies'].get('generated_asset_sources')
+        assert sources
+        registry=BlenderPipeline(ROOT).registry()
+        for blueprint,digest in sources.items():
+            asset_manifest,asset_files=read_asset(io.BytesIO(files['generated-assets/'+digest+'.zip']))
+            job=Path(registry[blueprint]['source_fbx']).parent
+            for name,payload in asset_files.items():assert (job/name).read_bytes()==payload
+            parameters=json.loads((job/'request.json').read_text())
+            assert asset_manifest['material']=={key:parameters[key] for key in ('color','roughness')}
+    if args.reference:
+        assert json.loads(files['runtime/reference.json'])==json.loads(args.reference.read_text())
+        assert manifest['dependencies']['weights_included'] is False
     if args.require_material_preview:
         assert any(name.startswith('textures/') for name in files)
         assert any(name.startswith('material-exports/') and not name.endswith('preview-catalog.json') for name in files)

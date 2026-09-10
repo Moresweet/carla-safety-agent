@@ -14,6 +14,8 @@ def main():
     export.add_argument('--scene', action='append', required=True)
     export.add_argument('--output', type=Path, required=True)
     export.add_argument('--include-material-previews', action='store_true')
+    export.add_argument('--runtime-reference',type=Path,
+                        help='Portable model file hashes from runtime_reference.py; never includes weights')
     export.add_argument('--generated-asset', action='append', default=[], metavar='BLUEPRINT=PACKAGE',
                         help='Explicit source-package binding; cover all generated blueprints in scene history')
     inspect = commands.add_parser('inspect')
@@ -42,7 +44,8 @@ def main():
             bindings[blueprint] = Path(package)
         manifest = export_bundle(args.project/'data/scenes', args.project/'data', args.scene, args.output,
                                  include_material_previews=args.include_material_previews,
-                                 generated_assets=bindings if args.generated_asset else None)
+                                 generated_assets=bindings if args.generated_asset else None,
+                                 runtime_reference=args.runtime_reference)
         result = {'archive': str(args.output.resolve()), 'manifest': manifest}
     elif args.action == 'inspect':
         manifest, _ = read_bundle(args.archive)

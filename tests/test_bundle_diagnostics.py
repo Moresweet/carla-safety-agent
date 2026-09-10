@@ -41,3 +41,13 @@ def test_generated_source_is_not_runtime_availability(tmp_path):
     assert result['checks'][1]['state'] == 'not_checked'
     assert result['checks'][1]['source_package_included']
     assert not result['all_declared_dependencies_available']
+
+
+def test_model_reference_does_not_claim_installed_or_executed(tmp_path):
+    world=SimpleNamespace(get_map=lambda:SimpleNamespace(name='Town04'),
+                          get_blueprint_library=lambda:[],get_names_of_all_objects=lambda:[])
+    client=SimpleNamespace(get_world=lambda:world,get_available_maps=lambda:['Town04'])
+    result=diagnose({'dependencies':{'maps':['Town04'],'blueprints':[],'material_slots':[],
+                                    'model_ids':['vad']}},client,tmp_path)
+    assert result['checks'][-1]['state']=='not_checked'
+    assert not result['all_declared_dependencies_available']

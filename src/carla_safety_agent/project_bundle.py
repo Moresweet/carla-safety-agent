@@ -16,7 +16,7 @@ from .blender_package import read_asset, import_asset
 
 LIMIT = 256 * 1024 * 1024
 SCHEMA = 'carla-project-bundle/1'
-ENTRY = re.compile(r'(?:scenes/[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_-]{1,80}\.json|textures/[a-f0-9]{64}\.png|material-exports/[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_-]{1,120}\.json|generated-assets/(?:index\.json|[a-f0-9]{64}\.zip))')
+ENTRY = re.compile(r'(?:scenes/[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_-]{1,80}\.json|textures/[a-f0-9]{64}\.png|material-exports/[A-Za-z0-9_-]{1,80}/[A-Za-z0-9_-]{1,120}\.json|generated-assets/(?:index\.json|[a-f0-9]{64}\.zip)|runtime/reference\.json)')
 
 
 def _validate(files):
@@ -24,7 +24,7 @@ def _validate(files):
     for name, payload in files.items():
         if not ENTRY.fullmatch(name):
             raise ValueError('Unsupported bundle path')
-        if name.startswith(('material-exports/', 'generated-assets/')):
+        if name.startswith(('material-exports/', 'generated-assets/', 'runtime/')):
             continue
         if name.startswith('textures/'):
             if hashlib.sha256(payload).hexdigest() != Path(name).stem:
@@ -108,11 +108,17 @@ def _validate(files):
         dependencies['generated_assets_require_unreal_import'] = True
         dependencies['external_assets_included'] = True
         dependencies['unreal_asset_binaries_included'] = False
+    if 'runtime/reference.json' in files:
+        from .runtime_reference import validate_reference
+        if len(files['runtime/reference.json'])>1024*1024:raise ValueError('Runtime reference exceeds 1 MiB')
+        reference=validate_reference(json.loads(files['runtime/reference.json']))
+        dependencies['runtime_reference_included']=True
+        dependencies['model_ids']=sorted({entry['model'] for entry in reference['files']})
     return dependencies
 
 
 def export_bundle(scene_root, material_root, scene_ids, output, *, include_material_previews=False,
-                  generated_assets=None):
+                  generated_assets=None, runtime_reference=None):
     files = {}; total = 0
     def add(name, path):
         nonlocal total
@@ -177,6 +183,9 @@ def export_bundle(scene_root, material_root, scene_ids, output, *, include_mater
             files[f'generated-assets/{digest}.zip'] = payload
             bindings[blueprint] = digest
         files['generated-assets/index.json'] = canonical(bindings)
+    if runtime_reference is not None:
+        if Path(runtime_reference).stat().st_size>1024*1024:raise ValueError('Runtime reference exceeds 1 MiB')
+        add('runtime/reference.json',runtime_reference)
     if sum(map(len, files.values())) > LIMIT: raise ValueError('Bundle exceeds size limit')
     dependencies = _validate(files)
     manifest = {'schema_version': SCHEMA, 'dependencies': dependencies,

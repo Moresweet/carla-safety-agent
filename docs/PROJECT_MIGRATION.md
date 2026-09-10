@@ -21,6 +21,34 @@ PYTHONPATH=src python3 tools/project_bundle.py export \
 包内包含场景历史、引用纹理及可选 UV 预览，不包含 Unreal `.uasset`、模型权重、
 采集数据、执行记录或程序运行环境。嵌套资产包也受总解压大小限制。
 
+## 可选模型文件指纹
+
+先生成相对路径的模型引用清单，再随场景包携带。只读取文件计算校验和，不加载
+checkpoint、不执行配置；权重本体不进入项目包。示例：
+
+```bash
+PYTHONPATH=src python3 tools/runtime_reference.py export \
+  --zoo /path/to/Bench2DriveZoo --tcp-zoo /path/to/Bench2DriveZoo-tcp-admlp \
+  --model vad --model tcp --output model-reference.json
+PYTHONPATH=src python3 tools/project_bundle.py export \
+  --project PROJECT --scene SCENE --output OUTPUT.zip \
+  --runtime-reference model-reference.json
+```
+
+导入后显式指定新机器目录：
+
+```bash
+PYTHONPATH=src python3 tools/runtime_reference.py verify \
+  TARGET/data/runtime/reference.json \
+  --root zoo=/new/path/to/Bench2DriveZoo \
+  --root tcp_zoo=/new/path/to/Bench2DriveZoo-tcp-admlp
+```
+
+缺目录、缺文件、大小/校验和不符分别报告，失败退出非零。路径必须在所指定根目录内，
+拒绝路径穿越和越界符号链接。输出文件不覆盖。清单只覆盖显式选择模型在目录中声明的
+adapter、checkpoint及可选config，不包括传递导入、工作室包装器、完整Python/CUDA环境。
+同样的文件指纹不是推理兼容性证明；场景doctor对模型仍报告未检查，不冒充已运行。
+
 ## 检查和隔离导入
 
 ```bash

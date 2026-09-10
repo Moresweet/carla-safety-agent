@@ -46,6 +46,9 @@ def diagnose(manifest, client, material_root):
                 except (OSError, ValueError, TypeError, KeyError) as exc:
                     check.update(state='missing', reason=f'Preview unavailable: {exc}')
         checks.append(check)
+    for model in required.get('model_ids', []):
+        checks.append({'kind':'model_files','reference':model,'state':'not_checked',
+                       'reason':'Supply relocated roots to runtime_reference.py verify; scene diagnostics never load weights or execute configs'})
     return {'checks': checks, 'all_declared_dependencies_available': all(c['state'] == 'available' for c in checks),
             'current_map': current_map, 'live_world_modified': False, 'restore_verified': False,
             'limitations': ['Checks declarations, not engine patch compatibility or actual spawn/material application',

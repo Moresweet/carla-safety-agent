@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 import subprocess
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -59,19 +60,49 @@ class BlenderPipeline:
         manifest.update({"job_id": job_id, "log": completed.stdout[-2000:]})
         return manifest
 
-    def import_to_carla(self, job_id: str, asset_name: str | None = None, *, require_clean_exit=False) -> dict[str, Any]:
+    def import_to_carla(self, job_id: str, asset_name: str | None = None, *, require_clean_exit=True) -> dict[str, Any]:
+        if require_clean_exit is not True:
+            raise ValueError('Unreal import registration requires a clean process exit')
         self.runtime.mkdir(parents=True, exist_ok=True)
         with (self.runtime / 'import.lock').open('a') as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RuntimeError('Another asset import is active; wait for its recorded outcome') from exc
             return self._import_to_carla(job_id, asset_name, require_clean_exit=require_clean_exit)
 
-    def _import_to_carla(self, job_id: str, asset_name: str | None = None, *, require_clean_exit=False) -> dict[str, Any]:
-        if not job_id.isalnum():
+    def _import_to_carla(self, job_id: str, asset_name: str | None = None, *, require_clean_exit=True) -> dict[str, Any]:
+        if not job_id.isascii() or not job_id.isalnum() or len(job_id)>64:
             raise ValueError("invalid Blender job id")
-        job = self.runtime / job_id
+        job = (self.runtime / job_id).resolve()
+        if self.runtime.resolve() not in job.parents or not job.is_dir():
+            raise ValueError('Blender job is outside the asset workspace or missing')
+        from .owned_resources import durable_write
+        from .session import observed_process_identity
+        attempt_id = uuid.uuid4().hex
+        report_path = job / ('import-attempt-' + attempt_id + '.json')
+        report = {'schema_version':'carla-asset-import/1','attempt_id':attempt_id,
+                  'job_id':job_id,'state':'preparing','started_at':time.time(),
+                  'owner':observed_process_identity(os.getpid()),'report_path':str(report_path),
+                  'live_world_modified':False,'automatic_rollback':False}
+        durable_write(report_path,report,exclusive=True)
+        def save(): durable_write(report_path,report)
+        try:
+            result = self._perform_import(job, asset_name, attempt_id, report, save)
+            report.update(state='registered',ended_at=time.time(),blueprint_id=result['blueprint_id'])
+            save()
+            return {**result,'import_report':str(report_path)}
+        except BaseException as exc:
+            report.update(state='needs_attention',ended_at=time.time(),error=str(exc),
+                          note='Any created assets are retained at the recorded destination; no implicit retry or deletion')
+            save()
+            raise RuntimeError(f'Asset import did not complete; inspect {report_path}: {exc}') from exc
+
+    def _perform_import(self, job, asset_name, attempt_id, report, save):
+        job_id = job.name
         blender_manifest = json.loads((job / "manifest.json").read_text(encoding="utf-8"))
         fbx = Path(blender_manifest["outputs"]["fbx"]).resolve()
-        if not fbx.is_file():
+        if job.resolve() not in fbx.parents or not fbx.is_file():
             raise ValueError("Blender job has no FBX output")
         safe_name = "".join(ch if ch.isalnum() else "_" for ch in (
             asset_name or blender_manifest.get("name") or job_id)).strip("_")[:48]
@@ -79,7 +110,6 @@ class BlenderPipeline:
             safe_name = "Generated_" + job_id
         if 'generated.prop.' + safe_name.lower() in self.registry():
             raise ValueError('Generated asset ID already registered; choose a new name')
-        attempt_id = uuid.uuid4().hex
         result_path = job / ("unreal-import-" + attempt_id + ".json")
         request_path = job / ("unreal-request-" + attempt_id + ".json")
         try:
@@ -94,9 +124,14 @@ class BlenderPipeline:
         }, indent=2), encoding="utf-8")
         environment = os.environ.copy()
         environment["CSA_UNREAL_IMPORT_REQUEST"] = str(request_path)
+        report.update(state='importing',asset_name=safe_name,
+                      destination='/Game/Carla/Static/Generated/'+safe_name,
+                      request_path=str(request_path),result_path=str(result_path))
+        save()  # Persist target ownership before the external process can write assets.
         completed = subprocess.run([
             self.ue_editor, self.carla_project, "-run=pythonscript",
             f"-script={self.importer}", "-unattended", "-nop4", "-nosplash", "-nullrhi",
+            f"-abslog={job / ('unreal-' + attempt_id + '.log')}",
         ], capture_output=True, text=True, timeout=600, env=environment)
         log_path = job / ("unreal-log-" + attempt_id + ".json")
         log_path.write_text(json.dumps({
@@ -106,12 +141,12 @@ class BlenderPipeline:
             "stdout_truncated": len(completed.stdout) > 1024*1024,
             "stderr_truncated": len(completed.stderr) > 1024*1024,
         }, indent=2), encoding="utf-8")
-        if require_clean_exit and completed.returncode:
+        if completed.returncode:
             raise RuntimeError(f'Unreal import failed with exit {completed.returncode}; log: {log_path}')
         if not result_path.is_file():
             raise RuntimeError((completed.stderr or completed.stdout)[-6000:])
         result = json.loads(result_path.read_text(encoding="utf-8"))
-        if require_clean_exit and (result.get('ok') is not True
+        if (not isinstance(result, dict) or result.get('ok') is not True
                 or result.get('asset_id') != safe_name
                 or result.get('blueprint_id') != 'generated.prop.' + safe_name.lower()
                 or not isinstance(result.get('mesh_path'), str)
@@ -119,9 +154,6 @@ class BlenderPipeline:
             raise RuntimeError(f'Unreal import result identity mismatch; log: {log_path}')
         result.update(import_attempt_id=attempt_id, import_returncode=completed.returncode,
                       import_log=str(log_path))
-        if completed.returncode:
-            result["warning"] = (
-                "UE4Editor returned a non-zero exit code after writing an asset result; inspect import_log")
         registry = self.registry()
         registry[result["blueprint_id"]] = result
         self.runtime.mkdir(parents=True, exist_ok=True)
@@ -131,11 +163,33 @@ class BlenderPipeline:
         result["log"] = completed.stdout[-3000:]
         return result
 
+    def import_attempts(self):
+        reports=[]
+        for path in self.runtime.glob('*/import-attempt-*.json'):
+            if path.stat().st_size>65536:
+                raise ValueError('Oversized asset import report')
+            report=json.loads(path.read_text())
+            if not isinstance(report,dict) or report.get('schema_version')!='carla-asset-import/1':
+                raise ValueError('Invalid asset import report: '+str(path))
+            reports.append(report)
+        return sorted(reports,key=lambda r:r['started_at'],reverse=True)[:100]
+
     def registry(self) -> dict[str, dict[str, Any]]:
         try:
-            return json.loads(self.registry_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            if self.registry_path.stat().st_size > 16*1024*1024:
+                raise ValueError('Generated asset registry exceeds size limit')
+            registry = json.loads(self.registry_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
             return {}
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError('Generated asset registry is unreadable; refusing to replace it') from exc
+        if not isinstance(registry, dict) or any(
+                not isinstance(key, str) or not key.startswith('generated.prop.') or
+                not isinstance(value, dict) or value.get('blueprint_id') != key or
+                not isinstance(value.get('mesh_path'), str) or not value['mesh_path'].startswith('/Game/')
+                for key, value in registry.items()):
+            raise ValueError('Generated asset registry has invalid entries; refusing to replace it')
+        return registry
 
     def _normalize(self, request: dict[str, Any]) -> dict[str, Any]:
         shape = str(request.get("shape", "cube"))

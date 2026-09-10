@@ -1864,6 +1864,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         request = urlparse(self.path)
         params = parse_qs(request.query)
+        if request.path == '/blender/imports':
+            try:
+                result = {'ok':True,'attempts':BLENDER.import_attempts()}
+                self._headers()
+            except (ValueError,OSError,KeyError) as exc:
+                result = {'ok':False,'error':str(exc)}
+                self._headers(400)
+            self.wfile.write(json.dumps(result).encode())
+            return
         if request.path == '/batches/capabilities':
             self._headers()
             self.wfile.write(json.dumps({'ok': True, **batch_capabilities(

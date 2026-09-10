@@ -1,8 +1,10 @@
 "use client";
 import {ChangeEvent,useEffect,useState} from "react";
+import AssetImportHistory from './AssetImportHistory';
 const bridge="http://127.0.0.1:8765";
 type Result={error?:string;job_id?:string;name?:string;operation?:string;objects?:number;vertices?:number;materials?:number;outputs?:Record<string,string|null>;blueprint_id?:string;mesh_path?:string};
-export default function BlenderAssetPage(){
+export default function BlenderAssetPage(){return <><AssetWorkshopBody/><AssetImportHistory/></>}
+function AssetWorkshopBody(){
  const [available,setAvailable]=useState(false),[version,setVersion]=useState("Checking Blender…"),[name,setName]=useState("SafetyBarrier"),[shape,setShape]=useState("cube"),[dimensions,setDimensions]=useState([2,0.4,0.8]),[color,setColor]=useState("#278fcc"),[roughness,setRoughness]=useState(.45),[texture,setTexture]=useState(""),[source,setSource]=useState(""),[busy,setBusy]=useState(false),[result,setResult]=useState<Result|null>(null),[status,setStatus]=useState("Create a new mesh or retexture an existing asset.");
  useEffect(()=>{fetch(`${bridge}/blender/status`).then(r=>r.json() as Promise<{available:boolean;version:string;error?:string}>).then(v=>{setAvailable(Boolean(v.available));setVersion(v.available?v.version:v.error??"Blender unavailable")}).catch(()=>setVersion("Bridge unavailable"))},[]);
  function upload(event:ChangeEvent<HTMLInputElement>){const file=event.target.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>setTexture(String(reader.result));reader.readAsDataURL(file)}

@@ -34,3 +34,10 @@
 .e2e-sidebar .algorithm-card>span{grid-column:2;font-size:12px;white-space:normal;overflow-wrap:anywhere}
 .e2e-sidebar .algorithm-card:disabled{opacity:.7}
 .surface-runtime-preview{flex-direction:column;align-items:stretch;justify-content:flex-start;gap:16px;padding:62px 18px 20px}.surface-runtime-preview>p{margin:0;padding:0;font-size:14px;line-height:1.65}.surface-runtime-preview>button{align-self:flex-start;padding:12px 16px}.surface-runtime-preview>img{width:100%;height:auto;aspect-ratio:16/9;object-fit:contain}
+.asset-import-history{margin:20px 18px;padding:22px;border:1px solid var(--line);border-radius:14px;background:#101b29;font-size:14px;line-height:1.65;overflow-wrap:anywhere}
+.asset-import-history h3{font-size:20px;margin:0 0 12px}
+.asset-import-history p{margin:8px 0;color:#b7c8d9}
+.asset-import-history details{border-top:1px solid var(--line);padding:12px 0}
+.asset-import-history summary{cursor:pointer;font-weight:600;padding:6px 0}
+.asset-import-history [role=alert]{color:#ffbdbd}
+.asset-import-history summary:focus-visible{outline:2px solid var(--accent);outline-offset:4px}

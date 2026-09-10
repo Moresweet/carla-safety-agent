@@ -40,7 +40,8 @@ def test_pipeline_builds_argument_list_without_shell(monkeypatch, tmp_path: Path
     assert result["job_id"]
 
 
-def test_unreal_import_registers_generated_blueprint(monkeypatch, tmp_path: Path):
+@pytest.mark.parametrize('failure',[None,'nonzero','identity','corrupt_registry'])
+def test_unreal_import_registers_generated_blueprint(monkeypatch, tmp_path: Path, failure):
     pipeline = BlenderPipeline(tmp_path, "/opt/blender")
     pipeline.importer.parent.mkdir(parents=True)
     pipeline.importer.write_text("pass")
@@ -50,15 +51,47 @@ def test_unreal_import_registers_generated_blueprint(monkeypatch, tmp_path: Path
     fbx.write_bytes(b"fbx")
     (job / "manifest.json").write_text(json.dumps({
         "name": "Barrier", "outputs": {"fbx": str(fbx)}}))
+    if failure=='corrupt_registry':
+        pipeline.registry_path.write_text('{broken')
 
     def run(command, **kwargs):
+        assert failure!='corrupt_registry', 'Corrupted registry must stop before Unreal launch'
+        assert any(arg.startswith('-abslog=') for arg in command)
+        pending=pipeline.import_attempts()
+        assert len(pending)==1 and pending[0]['state']=='importing'
+        assert pending[0]['destination']=='/Game/Carla/Static/Generated/Barrier'
         request = json.loads(Path(kwargs["env"]["CSA_UNREAL_IMPORT_REQUEST"]).read_text())
         Path(request["result_path"]).write_text(json.dumps({
-            "ok": True, "asset_id": "Barrier", "blueprint_id": "generated.prop.barrier",
+            "ok": True, "asset_id": "Wrong" if failure=='identity' else "Barrier", "blueprint_id": "generated.prop.barrier",
             "mesh_path": "/Game/Carla/Static/Generated/Barrier/SM_Barrier"}))
-        return SimpleNamespace(returncode=0, stdout="imported", stderr="")
+        return SimpleNamespace(returncode=1 if failure=='nonzero' else 0, stdout="imported", stderr="")
 
     monkeypatch.setattr("subprocess.run", run)
+    if failure:
+        with pytest.raises((RuntimeError,ValueError)):
+            pipeline.import_to_carla('abc123')
+        if failure=='corrupt_registry':
+            assert pipeline.registry_path.read_text()=='{broken'
+        else:
+            assert not pipeline.registry_path.exists()
+        assert pipeline.import_attempts()[0]['state']=='needs_attention'
+        return
     result = pipeline.import_to_carla("abc123")
     assert result["blueprint_id"] == "generated.prop.barrier"
     assert pipeline.registry()["generated.prop.barrier"]["mesh_path"].endswith("SM_Barrier")
+    assert pipeline.import_attempts()[0]['state']=='registered'
+    assert Path(result['import_report']).is_file()
+
+
+def test_unclean_import_cannot_be_enabled(tmp_path):
+    with pytest.raises(ValueError,match='clean process exit'):
+        BlenderPipeline(tmp_path).import_to_carla('job',require_clean_exit=False)
+
+
+@pytest.mark.parametrize('value',[[], {'generated.prop.test':{}}, {'wrong':{'blueprint_id':'wrong','mesh_path':'/Game/Test'}}])
+def test_invalid_registry_is_not_silently_empty(tmp_path,value):
+    pipeline=BlenderPipeline(tmp_path)
+    pipeline.runtime.mkdir(parents=True)
+    pipeline.registry_path.write_text(json.dumps(value))
+    with pytest.raises(ValueError,match='invalid entries'):
+        pipeline.registry()

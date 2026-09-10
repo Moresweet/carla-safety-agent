@@ -186,6 +186,20 @@ try {
     await writeFile(join(output,'material-uv.png'),Buffer.from(screenshot.data,'base64'));
     interactions.push('environment_source_uv_preview_loaded_without_apply');
   }
+  const importJobFlag=process.argv.indexOf('--import-job');
+  if(importJobFlag>=0){
+    const job=process.argv[importJobFlag+1];assert(/^[a-zA-Z0-9]+$/.test(job));
+    await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Asset Workshop').click()`);
+    let ready=false;
+    for(let i=0;i<100;i++){ready=await evaluate(`document.querySelector('.asset-import-history')?.textContent.includes(${JSON.stringify(job)})`);if(ready)break;await delay(200)}
+    assert(ready,'Persisted import job not visible');
+    const text=await evaluate(`document.querySelector('.asset-import-history').textContent`);
+    assert(text.includes('已登记')&&text.includes('需要处理'),'Both success and rejected attempt should remain visible');
+    await evaluate(`(()=>{const section=document.querySelector('.asset-import-history');for(const d of section.querySelectorAll('details'))if(d.textContent.includes(${JSON.stringify(job)}))d.open=true;section.scrollIntoView({block:'start'});})()`);
+    const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+    await writeFile(join(output,'asset-import-history.png'),Buffer.from(screenshot.data,'base64'));
+    interactions.push('persistent_import_success_and_failure_visible_without_mutation');
+  }
   const stopFlag=process.argv.indexOf('--stop-run');
   if(stopFlag>=0){
     const execution=process.argv[stopFlag+1];

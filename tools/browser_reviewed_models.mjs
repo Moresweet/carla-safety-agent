@@ -62,6 +62,26 @@ try {
   const state=await evaluate(`(()=>{const section=document.querySelector('[aria-label="确认计划并选择模型"]');return {buttons:[...section.querySelectorAll('button')].map(b=>({text:b.textContent,disabled:b.disabled})),checkboxes:[...section.querySelectorAll('input')].map(b=>({checked:b.checked,disabled:b.disabled}))}})()`);
   assert(state.buttons[0].disabled,'Unreviewed plan must not start');
   const interactions=[];
+  const phaseFlag=process.argv.indexOf('--expect-execution-phase');
+  if(phaseFlag>=0){
+    const phase=process.argv[phaseFlag+1],execution=process.argv[phaseFlag+2];
+    assert(/^[a-z_]+$/.test(phase)&&/^[a-f0-9]{32}$/.test(execution));
+    if(process.argv.includes('--phase-end-to-end'))await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='End-to-End Test').click()`);
+    let ready=false;
+    for(let i=0;i<100;i++){
+      ready=await evaluate(`(()=>{const e=document.querySelector('[aria-label="执行阶段"]');return e?.getAttribute('data-phase')===${JSON.stringify(phase)}&&e?.getAttribute('data-execution')===${JSON.stringify(execution)}})()`);
+      if(ready)break;await delay(200);
+    }
+    assert(ready,'Expected owned execution phase was not shown');
+    const text=await evaluate(`document.querySelector('[aria-label="执行阶段"]').textContent`);
+    if(phase==='preview')assert(text.includes('实景保留约剩')&&text.includes('仍占用仿真会话'),text);
+    await evaluate(`document.querySelector('[aria-label="执行阶段"]').scrollIntoView({block:'center'})`);
+    const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+    await writeFile(join(output,'execution-phase.png'),Buffer.from(screenshot.data,'base64'));
+    await writeFile(join(output,'execution-phase.json'),JSON.stringify({phase,execution,text},null,2));
+    interactions.push(phase==='preview'?'owned_live_execution_phase_and_preview_countdown_visible':'owned_execution_last_phase_visible');
+    if(process.argv.includes('--phase-end-to-end'))await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Generate Scene').click()`);
+  }
   const unknownActorFlag=process.argv.indexOf('--unknown-actor');
   if(unknownActorFlag>=0){
     const actorId=process.argv[unknownActorFlag+1];assert(/^\d+$/.test(actorId));

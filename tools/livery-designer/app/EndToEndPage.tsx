@@ -2,6 +2,7 @@
 import {useEffect,useRef,useState} from "react";
 import SensorWorkbench from "./SensorWorkbench";
 import BatchPanel from "./BatchPanel";
+import ExecutionProgress from './ExecutionProgress';
 import {supportsGeneratedScene} from './generatedModels';
 
 const bridge="http://127.0.0.1:8765";
@@ -48,6 +49,7 @@ export default function EndToEndPage(){
   <aside className="e2e-sidebar"><span className="eyebrow">ALGORITHM CATALOG</span><h2>End-to-End Testing</h2><p>Runnable models are selectable. The remaining cards document paper baselines and the exact missing component.</p>{status?.algorithms.map(a=><button key={a.id} title={a.enabled?"Ready to run":a.status.replaceAll("_"," ")} className={`algorithm-card ${algorithm===a.id?"selected":""}`} disabled={running||!a.enabled} onClick={()=>setAlgorithm(a.id)}><div className="algorithm-mark">{a.name[0]}</div><div><strong>{a.name}</strong><small>{a.framework} · {a.sensors}</small></div><span>{a.enabled?"READY":a.status==="missing_checkpoint"?"NEEDS WEIGHT":a.status==="not_released"?"NOT RELEASED":"NOT INSTALLED"}</span></button>)}</aside>
   <div className="e2e-main">
    <BatchPanel/>
+   <ExecutionProgress/>
    {error&&<p role="alert">启动/停止失败：{error}</p>}
    {pending&&<p role="status">正在提交请求，请勿重复启动…</p>}
    <div className="e2e-summary"><div><span>MODEL</span><strong>{selectedAlgorithm?.name||"Select"}</strong><small>{selectedAlgorithm?.status}</small></div><div><span>INFERENCE</span><strong>{telemetry?`FRAME ${telemetry.frame}`:"WAITING"}</strong><small>{telemetry?`${telemetry.inputs.speed_mps.toFixed(2)} m/s`:"No input"}</small></div><div><span>JOB STATE</span><strong className={`job-${status?.job.state}`}>{status?.job.state||"loading"}</strong><small>{status?.job.kind||"No task"}</small></div></div>

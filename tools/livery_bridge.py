@@ -2141,6 +2141,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if request.path in ('/system/preflight', '/session/status'):
             result = system_preflight() if request.path == '/system/preflight' else {'ok': True, 'session': SESSION.snapshot()}
+            if request.path == '/session/status':
+                from carla_safety_agent.execution_progress import read_progress
+                result['progress']=read_progress(PROJECT_ROOT/'data',result['session'])
             self._headers()
             self.wfile.write(json.dumps(result).encode())
             return

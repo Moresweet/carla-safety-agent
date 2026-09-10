@@ -105,6 +105,11 @@ class NativeScenarioExecutor:
     def run(self, scenario_path: Path, agent_path: Path, agent_config: str,
             output: Path) -> dict[str, Any]:
         document, scenario_digest = read_verified_scenario(scenario_path, os.environ.get('CSA_SCENARIO_SHA256'))
+        from .execution_progress import progress_from_environment
+        progress=progress_from_environment()
+        def stage(phase,**fields):
+            if progress:progress.emit(phase,**fields)
+        stage('connecting')
         spec = scenario_from_dict(document)
         adapter = CarlaAdapter(self.host, self.port, self.timeout)
         carla = adapter._module()
@@ -114,6 +119,7 @@ class NativeScenarioExecutor:
         from .world_readiness import map_matches, require_idle_native_world
         require_idle_native_world(world)
         if spec.generated_map:
+            stage('loading_world')
             xodr = build_opendrive(spec.generated_map)
             map_output = output.parent / f"{spec.scenario_id}.xodr"
             map_output.parent.mkdir(parents=True, exist_ok=True)
@@ -123,6 +129,7 @@ class NativeScenarioExecutor:
                 additional_width=0.6, smooth_junctions=True,
                 enable_mesh_visibility=True, enable_pedestrian_navigation=False))
         elif not map_matches(spec.map_name, world.get_map().name):
+            stage('loading_world')
             world = client.load_world(spec.map_name)
             if not map_matches(spec.map_name, world.get_map().name):
                 raise RuntimeError('Loaded world does not match the requested map')
@@ -141,6 +148,7 @@ class NativeScenarioExecutor:
         min_distance, min_ttc = math.inf, None
         control_runtime = EvaluationControl()
         try:
+            stage('spawning')
             world.apply_settings(settings)
             world.set_weather(carla.WeatherParameters(
                 cloudiness=spec.environment.cloudiness,
@@ -166,6 +174,7 @@ class NativeScenarioExecutor:
             actors.append(collision_sensor)
             collision_sensor.listen(lambda _: collision.__setitem__("hit", True))
 
+            stage('loading_model')
             module_spec = importlib.util.spec_from_file_location("carla_safety_uniad_target", agent_path)
             if module_spec is None or module_spec.loader is None:
                 raise RuntimeError(f"Cannot load target adapter: {agent_path}")
@@ -180,6 +189,7 @@ class NativeScenarioExecutor:
             gps_plan, world_plan = self._global_plan(world, ego)
             agent.set_global_plan(gps_plan, world_plan)
             agent.setup(agent_config)
+            stage('warming_sensors')
             from .sensor_schedule import synchronous_specs
             sensor_specs = synchronous_specs(agent.sensors(), settings.fixed_delta_seconds)
             rig = NativeSensorRig(carla, world, ego, agent.sensor_interface, client=client, journal=journal)
@@ -196,6 +206,7 @@ class NativeScenarioExecutor:
 
             triggered: set[int] = set()
             steps = max(1, int(spec.oracle.max_duration_s / settings.fixed_delta_seconds))
+            stage('inference',completed_steps=0,total_steps=steps)
             for step in range(steps):
                 frame = world.tick(self.timeout)
                 rig.add_speed(frame)
@@ -218,6 +229,7 @@ class NativeScenarioExecutor:
                 control.manual_gear_shift = False
                 ego.apply_control(control)
                 control_runtime.on_frame(world)
+                stage('inference',completed_steps=step+1,total_steps=steps)
                 ego_state = adapter._state(ego)
                 for index, (other, other_spec) in enumerate(zip(adversaries, spec.adversaries)):
                     other_state = adapter._state(other)
@@ -259,10 +271,13 @@ class NativeScenarioExecutor:
             preview_hold = max(0.0, float(os.environ.get("CSA_RESULT_PREVIEW_SECONDS", "60")))
             if preview_hold:
                 print(f"Keeping finished scene visible for {preview_hold:g} seconds", flush=True)
+                stage('preview',completed_steps=step+1,total_steps=steps,preview_seconds=preview_hold)
                 time.sleep(preview_hold)
             return payload
         finally:
+            stage('cleaning')
             cleanup_native_runtime(carla, client, world, original, actors, capture, rig, agent)
+            stage('worker_finished')
 
     @staticmethod
     def _publish_telemetry(sensor_data: dict[str, Any], agent: Any, control: Any,

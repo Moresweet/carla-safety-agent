@@ -1,6 +1,7 @@
 "use client";
 import {useEffect, useRef, useState} from 'react';
 import {supportsGeneratedScene} from './generatedModels';
+import ExecutionProgress from './ExecutionProgress';
 
 type Model = {id:string; name:string; enabled:boolean; status:string};
 const bridge = 'http://127.0.0.1:8765';
@@ -24,10 +25,11 @@ export default function ReviewedModelRun({plan, disabled, onStarted}:{
       try {
         const response=await fetch(bridge+'/e2e/status',{signal:controller.signal});
         if(!response.ok)throw new Error('无法读取模型和任务状态');
-        const value=await response.json() as {algorithms:Model[];job:{state:string}};
+        const value=await response.json() as {algorithms:Model[];job:{state:string;algorithm?:string}};
         if(!disposed){
           setModels(value.algorithms.filter(model=>supportsGeneratedScene(model.id)));
           setActive(['running','stopping','starting'].includes(value.job.state));
+          if(['running','stopping','starting'].includes(value.job.state)&&value.job.algorithm&&supportsGeneratedScene(value.job.algorithm))setAlgorithm(value.job.algorithm);
           setReadError('');
         }
       } catch(e) {if(!disposed){setModels([]);setActive(true);setConfirmed(false);setReadError(String(e))}}
@@ -72,5 +74,6 @@ export default function ReviewedModelRun({plan, disabled, onStarted}:{
     {active&&!readError&&<p role="status">正在检查或等待当前任务结束。</p>}
     {readError&&<p role="alert">{readError}；暂不可启动，正在重新检查。</p>}
     {error&&<p role="alert">{error}</p>}
+    <ExecutionProgress/>
   </section>;
 }

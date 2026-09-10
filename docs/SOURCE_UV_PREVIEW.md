@@ -69,3 +69,11 @@ Town04的SM_Bench01_123与SM_Bench2共用SM_StreetBench，StaticMeshComponent0/�
 本次只读Unreal导出退出0，无缺失目标：.runtime/prop-uv-95NPKb/catalog.json。浏览器browser-models-bcb7994b-8494-4429-8df5-88ab2d2bf4dc加载真实槽并导出material-atlas.png；environment-uv-f49ec218726d471baa26861c86e8edc3使用该网页贴图临时应用并恢复。预览与应用/恢复实景均已查看：靠背黄色条与青/紫棋盘方向对应，右侧共用网格长椅未改变；恢复后两椅原材质正常，世界异步且无传感器残留。光照与材质细节不是网页像素一致性保证。
 
 复测命令：浏览器探针--material-name SM_Bench01_123 --texture <校准PNG>；原生tools/regression_environment_uv.py --fixture bench --atlas <该浏览器输出material-atlas.png>。前者不应用材质，后者要求空闲、无既有覆盖并在finally恢复。
+
+## 道路重复 UV 与可缩放预览
+
+共享UV方向修正后，Town04的Road_Road_Town04_1（StaticMeshComponent0槽0，333三角形）重新通过网页导出/单槽应用/恢复。browser-models-16c8adb8-a5c4-4d37-bf0d-63c91bd129b0使用cover surface；environment-uv-0b25fc89305f430d8899c835ae1cb24e的近景可见重复棋盘及方向边线，原材质恢复，原episode异步且零传感器。两端截图已查看；当前日光下颜色明显偏亮，不宣称像素、光照或材质层一致。
+
+首次environment-uv-62c1704ef56a46f4815c9749eda4a9b3使用留白贴花且视角较远，仅证明应用范围与恢复，方向细节不足。浏览器13c671f1-a9b7-426c-856e-57d42e22e19a因测试按钮大小写选择错误失败，未修改实景；修正探针后通过，保留失败证据。
+
+CarPreview新增0.25～8倍有界缩放与重置；仅修改投影XY，深度裁剪保持原始包围球范围，不修改UV画布或CARLA相机。browser-models-db07cde1-db61-4f22-bfb3-b8380c2459e6实测4倍重绘、重置及纹理画布字节不变，放大截图已查看；允许放大后画面边缘裁切，尚无平移功能。

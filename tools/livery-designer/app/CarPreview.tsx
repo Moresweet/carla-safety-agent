@@ -17,8 +17,11 @@ function program(gl:WebGLRenderingContext){
 export default function CarPreview({mesh,atlas,revision,useSourceUV=false,repeatTexture=false,label="3D BODY PREVIEW",axisLabels=['Front','Sides','Roof']}:{mesh:MeshData|null;atlas:RefObject<HTMLCanvasElement|null>;revision:number;useSourceUV?:boolean;repeatTexture?:boolean;label?:string;axisLabels?:[string,string,string]}){
  const canvas=useRef<HTMLCanvasElement>(null),angle=useRef({yaw:-.7,pitch:.42}),drag=useRef<{x:number;y:number;yaw:number;pitch:number}|null>(null);
  const [error,setError]=useState('');
+ const zoomRef=useRef(1),[zoom,setZoom]=useState(1);
+ function changeZoom(value:number){zoomRef.current=Math.max(.25,Math.min(8,value));setZoom(zoomRef.current);(canvas.current as HTMLCanvasElement&{redraw?:()=>void})?.redraw?.()}
  useEffect(()=>{
   setError('');
+  zoomRef.current=1;setZoom(1);angle.current={yaw:-.7,pitch:.42};drag.current=null;
   const c=canvas.current;if(!c||!mesh)return;
   let bounds:ReturnType<typeof previewBounds>;
   try{bounds=previewBounds(mesh.vertices)}catch(e){setError(String(e));return}
@@ -33,7 +36,7 @@ export default function CarPreview({mesh,atlas,revision,useSourceUV=false,repeat
   }
   const bind=(name:string,data:Float32Array,size:number)=>{const b=gl.createBuffer();if(b)buffers.push(b);gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,data,gl.STATIC_DRAW);const a=gl.getAttribLocation(p,name);gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,size,gl.FLOAT,false,0,0)};
   gl.useProgram(p);bind("p",positions,3);bind("uv",uvs,2);const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.enable(gl.DEPTH_TEST);gl.enable(gl.CULL_FACE);
-  const draw=()=>{c.width=Math.max(1,c.clientWidth*devicePixelRatio);c.height=Math.max(1,c.clientHeight*devicePixelRatio);gl.viewport(0,0,c.width,c.height);gl.clearColor(.035,.055,.085,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.uniformMatrix4fv(gl.getUniformLocation(p,"m"),false,previewCamera(angle.current.yaw,angle.current.pitch,c.width/c.height,bounds.center,bounds.radius));if(atlas.current){gl.bindTexture(gl.TEXTURE_2D,tex);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,textureUploadFlipY(useSourceUV));gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,atlas.current)}gl.drawArrays(gl.TRIANGLES,0,positions.length/3)};
+const draw=()=>{c.width=Math.max(1,c.clientWidth*devicePixelRatio);c.height=Math.max(1,c.clientHeight*devicePixelRatio);gl.viewport(0,0,c.width,c.height);gl.clearColor(.035,.055,.085,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.uniformMatrix4fv(gl.getUniformLocation(p,"m"),false,previewCamera(angle.current.yaw,angle.current.pitch,c.width/c.height,bounds.center,bounds.radius,zoomRef.current));if(atlas.current){gl.bindTexture(gl.TEXTURE_2D,tex);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,textureUploadFlipY(useSourceUV));gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,atlas.current)}gl.drawArrays(gl.TRIANGLES,0,positions.length/3)};
   if(repeatTexture){gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.REPEAT);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.REPEAT)}
   draw();(c as HTMLCanvasElement&{redraw?:()=>void}).redraw=draw;return()=>{delete (c as HTMLCanvasElement&{redraw?:()=>void}).redraw;for(const buffer of buffers)gl.deleteBuffer(buffer);gl.deleteProgram(p);gl.deleteTexture(tex);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT)}
  },[mesh,atlas,useSourceUV,repeatTexture]);
@@ -41,6 +44,7 @@ export default function CarPreview({mesh,atlas,revision,useSourceUV=false,repeat
  function move(e:React.PointerEvent<HTMLCanvasElement>){if(!drag.current)return;angle.current={yaw:drag.current.yaw+(e.clientX-drag.current.x)*.01,pitch:Math.max(-1,Math.min(1,drag.current.pitch+(e.clientY-drag.current.y)*.01))};(e.currentTarget as HTMLCanvasElement&{redraw?:()=>void}).redraw?.()}
  return <div className="preview"><div className="previewbar"><b>{label}</b><span>Drag to orbit · live texture feedback</span></div>
   {error&&<p role="alert">真实3D预览不可用：{error}。请检查网格或浏览器图形支持。</p>}
-  <canvas ref={canvas} onPointerDown={e=>{e.currentTarget.setPointerCapture(e.pointerId);drag.current={x:e.clientX,y:e.clientY,...angle.current}}} onPointerMove={move} onPointerUp={()=>drag.current=null}/>
+  <canvas ref={canvas} onPointerDown={e=>{e.currentTarget.setPointerCapture(e.pointerId);drag.current={x:e.clientX,y:e.clientY,...angle.current}}} onPointerMove={move} onPointerUp={()=>drag.current=null} onPointerCancel={()=>drag.current=null}/>
+  <div className="preview-zoom"><label>预览缩放 <input aria-label="3D预览缩放" type="range" min="0.25" max="8" step="0.25" value={zoom} disabled={!mesh||!!error} onChange={e=>changeZoom(Number(e.target.value))}/></label><span>{zoom.toFixed(2)}×</span><button disabled={!mesh||!!error} onClick={()=>{angle.current={yaw:-.7,pitch:.42};drag.current=null;changeZoom(1)}}>重置3D视图</button></div>
   <div className="axis"><i className="front"/>{axisLabels[0]}<i className="left"/>{axisLabels[1]}<i className="top"/>{axisLabels[2]}</div></div>
 }

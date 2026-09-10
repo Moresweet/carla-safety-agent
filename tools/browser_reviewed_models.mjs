@@ -260,19 +260,20 @@ try {
   }
   const materialFlag=process.argv.indexOf('--material-name');
   if(materialFlag>=0){
-    const name=process.argv[materialFlag+1];assert(['SM_GasStation01_13','SM_Bench01_123'].includes(name),'Only bounded material fixtures are supported');
+    const name=process.argv[materialFlag+1];assert(['SM_GasStation01_13','SM_Bench01_123','Road_Road_Town04_1'].includes(name),'Only bounded material fixtures are supported');
     const textureFlag=process.argv.indexOf('--texture');assert(textureFlag>=0);
     const texture=resolve(process.argv[textureFlag+1]);await readFile(texture);
     await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Edit World').click()`);
     for(let i=0;i<100;i++){if(await evaluate(`!!document.querySelector('.catalog-list input')`))break;await delay(200)}
-    if(name==='SM_Bench01_123'){
+    if(name==='SM_Bench01_123'||name==='Road_Road_Town04_1'){
+      const category=name==='SM_Bench01_123'?'static props':'roads';
       let categoryReady=false;
       for(let i=0;i<100;i++){
-        categoryReady=await evaluate(`[...document.querySelectorAll('.catalog-groups button')].some(b=>b.querySelector('span')?.textContent==='static props')`);
+        categoryReady=await evaluate(`[...document.querySelectorAll('.catalog-groups button')].some(b=>b.querySelector('span')?.textContent===${JSON.stringify(category)})`);
         if(categoryReady)break;await delay(200);
       }
-      assert(categoryReady,'Static props category did not load');
-      await evaluate(`[...document.querySelectorAll('.catalog-groups button')].find(b=>b.querySelector('span')?.textContent==='static props').click()`);
+      assert(categoryReady,'Requested material category did not load');
+      await evaluate(`[...document.querySelectorAll('.catalog-groups button')].find(b=>b.querySelector('span')?.textContent===${JSON.stringify(category)}).click()`);
     }
     await evaluate(`(()=>{const input=document.querySelector('.catalog-list input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(name)});input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
     let ready=false;
@@ -285,6 +286,9 @@ try {
     await cdp('DOM.setFileInputFiles',{nodeId:input.nodeId,files:[texture]});
     for(let i=0;i<100;i++){ready=await evaluate(`![...document.querySelectorAll('.material-slot-editor button')].find(b=>b.textContent==='应用到此材质槽').disabled`);if(ready)break;await delay(200)}
     assert(ready,'Material upload or mesh load failed');
+    if(name==='Road_Road_Town04_1'){
+      await evaluate(`[...document.querySelectorAll('.material-slot-editor button')].find(b=>b.textContent==='cover surface').click()`);
+    }
     if(process.argv.includes('--simulate-no-webgl')){
       assert(await evaluate(`document.querySelector('.preview [role=alert]')?.textContent.includes('WebGL unavailable')`));
       interactions.push('missing_webgl_is_local_preview_error');
@@ -292,6 +296,20 @@ try {
     await delay(300);
     const atlas=await evaluate(`document.querySelector('canvas.atlas-output').toDataURL('image/png')`);
     await writeFile(join(output,'material-atlas.png'),Buffer.from(atlas.split(',')[1],'base64'));
+    if(name==='Road_Road_Town04_1'){
+      const beforeZoom=await evaluate(`document.querySelector('.preview canvas').toDataURL()`);
+      await evaluate(`(()=>{const input=document.querySelector('[aria-label="3D预览缩放"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'4');input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await delay(300);
+      assert.equal(await evaluate(`document.querySelector('[aria-label="3D预览缩放"]').value`),'4');
+      assert.notEqual(await evaluate(`document.querySelector('.preview canvas').toDataURL()`),beforeZoom,'Zoom must redraw real geometry');
+      const enlarged=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      await writeFile(join(output,'material-uv-zoom.png'),Buffer.from(enlarged.data,'base64'));
+      await evaluate(`[...document.querySelectorAll('.preview button')].find(b=>b.textContent==='重置3D视图').click()`);
+      await delay(300);
+      assert.equal(await evaluate(`document.querySelector('[aria-label="3D预览缩放"]').value`),'1');
+      assert.equal(await evaluate(`document.querySelector('canvas.atlas-output').toDataURL('image/png')`),atlas,'Preview zoom must not edit the applied atlas');
+      interactions.push('road_preview_zoom_and_reset_without_texture_changes');
+    }
     const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
     await writeFile(join(output,'material-uv.png'),Buffer.from(screenshot.data,'base64'));
     interactions.push('environment_source_uv_preview_loaded_without_apply');

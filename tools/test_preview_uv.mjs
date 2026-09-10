@@ -24,4 +24,13 @@ for(const aspect of [.2,.5,1,2,5])for(const yaw of [-3,-.7,0,1,3])for(const pitc
 }
 assert.throws(()=>previewBounds([0,0,0,0,0]));
 assert.throws(()=>previewCamera(0,0,0,[0,0,0],1));
+for(const zoom of [.25,2,8]){
+ const base=previewCamera(.3,.4,1,bounds.center,bounds.radius);
+ const enlarged=previewCamera(.3,.4,1,bounds.center,bounds.radius,zoom);
+ for(let column=0;column<4;column++){
+  for(const row of [0,1])assert.ok(Math.abs(enlarged[column*4+row]-base[column*4+row]*zoom)<1e-5);
+  assert.equal(enlarged[column*4+2],base[column*4+2],'Zoom must not clip geometry in depth');
+ }
+}
+for(const zoom of [0,.2,9,NaN,Infinity])assert.throws(()=>previewCamera(0,0,1,[0,0,0],1,zoom));
 console.log('PASS: preview camera fits geometry at all tested aspect ratios and orbit angles');

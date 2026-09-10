@@ -2,13 +2,20 @@
 set -eo pipefail
 STUDIO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$STUDIO_ROOT"
+if [[ "${1:-}" != '' && "${1:-}" != '--stop' && "${1:-}" != '--after-crash-stop' ]]; then
+  echo 'Usage: restart_studio_bridge.sh [--stop|--after-crash-stop]' >&2; exit 1
+fi
 if [[ -f .runtime/bridge.pid ]]; then
   BRIDGE_PID="$(<.runtime/bridge.pid)"
   [[ "$BRIDGE_PID" =~ ^[0-9]+$ ]] || { echo 'Invalid bridge PID' >&2; exit 1; }
   if kill -0 "$BRIDGE_PID" 2>/dev/null; then
     [[ "$(readlink "/proc/$BRIDGE_PID/cwd")" == "$STUDIO_ROOT" ]] || { echo 'Bridge working directory mismatch' >&2; exit 1; }
     tr '\0' ' ' < "/proc/$BRIDGE_PID/cmdline" | rg -q 'tools/livery_bridge.py' || exit 1
-    PYTHONPATH="$STUDIO_ROOT/src" python3 tools/check_bridge_restart.py
+    if [[ "${1:-}" == '--after-crash-stop' ]]; then
+      PYTHONPATH="$STUDIO_ROOT/src" python3 tools/check_bridge_restart.py --after-crash
+    else
+      PYTHONPATH="$STUDIO_ROOT/src" python3 tools/check_bridge_restart.py
+    fi
     kill -TERM "$BRIDGE_PID"
     for attempt in {1..30}; do
       kill -0 "$BRIDGE_PID" 2>/dev/null || break
@@ -20,7 +27,7 @@ if [[ -f .runtime/bridge.pid ]]; then
     fi
   fi
 fi
-if [[ "${1:-}" == '--stop' ]]; then exit 0; fi
+if [[ "${1:-}" == '--stop' || "${1:-}" == '--after-crash-stop' ]]; then exit 0; fi
 mkdir -p .runtime
 setsid env PYTHONPATH="${CARLA_PYTHONPATH:-/home/moresweet/carla/.venv/lib/python3.14/site-packages}" \
   python3 tools/livery_bridge.py >> .runtime/bridge.log 2>&1 < /dev/null &

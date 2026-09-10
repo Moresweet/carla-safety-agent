@@ -60,7 +60,7 @@ def main():
             ego.set_autopilot(True,8050)
         else:
             ego.apply_control(carla.VehicleControl(brake=1,hand_brake=True))
-        capture = SensorCapture(world,ego,[],runtime,source='sensor-rig')
+        capture = SensorCapture(world,ego,[],runtime,source='sensor-rig',client=client)
         control = EvaluationControl(runtime)
         for _ in range(args.frames):
             if stopped: break

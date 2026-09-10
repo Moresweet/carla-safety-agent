@@ -4,6 +4,8 @@ import subprocess
 import sys
 import time
 import urllib.error
+import uuid
+from carla_safety_agent.world_health import observe_idle
 from regression_material_slots import ROOT, request
 
 
@@ -48,11 +50,12 @@ def main():
         assert not list(world.get_actors().filter('sensor.*'))
         assert not [a for a in world.get_actors().filter('vehicle.*') if a.attributes.get('role_name')=='sensor_rig']
         report.update(displacement_m=displacement,duplicate_start_rejected=True,dataset_validated=True,
-                      temporal_quality=quality)
-        output=ROOT/'runs/validation/sensor-rig-20260908.json'
+                      temporal_quality=quality,post_exit_health=observe_idle(client,world.get_map().name))
+        output=ROOT/'runs/validation'/('sensor-rig-'+uuid.uuid4().hex+'.json')
         output.parent.mkdir(parents=True,exist_ok=True)
         output.write_text(json.dumps(report,indent=2))
         print(json.dumps(report),flush=True)
+        print(output,flush=True)
     finally:
         current=request('/session/status')['session']
         if current['run_id']==execution_id and current['state'] in ('preparing','running','stopping'):

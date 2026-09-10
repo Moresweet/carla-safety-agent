@@ -1256,3 +1256,31 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - S5 增加可选深度交叉检查，使用深度相机自身标定投影，验证 RGB/深度/LiDAR 同帧与时间身份；深度相符、后方、前方、未知分别着色，保留点索引和全部视野内计数。最多绘制5000点，容差及非遮挡真值限制明确显示；框仍为纯几何投影。
 - 449项 Python 测试和前端构建通过，新增错误同步、时间错配、非法尺寸、不同深度相机姿态和无效深度测试。真实 VAD 首帧六相机交叉检查通过；正前403点中381相符、17后方、5前方，不把这些统计外推为模型误差。
 - 实际浏览器开启两个复选框后六视角全部加载；首轮点太细，按分辨率增加尺寸与描边后再次查看截图 browser-models-20cc192f-456e-4cac-ad1d-0e612425ba28/depth-diagnostic.png。无仿真写入、无新模型执行。当前实现是近似深度一致性诊断，未做镜头畸变校正/精确遮挡真值/预测时序误差统计；S5及整体计划继续进行。
+
+### 2026-09-10 切图崩溃复现与原生修复验证中
+
+- S1 将地图名称包含判断改为精确匹配（Town04 不等于 Town04_Opt），执行进程自身也在切图前拒绝已有同步所有者/传感器，加载后复核地图。Town04→Town05 的 VAD 执行4466ce1fdf86467d9abfbb21da09cf74在推理前复现原生距离场渲染崩溃，原生PID14989。现场 Saved/Crashes/crashinfo-CarlaUE4-pid-14989-232A2CFD9FDD42F78F95F5E7ED914FAA 保留。模型等到加载RPC超时后退出，停止信号未及时打断C++调用；终止前身份检查发现已自行退出，因此未额外强杀。
+- 附加调试器被系统限制拒绝，改为正常父子调试启动，未修改 ptrace 权限。故障恢复新增严格门控：只有无服务器进程、端口拒绝连接、无活跃任务/队列才允许重载 recovering 桥接，保留失败状态，不伪造完成。两次故障恢复原生服务成功。
+- 在旧二进制下，独立采集afe23274baf0462784958d02dc324302完成20帧后也复现相同 IsValidDistanceFieldVolume→FPrimitiveSceneShaderData→GPUScene 堆栈，不依赖VAD。GDB原始输出在.runtime/carla.log；帧2局部变量优化导致代理指针不可靠，不能声称已捕获准确动态代理类型。直接启动Town05后的独立采集310cfb7a3c8e4107bbabb53c80ddb7fa未复现，说明与时序/场景切换相关而非每次必现。
+- 另有普通生成错误：Town05 waypoint z=0时Audi生成因碰撞失败，抬高0.5米成功；证据 interaction-clearance-8366a926a4dd43b8b9ea03fcec420f13.json。新增离地间隙。第一次立即destroy受客户端快照延迟影响返回false，随后按精确ID批量清理Actor131，复测Actor132清理成功；未删除其他对象。
+- 旧二进制+生成位置修正的VAD往返对照 map-transition-4871d45da33941d1975354f9449e8d73.json 通过：Town05执行8f351e2b364e426abd5adda6e4b378c7、Town04执行c2094e4a937c499ea4ff55941cde46d1各20样本并恢复测试前视角天气。此轮不是原生补丁验收；实际浏览器查看Town05六视角诊断并完成文件扫描，证据 browser-models-b2a71d32-3634-4532-a099-62ab3a14e62f。
+- 根据源码生命周期风险，新增 tagged-static-distance-field.patch，四种标注静态代理不再保留不需要的父网格距离场缓存；真实网格/材质未改。CarlaUE4Editor完整10动作编译链接通过，日志 tagged-distance-build-S1X6Ks.log。正在启动新二进制验收，尚不宣称故障根除。
+- 后端恢复加入5秒异步世界持续推进与零传感器观察，失败保持recovering；470项Python测试通过，覆盖世界停滞/切换/同步/失联、地图门控及故障重启身份保护。原生新版重复矩阵及其他阶段仍未完成。
+
+### 2026-09-10 模型文件指纹随场景包迁移
+
+- S8 新增 runtime_reference CLI：显式选择五种已安装模型，以根目录别名+相对路径记录目录所声明的adapter/checkpoint/config大小与SHA-256。迁移后按显式新根目录验证，拒绝路径穿越、越界符号链接、重复角色、缺文件和校验不符；不加载checkpoint、不执行配置、不打包权重。项目包可选携带runtime/reference.json，隔离导入与注册重映射保留该引用；doctor对模型仍明确未检查。
+- 本机五模型13个文件导出及逐一复核通过，清单 runs/validation/runtime-reference-five-models-20260910-v1.json（3176字节）；联合包runtime-reference-scene-20260910-v1.zip隔离导入到carla-project-9o1lwgf3成功，没有世界修改或权重复制。单测验证不同根目录的字节一致、篡改与缺根目录失败，不冒充跨机器推理验收。
+- 该清单不包含传递导入、项目包装器或Python/CUDA环境，不等于完整运行环境可迁移；完整图形向导/跨机验收仍待完成。
+
+### 2026-09-10 新原生二进制回归与清理加固
+
+- 距离场补丁实际加载后，VAD、TCP 分别完成 Town04→Town05→Town04，共四组真实闭环，各20同步样本，结束后5秒观察世界持续推进、异步模式且零传感器，并恢复测试前编辑场景。报告 map-transition-2f42d7369d95409ab0f96bbcbe8a4e94.json、map-transition-e820f42a1d764bc09830b0cfab6835de.json。有限回归未复现崩溃，不声明间歇性故障已彻底根除。
+- 同一新二进制完成独立规则采集120帧/40样本、道路纹理 A/B 两组，以及 AD-MLP、UniAD Tiny/Base 各20样本。报告 sensor-rig-a6ed6a81dce64b6ea6855bdccba3c036.json、batch-textures-6f1d8a5c6f9d4947b0fb95654c0d1324.json、reviewed-models-508e0f96bdfb40adbb1d9dc7cf41a01f.json。模型数据17/18传感器外参可验证，缺失项不计为通过；纹理本轮仍需独立图像复核。
+- S4 原始文件校验增加逐样本元数据/索引身份、所有14个必需传感器及全部实际模型输入的来源帧检查，拒绝 bool 伪整数、异帧或缺帧，旧数据不静默冒充同步通过。真实 VAD/TCP 数据重检通过，八类合成用例按预期接受/拒绝（capture-quality-c3ef51ac20fa4b1a8b45d029b99da5b1.json）。
+- S1 针对新生传感器尚未进入客户端快照的清理漏洞，不再以 is_alive=false 当作已销毁；实际调用传入原有 CARLA client，按本实例持有的去重 ID 请求同步销毁且 do_tick=false。错误或不完整应答保留所有权并报告，停止回调异常不阻断其余销毁；没有全局删除、额外 tick 或切图。488项 Python 测试通过；此增量真实闭环复测进行中。SIGKILL 持久化资源清单和完整故障矩阵仍待实现。
+- 道路纹理本轮实图已查看：capture-20260910T144830-025141a4 的80702帧原道路，与 capture-20260910T144851-4337db7d 的83509帧青红棋盘格覆盖对照明确；旁侧围墙保持原样。不是逐像素一致性或所有槽位验收。
+- 清理增量独立采集复测通过：capture-20260910T145924-8530fb7b，40样本、14/14外参、清理无错误，报告 sensor-rig-a972157d26d2488784590f0fab9ad989.json。但随后 VAD 执行9f18eead24e441a99f7757014cd69c31因181699帧缺少 IMU 返回1，世界成功恢复且零传感器，不是 UE 崩溃；TCP 按失败即停止未执行。保留失败，不将已保存样本视为整轮通过。
+- 即生传感器探针第一版错误使用 world.get_actor 查询已销毁对象（客户端会缓存包装对象），修正为世界快照后通过：owned-sensor-cleanup-7365c418874f43848036227f5a12eb75.json，精确Actor843已清理、同episode、5秒持续推进零传感器。本次 cached_is_alive=true，过期false分支由单测覆盖，不能冒充实机再次复现。
+- 原生 IMU 0.05秒定时器/逐帧模式100帧对照均无缺帧（sensor-schedule-fbc313726f50461a8f71dfe369c69f40.json），故定时器只是源码风险而非已证实根因。闭环明确要求每帧输入，现将请求周期不大于步长的真实传感器设为sensor_tick=0，每个0.05秒同步步采样；标定同时保存 requested_sensor_tick/effective_period_seconds，不改变模型张量或用旧帧补缺。低频/非法配置拒绝，缺帧错误记录最后收到的帧号。496项测试通过，新调度的 VAD/TCP 实测进行中。
+- 新调度 VAD 3ef2aadbe21e4373952ff592fb13df3d、TCP 286c2facf34e4fee94aae397867618d6 均完成20样本，校验和清理通过（reviewed-models-c546c34fd27d45188c81b5aee212e33f.json）。VAD真实标定已包含原请求及实际采样周期。新增原生rig过期快照分支单测后497项通过；其他三个模型的新调度回归继续执行。此前失败记录不撤销，尚无缺帧根因闭环证明。

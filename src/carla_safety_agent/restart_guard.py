@@ -14,3 +14,16 @@ def verify_idle(session, scheduler, observe=observed_process_identity):
             raise ValueError('Invalid process identity; refusing restart')
         if observe(identity['pid']) == identity:
             raise ValueError('Recorded execution process is still alive')
+
+
+def verify_crash_restart(session, scheduler, native_alive, port_open,
+                         observe=observed_process_identity):
+    """Permit bridge replacement without falsifying the durable recovering state."""
+    if native_alive or port_open:
+        raise ValueError('Native process or simulator port is still alive')
+    if not isinstance(session, dict) or session.get('state') != 'recovering':
+        verify_idle(session, scheduler, observe)
+        return
+    # Reuse all scheduler and process-identity protections. Only a dead server's
+    # recovery state is relaxed in this local check, never in the journal.
+    verify_idle({**session, 'state':'failed'}, scheduler, observe)

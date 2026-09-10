@@ -2,6 +2,8 @@
 set -eo pipefail
 STUDIO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$STUDIO_ROOT"
+NATIVE_MAP="${CSA_NATIVE_MAP:-Town04}"
+[[ "$NATIVE_MAP" =~ ^Town[0-9]+(HD)?(_Opt)?$ ]] || { echo 'Invalid native town name' >&2; exit 1; }
 if [[ "${1:-}" != '' && "${1:-}" != '--after-crash' ]]; then
   echo 'Usage: restart_carla_native.sh [--after-crash]' >&2; exit 1
 fi
@@ -17,7 +19,11 @@ else
 fi
 # Release the native client before its server goes away. Browser polling against
 # a stale CARLA client can otherwise terminate Python inside the C++ extension.
-bash scripts/restart_studio_bridge.sh --stop
+if [[ "${1:-}" == '--after-crash' ]]; then
+  bash scripts/restart_studio_bridge.sh --after-crash-stop
+else
+  bash scripts/restart_studio_bridge.sh --stop
+fi
 if [[ -f .runtime/carla.pid ]]; then
   CARLA_NATIVE_PID="$(<.runtime/carla.pid)"
   [[ "$CARLA_NATIVE_PID" =~ ^[0-9]+$ ]] || exit 1
@@ -37,16 +43,22 @@ if [[ "${CSA_NATIVE_DEBUG:-0}" == '1' ]]; then
     -ex 'disable pretty-printer' -ex 'set print static-members off'
     -ex 'set print elements 8' -ex 'set print max-depth 2'
     -ex 'handle SIGPIPE nostop noprint pass' -ex 'handle SIGTRAP nostop noprint nopass'
-    -ex run -ex 'frame 1' -ex 'p PrimitiveSceneProxy'
+    -ex run -ex 'frame 1' -ex 'p Proxy'
+    -ex 'info symbol *((void**)Proxy)'
+    -ex 'p ((FStaticMeshSceneProxy*)Proxy)->DistanceFieldData'
+    -ex 'p PrimitiveSceneProxy'
     -ex 'info symbol *((void**)PrimitiveSceneProxy)' -ex 'p *PrimitiveSceneProxy'
     -ex 'p ((FSkeletalMeshSceneProxy*)PrimitiveSceneProxy)->MeshObject'
     -ex 'info symbol *((void**)((FSkeletalMeshSceneProxy*)PrimitiveSceneProxy)->MeshObject)'
     -ex 'x/4gx ((FSkeletalMeshSceneProxy*)PrimitiveSceneProxy)->MeshObject'
     -ex 'p ((USkinnedMeshComponent*)PrimitiveSceneProxy->ComponentForDebuggingOnly)->MeshObject'
+    -ex 'frame 2' -ex 'p PrimitiveSceneProxy'
+    -ex 'info symbol *((void**)PrimitiveSceneProxy)'
+    -ex 'p ((FStaticMeshSceneProxy*)PrimitiveSceneProxy)->DistanceFieldData'
     -ex 'thread apply all bt 20' --args)
 fi
 setsid "${NATIVE_LAUNCH[@]}" /home/moresweet/UnrealEngine_4.26/Engine/Binaries/Linux/UE4Editor \
-  /home/moresweet/carla/Unreal/CarlaUE4/CarlaUE4.uproject /Game/Carla/Maps/Town04 \
+  /home/moresweet/carla/Unreal/CarlaUE4/CarlaUE4.uproject "/Game/Carla/Maps/$NATIVE_MAP" \
   -game -windowed -ResX=1280 -ResY=720 -carla-server -carla-port=2000 \
   -quality-level=Low '-ExecCmds=r.GPUScene 0' >> .runtime/carla.log 2>&1 < /dev/null &
 NATIVE_LAUNCH_PID="$!"

@@ -43,6 +43,7 @@ from carla_safety_agent.batch_service import BatchService
 from carla_safety_agent.batch_capabilities import batch_capabilities
 from carla_safety_agent.batch_textures import texture_records, overlay_materials, require_texture_world
 from carla_safety_agent.world_readiness import require_idle_native_world
+from carla_safety_agent.world_health import observe_idle
 from carla_safety_agent.experiment_report import summarize_queue, compare_variants
 from carla_safety_agent.scene_store import SceneStore, validate_scene
 from carla_safety_agent.material_library import MaterialLibrary, MaterialTransaction, exact_environment_target
@@ -857,6 +858,7 @@ def restore_editor_world():
         settings.spectator_as_ego = True
         world.apply_settings(settings)
     restore_execution_textures(world)
+    return observe_idle(_carla_client, world.get_map().name)
 
 
 def restore_execution_textures(world):

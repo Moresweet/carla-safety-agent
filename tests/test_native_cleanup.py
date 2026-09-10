@@ -40,6 +40,17 @@ def test_sensor_stop_failure_does_not_prevent_destroying_other_sensors():
     assert calls==['stop1','stop2','destroy1','destroy2'] and rig.sensors==[a]
 
 
+def test_rig_uses_server_ack_even_if_new_sensor_not_in_snapshot():
+    calls=[]
+    sensor=NS(id=42,is_alive=False,stop=lambda:calls.append('stop'))
+    carla=NS(command=NS(DestroyActor=lambda actor_id:actor_id))
+    client=NS(apply_batch_sync=lambda ids,tick:calls.append((ids,tick)) or [NS(error='')])
+    rig=rig_class()(carla,None,None,None,client=client)
+    rig.sensors=[sensor]
+    rig.destroy()
+    assert calls==['stop',([42],False)] and rig.sensors==[]
+
+
 @pytest.mark.parametrize('failure',['capture_raise','capture_report','rig','model','stop','actors','settings'])
 def test_every_runtime_cleanup_step_attempted_despite_failure(failure):
     calls=[]
@@ -87,7 +98,7 @@ def test_spawned_actor_is_owned_before_velocity_setup(interaction):
     def fail(*args): raise RuntimeError('velocity setup failed')
     actor=NS(id=1,set_target_velocity=fail)
     blueprint=NS(id='vehicle.test',has_attribute=lambda _:False)
-    transform=NS(get_forward_vector=lambda:1)
+    transform=NS(get_forward_vector=lambda:1,location=NS(z=0.))
     waypoint=NS(next=lambda _:[NS(transform=transform)])
     world=NS(get_blueprint_library=lambda:[blueprint],try_spawn_actor=lambda *a:actor,
         get_map=lambda:NS(get_waypoint=lambda *a,**kw:waypoint))
@@ -99,6 +110,7 @@ def test_spawned_actor_is_owned_before_velocity_setup(interaction):
         else:
             CarlaAdapter._spawn(world,spec,[transform],owned)
     assert owned==[actor]
+    assert transform.location.z == (.5 if interaction else 0.)
 
 
 @pytest.mark.parametrize('failure',[KeyboardInterrupt,RuntimeError,None])

@@ -110,8 +110,9 @@ def sample_storage_reserve(arrays, rgb, auxiliary):
 
 class SensorCapture:
     def __init__(self, world, ego, specs, runtime, source='model-input', dataset_root=None,
-                 scenario=None):
+                 scenario=None, client=None):
         import carla
+        self.client, self._carla = client, carla
         if source not in ('model-input', 'sensor-rig'):
             raise ValueError('Unknown capture source')
         if source == 'sensor-rig' and specs:
@@ -382,16 +383,12 @@ class SensorCapture:
             self.lock.notify_all()
         for sensor in self.sensors:
             try:
-                if sensor.is_alive: sensor.stop()
+                sensor.stop()
             except Exception as exc: errors.append(f'Sensor stop: {exc}')
-        remaining=[]
-        for sensor in self.sensors:
-            try:
-                if sensor.is_alive and sensor.destroy() is False:
-                    raise RuntimeError('destroy returned false')
-            except Exception as exc:
-                errors.append(f'Sensor destroy: {exc}')
-                remaining.append(sensor)
+        from .owned_sensors import destroy_owned_sensors
+        remaining, destroy_errors = destroy_owned_sensors(
+            self.sensors, client=getattr(self, 'client', None), carla=getattr(self, '_carla', None))
+        errors.extend(destroy_errors)
         self.sensors=remaining
         self.cleanup_errors=errors
         try:
@@ -421,7 +418,7 @@ def capture_agent(base):
                         from srunner.scenariomanager.carla_data_provider import CarlaDataProvider
                         world = CarlaDataProvider.get_world()
                         hero = next(a for a in world.get_actors().filter('vehicle.*') if a.attributes.get('role_name') == 'hero')
-                        self._capture = SensorCapture(world, hero, self.sensors(), os.environ['CSA_EVALUATION_CONTROL_DIR'])
+                        self._capture = SensorCapture(world, hero, self.sensors(), os.environ['CSA_EVALUATION_CONTROL_DIR'], client=CarlaDataProvider.get_client())
                 except Exception as exc:
                     self._capture_failed = True
                     try:

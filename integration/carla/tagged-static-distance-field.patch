@@ -1,0 +1,49 @@
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/TaggedComponent.cpp
+@@ -286,6 +286,10 @@
+ FTaggedStaticMeshSceneProxy::FTaggedStaticMeshSceneProxy(UStaticMeshComponent * Component, bool bForceLODsShareStaticLighting, UMaterialInstance * MaterialInstance, TMap<UMaterialInterface*, UMaterialInstanceDynamic*> TaggedMaterials) :
+   FStaticMeshSceneProxy(Component, bForceLODsShareStaticLighting)
+ {
++  // Annotation proxies do not contribute distance-field lighting. The parent's
++  // async distance-field rebuild can retire the inherited cached allocation.
++  DistanceFieldData = nullptr;
++
+   TaggedMaterialInstance = MaterialInstance;
+ 
+   // Replace materials with tagged material
+@@ -319,6 +323,10 @@
+ FTaggedSplineMeshSceneProxy::FTaggedSplineMeshSceneProxy(USplineMeshComponent * Component, UMaterialInstance * MaterialInstance, TMap<UMaterialInterface*, UMaterialInstanceDynamic*> TaggedMaterials) :
+   FSplineMeshSceneProxy(Component)
+ {
++  // Annotation proxies do not contribute distance-field lighting. The parent's
++  // async distance-field rebuild can retire the inherited cached allocation.
++  DistanceFieldData = nullptr;
++
+   TaggedMaterialInstance = MaterialInstance;
+ 
+   // Replace materials with tagged material
+@@ -382,7 +390,11 @@
+ FTaggedInstancedStaticMeshSceneProxy::FTaggedInstancedStaticMeshSceneProxy(
+     UInstancedStaticMeshComponent * Component, ERHIFeatureLevel::Type InFeatureLevel, UMaterialInstance * MaterialInstance, TMap<UMaterialInterface*, UMaterialInstanceDynamic*> TaggedMaterials)
+   : FInstancedStaticMeshSceneProxy(Component, InFeatureLevel)
+ {
++  // Annotation proxies do not contribute distance-field lighting. The parent's
++  // async distance-field rebuild can retire the inherited cached allocation.
++  DistanceFieldData = nullptr;
++
+   TaggedMaterialInstance = MaterialInstance;
+ 
+   // Replace materials with tagged material
+@@ -414,7 +426,11 @@
+ FTaggedHierarchicalStaticMeshSceneProxy::FTaggedHierarchicalStaticMeshSceneProxy(
+     UHierarchicalInstancedStaticMeshComponent * Component, bool bInIsGrass, ERHIFeatureLevel::Type InFeatureLevel, UMaterialInstance * MaterialInstance, TMap<UMaterialInterface*, UMaterialInstanceDynamic*> TaggedMaterials)
+   : FHierarchicalStaticMeshSceneProxy(bInIsGrass, Component, InFeatureLevel)
+ {
++  // Annotation proxies do not contribute distance-field lighting. The parent's
++  // async distance-field rebuild can retire the inherited cached allocation.
++  DistanceFieldData = nullptr;
++
+   TaggedMaterialInstance = MaterialInstance;
+ 
+   // Replace materials with tagged material

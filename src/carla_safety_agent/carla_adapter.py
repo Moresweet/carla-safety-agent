@@ -53,6 +53,9 @@ class CarlaAdapter:
         carla = self._module()
         client = carla.Client(self.host, self.port)
         client.set_timeout(self.timeout_s)
+        from .world_readiness import map_matches, require_idle_native_world
+        world = client.get_world()
+        require_idle_native_world(world)
         if spec.generated_map:
             xodr = build_opendrive(spec.generated_map)
             map_dir = output_dir / spec.scenario_id
@@ -69,9 +72,10 @@ class CarlaAdapter:
             )
             world = client.generate_opendrive_world(xodr, parameters)
         else:
-            world = client.get_world()
-            if spec.map_name.lower() not in world.get_map().name.lower():
+            if not map_matches(spec.map_name, world.get_map().name):
                 world = client.load_world(spec.map_name)
+                if not map_matches(spec.map_name, world.get_map().name):
+                    raise RuntimeError('Loaded world does not match the requested map')
         original = world.get_settings()
         actors: list[Any] = []
         collision = {"hit": False}
@@ -154,7 +158,7 @@ class CarlaAdapter:
                 from .sensor_capture import SensorCapture
                 unified_capture = SensorCapture(world, ego, [], capture_runtime,
                                                 source='sensor-rig', dataset_root=output_dir,
-                                                scenario=asdict(spec))
+                                                scenario=asdict(spec), client=client)
             ego.set_autopilot(spec.family != "road_hazard")
             for adv, adv_spec in zip(adversaries, spec.adversaries):
                 if adv_spec.behavior == "autopilot":
@@ -275,12 +279,14 @@ class CarlaAdapter:
         if not candidates:
             raise RuntimeError("road ended before NHTSA interaction placement")
         transform = candidates[0].transform
+        # Waypoint transforms lie on the road surface, unlike CARLA's elevated
+        # vehicle spawn points. Avoid an initial overlap with the road mesh.
+        transform.location.z += .5 if blueprint.id.startswith('vehicle.') else .3
         if family in {"lead_vehicle_lane_change", "merge"}:
             transform.location += transform.get_right_vector() * 3.5
         elif family in {"vulnerable_road_user", "crossing_path"}:
             transform.location += transform.get_right_vector() * 6.0
             transform.rotation.yaw -= 90.0
-            transform.location.z += 0.3
         actor = world.try_spawn_actor(blueprint, transform)
         if actor is None:
             raise RuntimeError(f"failed to spawn NHTSA actor for {family}")

@@ -23,8 +23,9 @@ from agents.navigation.local_planner import RoadOption
 
 
 class NativeSensorRig:
-    def __init__(self, carla: Any, world: Any, ego: Any, interface: Any) -> None:
+    def __init__(self, carla: Any, world: Any, ego: Any, interface: Any, client=None) -> None:
         self.carla, self.world, self.ego, self.interface = carla, world, ego, interface
+        self.client = client
         self.sensors: list[Any] = []
         self.has_speedometer = False
 
@@ -85,16 +86,12 @@ class NativeSensorRig:
             self.interface.get_data(frame)
 
     def destroy(self) -> None:
+        from carla_safety_agent.owned_sensors import destroy_owned_sensors
         cleanup = Cleanup()
         for sensor in self.sensors:
-            cleanup.attempt(f'Sensor {sensor.id} stop', lambda sensor=sensor: sensor.stop() if sensor.is_alive else None)
-        remaining = []
-        for sensor in self.sensors:
-            def destroy(sensor=sensor):
-                if sensor.is_alive and sensor.destroy() is False:
-                    raise RuntimeError('destroy returned false')
-            if not cleanup.attempt(f'Sensor {sensor.id} destroy', destroy):
-                remaining.append(sensor)
+            cleanup.attempt(f'Sensor {sensor.id} stop', sensor.stop)
+        remaining, errors = destroy_owned_sensors(self.sensors, client=self.client, carla=self.carla)
+        cleanup.errors.extend(errors)
         self.sensors = remaining
         cleanup.finish()
 
@@ -113,6 +110,8 @@ class NativeScenarioExecutor:
         client = carla.Client(self.host, self.port)
         client.set_timeout(self.timeout)
         world = client.get_world()
+        from .world_readiness import map_matches, require_idle_native_world
+        require_idle_native_world(world)
         if spec.generated_map:
             xodr = build_opendrive(spec.generated_map)
             map_output = output.parent / f"{spec.scenario_id}.xodr"
@@ -122,8 +121,10 @@ class NativeScenarioExecutor:
                 vertex_distance=2.0, max_road_length=500.0, wall_height=1.0,
                 additional_width=0.6, smooth_junctions=True,
                 enable_mesh_visibility=True, enable_pedestrian_navigation=False))
-        elif spec.map_name.lower() not in world.get_map().name.lower():
+        elif not map_matches(spec.map_name, world.get_map().name):
             world = client.load_world(spec.map_name)
+            if not map_matches(spec.map_name, world.get_map().name):
+                raise RuntimeError('Loaded world does not match the requested map')
         original = world.get_settings()
         settings = world.get_settings()
         settings.synchronous_mode = True
@@ -178,11 +179,13 @@ class NativeScenarioExecutor:
             gps_plan, world_plan = self._global_plan(world, ego)
             agent.set_global_plan(gps_plan, world_plan)
             agent.setup(agent_config)
-            rig = NativeSensorRig(carla, world, ego, agent.sensor_interface)
-            rig.setup(agent.sensors())
+            from .sensor_schedule import synchronous_specs
+            sensor_specs = synchronous_specs(agent.sensors(), settings.fixed_delta_seconds)
+            rig = NativeSensorRig(carla, world, ego, agent.sensor_interface, client=client)
+            rig.setup(sensor_specs)
             if os.environ.get('CSA_SENSOR_CAPTURE') == '1':
                 from .sensor_capture import SensorCapture
-                capture = SensorCapture(world, ego, agent.sensors(), os.environ['CSA_EVALUATION_CONTROL_DIR'], scenario=spec.to_dict())
+                capture = SensorCapture(world, ego, sensor_specs, os.environ['CSA_EVALUATION_CONTROL_DIR'], scenario=spec.to_dict(), client=client)
             rig.warmup()
             self._focus_spectator(carla, world, ego)
             world.tick()

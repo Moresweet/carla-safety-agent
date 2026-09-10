@@ -18,6 +18,7 @@ class SensorInterface:
     def __init__(self) -> None:
         self._ids: set[str] = set()
         self._frames: dict[int, dict[str, tuple[int, Any]]] = {}
+        self._last_received: dict[str, int] = {}
         self._condition = threading.Condition()
 
     def register_sensor(self, tag: str, sensor_type: str, sensor: Any) -> None:
@@ -29,6 +30,7 @@ class SensorInterface:
     def update_sensor(self, tag: str, data: Any, frame: int) -> None:
         with self._condition:
             self._frames.setdefault(frame, {})[tag] = (frame, data)
+            self._last_received[tag] = max(frame, self._last_received.get(tag, frame))
             self._condition.notify_all()
 
     def get_data(self, frame: int, timeout: float = 30.0) -> dict[str, tuple[int, Any]]:
@@ -37,7 +39,9 @@ class SensorInterface:
                 lambda: self._ids.issubset(self._frames.get(frame, {})), timeout=timeout)
             if not ready:
                 missing = sorted(self._ids-set(self._frames.get(frame, {})))
-                raise SensorReceivedNoData(f"Frame {frame} is missing sensors: {missing}")
+                last = {tag: self._last_received.get(tag) for tag in missing}
+                raise SensorReceivedNoData(
+                    f"Frame {frame} is missing sensors: {missing}; last received frames: {last}")
             result = self._frames.pop(frame)
             for stale in [value for value in self._frames if value < frame]:
                 self._frames.pop(stale, None)

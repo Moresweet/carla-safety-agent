@@ -1248,7 +1248,7 @@ def capture_scene_document():
                 'hidden_environment': VISIBILITY.records(world.id),
                 'weather': {k: float(getattr(weather,k)) for k in weather_keys},
                 'spectator': transform_record(world.get_spectator().get_transform()),
-                'limitations': ['Managed user actors, exact environment material slots and studio-managed visibility; versioned actor textures currently cover managed Audi A2 VehicleMesh slot 4 only; legacy textures and external visibility changes not captured']}
+                'limitations': ['Managed user actors, exact environment material slots and studio-managed visibility; versioned actor textures cover Audi A2 VehicleMesh slot 4 and walker.pedestrian.0001 CharacterMesh0 slot 14; other layouts, legacy textures and external visibility changes not captured']}
     from carla_safety_agent.actor_materials import actor_material_edits
     actor_material_edits(actor_materials,objects)
     return document
@@ -1417,7 +1417,7 @@ def restore_scene_document(saved):
         raise
     return {'ok': True, **saved, 'restored': len(document['objects']), 'spawned': len(created),
             'bindings': {obj['stable_id']: live[obj['stable_id']].id for obj in document['objects']},
-            'mode': 'merge', 'note': 'Unrelated actors preserved; managed environment materials and visibility restored; recorded Audi A2 body textures restored for selected objects only; legacy actor textures not restored'}
+            'mode': 'merge', 'note': 'Unrelated actors preserved; managed environment materials and visibility restored; recorded Audi A2 body and walker.pedestrian.0001 pants textures restored for selected objects only; legacy actor textures not restored'}
 
 
 def live_scene_bindings(world, provenance):
@@ -1472,9 +1472,10 @@ def prepare_scene_actor_materials(world, document, live, provenance, native_text
         if digest is None:
             texture,operation=carla.TextureColor(1,1),'restore';records=[]
         else:
-            if digest not in textures:
-                _,textures[digest]=decode_texture(payloads[digest],(SUPPORTED[model][2],)*2)
-            texture,operation=textures[digest],'apply'
+            texture_key=(digest,SUPPORTED[model][2])
+            if texture_key not in textures:
+                _,textures[texture_key]=decode_texture(payloads[digest],(SUPPORTED[model][2],)*2)
+            texture,operation=textures[texture_key],'apply'
             records=[{'stable_id':stable,'blueprint_id':model,'component':component,'slot':slot,'texture':digest}]
         world.apply_color_texture_to_object(f'{target}|csa|{component}|{slot}|{operation}',carla.MaterialParameter.Diffuse,texture)
         _provenance.bind(world.id,actor,stable,actor_materials=records)
@@ -1497,7 +1498,7 @@ def apply_versioned_livery(world,actor,image,texture):
     digest=MATERIALS.put_texture(payload.getvalue())
     document={'objects':[{'stable_id':stable,'blueprint_id':actor.type_id}],
         'actor_materials':[{'stable_id':stable,'blueprint_id':actor.type_id,'component':component,'slot':slot,'texture':digest}]}
-    transaction=prepare_scene_actor_materials(world,document,{stable:actor},{str(actor.id):record},{digest:texture})
+    transaction=prepare_scene_actor_materials(world,document,{stable:actor},{str(actor.id):record},{(digest,SUPPORTED[actor.type_id][2]):texture})
     try:transaction.apply()
     except Exception as original:
         try:transaction.rollback()
@@ -2018,6 +2019,9 @@ def apply_pedestrian_texture(payload: bytes, actor_id: int | None = None) -> dic
     if actor.type_id != "walker.pedestrian.0001":
         raise RuntimeError(
             f"{actor.type_id} has no verified clothing slot; use walker.pedestrian.0001")
+    record = _provenance.records(world.id).get(str(actor.id), {})
+    if record.get('origin') == 'user' and record.get('type_id') == actor.type_id:
+        return apply_versioned_livery(world, actor, image, texture) | {'kind': 'pedestrian', 'material_slots': [14]}
     target = runtime_name_for_actor(world, actor)
     world.apply_color_texture_to_object(
         target, carla.MaterialParameter.Diffuse, texture)

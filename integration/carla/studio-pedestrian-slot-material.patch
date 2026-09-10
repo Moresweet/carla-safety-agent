@@ -1,0 +1,19 @@
+diff --git a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
+--- a/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
++++ b/Unreal/CarlaUE4/Plugins/Carla/Source/Carla/Game/CarlaGameModeBase.cpp
+@@ -366,7 +366,14 @@ bool ACarlaGameModeBase::ApplyTextureToActorSlot(
+   else
+   {
++    // Preserve the verified clothing shader rather than using vehicle paint.
++    const bool bVerifiedClothing =
++        Actor->GetName().StartsWith(TEXT("BP_Walker_Female1_v1")) &&
++        Selected->GetName() == TEXT("CharacterMesh0") && Slot == 14;
++    const TCHAR* BasePath = bVerifiedClothing
++        ? TEXT("/Game/Carla/Static/Pedestrian/Materials/M_CarlaPedestrianClothingRuntime.M_CarlaPedestrianClothingRuntime")
++        : TEXT("/Game/Carla/Static/GenericMaterials/M_CarlaVehicleLiveryRuntime.M_CarlaVehicleLiveryRuntime");
+     UMaterialInterface* Base = LoadObject<UMaterialInterface>(nullptr,
+-        TEXT("/Game/Carla/Static/GenericMaterials/M_CarlaVehicleLiveryRuntime.M_CarlaVehicleLiveryRuntime"));
++        BasePath);
+     if (!Base || !Texture) return false;
+     UMaterialInstanceDynamic* Dynamic = UMaterialInstanceDynamic::Create(Base, Selected);
+     if (!Dynamic) return false;

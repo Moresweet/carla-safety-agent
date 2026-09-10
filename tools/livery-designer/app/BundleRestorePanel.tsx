@@ -24,7 +24,7 @@ export default function BundleRestorePanel({bundleId,scenes,disabled,onBusy}:{bu
  }
  return <section aria-label="项目包实景恢复">
   <h3>可选：恢复到当前实景</h3>
-  <p>这会修改正在运行的场景，与隔离导入不同。仅支持当前同名地图，不自动安装或注册源资产。车辆纹理版本目前仅支持工作台新增 Audi A2 的车身槽；其他车辆、行人及旧式纹理未纳入版本。</p>
+  <p>这会修改正在运行的场景，与隔离导入不同。仅支持当前同名地图，不自动安装或注册源资产。对象纹理版本支持工作台新增 Audi A2 车身槽和 walker.pedestrian.0001 裤装槽 14；其他型号及旧式纹理未纳入版本。</p>
   <label>包内场景版本<select aria-label="包内恢复版本" disabled={disabled} value={selection} onChange={e=>{setSelection(e.target.value);setReview(null);setConfirmed(false);setError('');setStatus('')}}>
    {scenes.flatMap(scene=>scene.history.map(version=><option key={scene.scene_id+'/'+version} value={scene.scene_id+'/'+version}>{scene.name} · {version}{version===scene.version?'（当前版本）':''}</option>))}
   </select></label>

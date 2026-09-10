@@ -1,7 +1,8 @@
 """Exact, versionable actor slots; unknown layouts never inherit another model's UV."""
 import re
 
-SUPPORTED={'vehicle.audi.a2':('VehicleMesh',4,2048)}
+SUPPORTED={'vehicle.audi.a2':('VehicleMesh',4,2048),
+           'walker.pedestrian.0001':('CharacterMesh0',14,1024)}
 
 
 def actor_material_edits(records,objects):

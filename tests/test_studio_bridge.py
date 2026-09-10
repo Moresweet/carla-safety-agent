@@ -85,6 +85,23 @@ def test_missing_selected_pedestrian_never_falls_back_to_another():
         env['apply_pedestrian_texture'](b'',42)
 
 
+@pytest.mark.parametrize('origin',['user','unknown'])
+def test_pedestrian_versions_only_for_managed_matching_identity(origin):
+    calls=[]
+    actor=SimpleNamespace(id=42,type_id='walker.pedestrian.0001')
+    world=SimpleNamespace(id=10,get_actor=lambda _:actor,
+        apply_color_texture_to_object=lambda *args:calls.append('legacy'))
+    def versioned(*args):
+        calls.append('versioned');return {'versionable':True}
+    env=functions('apply_pedestrian_texture',decode_texture=lambda *args:(SimpleNamespace(width=1024,height=1024),'texture'),
+        connect_world=lambda:world,_provenance=SimpleNamespace(records=lambda _:{'42':{'origin':origin,'type_id':actor.type_id}}),
+        apply_versioned_livery=versioned,runtime_name_for_actor=lambda *_:'ExactWalker',
+        carla=SimpleNamespace(MaterialParameter=SimpleNamespace(Diffuse=0)))
+    result=env['apply_pedestrian_texture'](b'',42)
+    assert calls==['versioned' if origin=='user' else 'legacy']
+    assert result.get('versionable',False)==(origin=='user')
+
+
 @pytest.mark.parametrize('scope,confirmed,expected', [
     ('Road_Road_1',False,['Road_Road_1']), ('all',True,['Road_Road_1','Road_Road_2'])])
 def test_road_texture_scope_is_explicit(scope,confirmed,expected):

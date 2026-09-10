@@ -1,4 +1,4 @@
-"""Real Audi texture versions across restart and respawn, with an unrelated control."""
+"""Real verified actor textures across restart and respawn, with an unrelated control."""
 import argparse
 import io
 import json
@@ -17,7 +17,11 @@ from carla_safety_agent.world_health import observe_idle
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--atlas',type=Path,required=True)
+    parser.add_argument('--blueprint',choices=['vehicle.audi.a2','walker.pedestrian.0001'],default='vehicle.audi.a2')
     args=parser.parse_args();atlas=args.atlas.resolve()
+    pedestrian=args.blueprint.startswith('walker.')
+    size=1024 if pedestrian else 2048
+    apply_path='/apply/pedestrian?actor_id=' if pedestrian else '/apply?actor_id='
     assert ROOT/'runs/validation' in atlas.parents and atlas.is_file()
     assert request('/system/preflight')['ready']
     assert request('/batches/scheduler')['scheduler']['state']!='running'
@@ -25,13 +29,13 @@ def main():
     client=carla.Client('127.0.0.1',2000);client.set_timeout(10);world=client.get_world()
     before=observe_idle(client,world.get_map().name,seconds=1)
     baseline=request('/scenes/save',{'name':'车辆纹理版本实测前基线'})
-    output=ROOT/'runs/validation'/('vehicle-texture-versions-'+uuid.uuid4().hex);output.mkdir()
+    output=ROOT/'runs/validation'/(('pedestrian' if pedestrian else 'vehicle')+'-texture-versions-'+uuid.uuid4().hex);output.mkdir()
     report={'state':'started','before':before};owned=set();stable_ids=set()
     provenance=ActorProvenance(ROOT/'.runtime/actor-provenance.json')
     def spawn(offset):
         transform=world.get_map().get_spawn_points()[0]
         location=transform.location+transform.get_right_vector()*offset
-        result=request('/objects/spawn',{'blueprint_id':'vehicle.audi.a2','transform':{
+        result=request('/objects/spawn',{'blueprint_id':args.blueprint,'transform':{
             'location':{'x':location.x,'y':location.y,'z':location.z+.5},'rotation':{'yaw':transform.rotation.yaw}}})['object']
         owned.add(result['id'])
         record=provenance.records(world.id)[str(result['id'])];stable_ids.add(record['stable_id'])
@@ -40,7 +44,7 @@ def main():
     def photo(actor,name):
         transform=actor.get_transform();center=carla.Location(**{key:getattr(actor.bounding_box.location,key) for key in ('x','y','z')})
         transform.transform(center)
-        eye=center+transform.get_forward_vector()*4.5+transform.get_right_vector()*5+carla.Location(z=1.7)
+        eye=center+transform.get_forward_vector()*(2.2 if pedestrian else 4.5)+transform.get_right_vector()*(1 if pedestrian else 5)+carla.Location(z=.3 if pedestrian else 1.7)
         delta=center-eye
         world.get_spectator().set_transform(carla.Transform(eye,carla.Rotation(
             pitch=math.degrees(math.atan2(delta.z,math.hypot(delta.x,delta.y))),yaw=math.degrees(math.atan2(delta.y,delta.x)))))
@@ -50,13 +54,14 @@ def main():
         original=request('/scenes/save',{'name':'车辆纹理版本测试'})
         assert not original['document']['actor_materials']
         photo(target,'target-original.jpg')
-        applied=request('/apply?actor_id='+str(target.id),atlas.read_bytes());assert applied['versionable'] is True
+        applied=request(apply_path+str(target.id),atlas.read_bytes());assert applied['versionable'] is True
+        assert applied['resolution']==[size,size]
         painted=request('/scenes/save',{'name':'车辆纹理版本测试','scene_id':original['head']['scene_id'],
             'expected_version':original['head']['version']})
         assert painted['document']['actor_materials'][0]['texture']==applied['texture']
         control,control_stable=spawn(7)
-        payload=io.BytesIO();Image.new('RGB',(2048,2048),(20,180,40)).save(payload,format='PNG')
-        control_applied=request('/apply?actor_id='+str(control.id),payload.getvalue())
+        payload=io.BytesIO();Image.new('RGB',(size,size),(20,180,40)).save(payload,format='PNG')
+        control_applied=request(apply_path+str(control.id),payload.getvalue())
         subprocess.run(['bash',str(ROOT/'scripts/restart_studio_bridge.sh')],cwd=ROOT,check=True,capture_output=True,text=True)
         assert client.get_world().id==before['episode']
         scene=original['head']['scene_id']
@@ -79,7 +84,7 @@ def main():
         manifest,files=read_bundle(package)
         assert files['textures/'+applied['texture']+'.png']==(ROOT/'data/textures'/(applied['texture']+'.png')).read_bytes()
         assert 'textures/'+control_applied['texture']+'.png' not in files
-        report.update(state='verified',scene_id=scene,stable_id=stable,original_actor=old_id,restored_actor=new_id,
+        report.update(state='verified',blueprint=args.blueprint,scene_id=scene,stable_id=stable,original_actor=old_id,restored_actor=new_id,
             texture=applied['texture'],unrelated_control_preserved=control_stable,
             bundle_actor_material_slots=manifest['dependencies']['actor_material_slots'])
     except BaseException as exc:report.update(state='failed',error=str(exc));raise

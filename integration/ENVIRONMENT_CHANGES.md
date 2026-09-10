@@ -38,6 +38,13 @@ make CarlaUE4Editor
 
 ## Generated Unreal assets
 
+### Versioned pedestrian clothing slots
+
+After the studio material runtime patch, apply and build
+[`carla/studio-pedestrian-slot-material.patch`](carla/studio-pedestrian-slot-material.patch).
+This keeps the verified walker pants slot on its clothing base rather than
+vehicle paint; [scope and native verification](carla/studio-pedestrian-slot-material.md).
+
 ### Collision sensor lifecycle guard
 
 `carla/tagged-parent-render-state.patch` subscribes skeletal annotation components

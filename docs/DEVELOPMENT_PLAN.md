@@ -1429,3 +1429,10 @@ Blender 是资产制作后端；ROS 是外部订阅与可视化接口，不要�
 - 未登记、跨episode或类型不符的动态对象默认unknown；桥接首次连接不再将未观察的历史猜成existing，已有来源记录保持原样。初始化写入失败不缓存episode，下一次仍拒绝/重试，不绕过来源写入。地图环境目录仍为existing；旧版本已经写成existing的记录不能可靠逆推，未批量篡改。
 - 前端新增来源未知筛选，列表与详情共用保守标签映射；缺失或未来枚举不再显示场景原有。截图发现下拉框被通用select样式撑到390px，修正为38px，只有对象列表保留大高度。
 - 698项Python测试、来源标签Node测试及类型检查通过。原生object-origin-414a44f672944cf6958c8e8f938ea0f0及布局修复后071f4aa7cfa7427fb9d51b61253097c7通过；直接创建、无工作台登记的Actor754/755重启前后均unknown且被existing筛选排除。最终浏览器cdc52996-759d-43d2-948f-e00b9389a8ad截图已查看，38px布局断言通过；仅删除测试对象，同episode异步零传感器。
+
+### S2/S3增量：行人裤装纹理版本
+
+- 仅扩展已验证walker.pedestrian.0001 / CharacterMesh0 / slot14 / 1024²；其他型号仍拒绝假定布局，未纳管行人保持旧式接口且不宣称版本保存。原生附加studio-pedestrian-slot-material补丁保留现有服装基底roughness0.82，不套用车辆漆面。10动作编译链接成功，保存8fbd22397ea743b3838c27f660cf2737后空闲门禁重启并恢复基线，新原生PID369691、episode12684580936238673218。
+- 同一纹理摘要按摘要+分辨率缓存，混合车辆/行人恢复不会复用错误分辨率。706项Python测试及TypeScript通过，覆盖两种槽的包复制、替换/清除/损坏/写入失败补偿，以及1024²/2048²共享纹理。
+- 原生pedestrian-texture-versions-b985f3c394464f5798295aae1060759c通过重启、撤销/重做、稳定ID重建124→130、PNG包字节校验及无关绿色行人保持；原裤装撤销、棋盘格重建、绿色对照截图均已查看。
+- 网页pedestrian-uv-36bc3731783e41adb8f323f4aa73ff4a（browser3bd4bd7c-231b-4dd9-b0ed-d950c819cbca）真实UV编辑通过。完整browser-bundle-restore-fc39e8fd51e547c7b4ea610eb623e34f（browser9a0eeeee-3bac-4a14-aed9-ac99b59a7d1b）导出/上传/隔离导入/独立确认恢复140→141、纹理摘要一致及过期/重复确认拒绝通过，恢复截图已查看。所有测试对象已清理，同episode异步零传感器；跨机/其他型号/逐笔撤销仍未覆盖。

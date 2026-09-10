@@ -2,6 +2,7 @@
 import {useEffect,useState} from 'react';
 import ExperimentHistory from './ExperimentHistory';
 import ProjectBundlePanel from './ProjectBundlePanel';
+import SceneHandoffPanel from './SceneHandoffPanel';
 const bridge='http://127.0.0.1:8765';
 type Head={scene_id:string;name:string;version:string;cursor:number;history:string[];object_count:number};
 type Health={ready:boolean;checks:{id:string;ok:boolean;detail?:string;map?:string}[];session:{state:string;error?:string}};
@@ -18,6 +19,7 @@ export default function ProjectPanel(){
   <label>场景<select value={selected} onChange={e=>{setSelected(e.target.value);setName(scenes.find(s=>s.scene_id===e.target.value)?.name??'我的场景')}}><option value="">新建场景文档</option>{scenes.map(s=><option key={s.scene_id} value={s.scene_id}>{s.name} · {s.object_count} 个对象</option>)}</select></label><label>名称<input value={name} maxLength={120} onChange={e=>setName(e.target.value)}/></label>
   <div className="project-actions"><button disabled={busy||!health?.ready} onClick={()=>act('save')}>保存新版本</button><button disabled={busy||!current||!health?.ready} onClick={()=>act('restore')}>恢复选中版本</button><button disabled={busy||!current||current.cursor===0||!health?.ready} onClick={()=>act('undo')}>恢复上一版本</button><button disabled={busy||!current||current.cursor>=current.history.length-1||!health?.ready} onClick={()=>act('redo')}>恢复下一版本</button></div><p role="status">{status}</p>
  <ProjectBundlePanel sceneId={selected}/>
+ <SceneHandoffPanel key={'handoff:'+selected+':'+current?.version} sceneId={selected} version={current?.version} onSelect={id=>{setSelected(id);void refresh()}}/>
  <ExperimentHistory onSaved={(id,newName)=>{setSelected(id);setName(newName);void refresh()}}/>
  </div></details>
 }

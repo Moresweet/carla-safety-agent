@@ -2,6 +2,11 @@
 from .session import observed_process_identity
 
 
+def verify_handoff_idle(handoff):
+    if not isinstance(handoff,dict) or handoff.get('state') not in ('idle','restored','failed_before_switch','acknowledged'):
+        raise ValueError('Map handoff active, interrupted or unknown; inspect it before routine bridge restart')
+
+
 def verify_idle(session, scheduler, observe=observed_process_identity):
     if not isinstance(scheduler, dict) or scheduler.get('state') not in (
             'idle', 'completed', 'cancelled', 'paused', 'needs_attention'):

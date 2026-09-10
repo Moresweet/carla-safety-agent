@@ -14,6 +14,7 @@ def functions(*names, **environment):
     tree = ast.parse(source.read_text())
     selected = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
     environment.setdefault('simulation_operation', lambda function: function)
+    environment.setdefault('HANDOFF',SimpleNamespace(require_idle=lambda:None))
     exec(compile(ast.Module(body=selected, type_ignores=[]), str(source), 'exec'), environment)
     return environment
 

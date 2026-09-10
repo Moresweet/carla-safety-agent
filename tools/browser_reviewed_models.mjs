@@ -62,6 +62,56 @@ try {
   const state=await evaluate(`(()=>{const section=document.querySelector('[aria-label="确认计划并选择模型"]');return {buttons:[...section.querySelectorAll('button')].map(b=>({text:b.textContent,disabled:b.disabled})),checkboxes:[...section.querySelectorAll('input')].map(b=>({checked:b.checked,disabled:b.disabled}))}})()`);
   assert(state.buttons[0].disabled,'Unreviewed plan must not start');
   const interactions=[];
+  const handoffFlag=process.argv.indexOf('--handoff-scene');
+  if(handoffFlag>=0){
+    const sceneId=process.argv[handoffFlag+1];assert(/^[a-f0-9]{32}$/.test(sceneId));
+    await evaluate(`document.querySelector('.project-panel').open=true`);
+    let ready=false;
+    for(let i=0;i<100;i++){
+      ready=await evaluate(`[...document.querySelectorAll('.project-panel select option')].some(o=>o.value===${JSON.stringify(sceneId)})`);
+      if(ready)break;await delay(200);
+    }
+    assert(ready,'Handoff scene not listed');
+    await evaluate(`(()=>{const s=document.querySelector('.project-panel select');s.value=${JSON.stringify(sceneId)};s.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+    for(let i=0;i<100;i++){
+      ready=await evaluate(`!document.querySelector('[aria-label="跨地图场景恢复"] button').disabled`);
+      if(ready)break;await delay(200);
+    }
+    assert(ready,'Handoff preview unavailable');
+    await evaluate(`document.querySelector('[aria-label="跨地图场景恢复"] button').click()`);
+    for(let i=0;i<100;i++){
+      ready=await evaluate(`!!document.querySelector('[aria-label="确认销毁当前世界并恢复目标地图"]')`);
+      if(ready)break;await delay(200);
+    }
+    assert(ready,'Destructive map review not shown');
+    assert(await evaluate(`[...document.querySelectorAll('[aria-label="跨地图场景恢复"] button')].find(b=>b.textContent==='确认备份、换图并恢复').disabled`));
+    await evaluate(`document.querySelector('[aria-label="跨地图场景恢复"]').scrollIntoView({block:'center'})`);
+    const preview=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+    await writeFile(join(output,'map-handoff-review.png'),Buffer.from(preview.data,'base64'));
+    await evaluate(`document.querySelector('[aria-label="确认销毁当前世界并恢复目标地图"]').click()`);
+    await delay(150);const startedAt=Date.now()/1000;
+    await evaluate(`[...document.querySelectorAll('[aria-label="跨地图场景恢复"] button')].find(b=>b.textContent==='确认备份、换图并恢复').click()`);
+    let result;
+    for(let i=0;i<360;i++){
+      result=await (await fetch('http://127.0.0.1:8765/scenes/handoff')).json();
+      if(result.selection?.scene_id===sceneId&&result.started_at>=startedAt){
+        assert(!['needs_attention','failed_before_switch'].includes(result.state),JSON.stringify(result));
+        if(result.state==='restored')break;
+      }
+      await delay(500);
+    }
+    assert.equal(result?.state,'restored');assert.equal(result.selection.scene_id,sceneId);assert(result.started_at>=startedAt);
+    await writeFile(join(output,'map-handoff-result.json'),JSON.stringify(result,null,2));
+    for(let i=0;i<100;i++){
+      ready=await evaluate(`document.querySelector('[aria-label="跨地图场景恢复"]').textContent.includes(${JSON.stringify(result.request_id)})&&document.querySelector('[aria-label="跨地图场景恢复"]').textContent.includes('切图状态：restored')`);
+      if(ready)break;await delay(200);
+    }
+    assert(ready,'Completed handoff not shown');
+    await evaluate(`document.querySelector('[aria-label="跨地图场景恢复"]').scrollIntoView({block:'center'})`);
+    const completed=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+    await writeFile(join(output,'map-handoff-complete.png'),Buffer.from(completed.data,'base64'));
+    interactions.push('explicit_browser_map_handoff_preview_confirmation_and_backup_visible');
+  }
   const phaseFlag=process.argv.indexOf('--expect-execution-phase');
   if(phaseFlag>=0){
     const phase=process.argv[phaseFlag+1],execution=process.argv[phaseFlag+2];

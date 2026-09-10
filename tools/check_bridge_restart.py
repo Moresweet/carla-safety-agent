@@ -3,7 +3,7 @@ import argparse
 import os
 import socket
 import subprocess
-from carla_safety_agent.restart_guard import verify_idle, verify_crash_restart, verify_recovery_restart
+from carla_safety_agent.restart_guard import verify_idle, verify_crash_restart, verify_recovery_restart,verify_handoff_idle
 from regression_scene_versions import request
 
 
@@ -15,6 +15,7 @@ if __name__ == '__main__':
     args=parser.parse_args()
     session=request('session/status')['session']
     scheduler=request('batches/scheduler')['scheduler']
+    if not args.after_crash:verify_handoff_idle(request('scenes/handoff'))
     if args.after_crash:
         native=subprocess.run(['pgrep','-x','UE4Editor'],capture_output=True,check=False)
         if native.returncode not in (0,1):raise RuntimeError('Could not determine native process state')

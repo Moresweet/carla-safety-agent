@@ -52,3 +52,8 @@
 .bundle-details{padding:18px;border:1px solid var(--line);border-radius:12px;margin-top:18px}
 .bundle-panel [role=alert]{color:#ffbdbd}
 .bundle-panel a{color:var(--accent);text-decoration:underline}
+.scene-handoff button{border:1px solid #927044;border-radius:8px;padding:10px 14px;margin:6px 8px 6px 0;background:#263329;color:#edf4f0;cursor:pointer}
+.scene-handoff button:disabled{opacity:.45;cursor:not-allowed}
+.scene-handoff label{display:flex;align-items:flex-start;gap:10px;font-size:14px;line-height:1.6;margin:14px 0}
+.scene-handoff input[type=checkbox]{width:auto;flex:0 0 auto;margin-top:5px}
+.scene-handoff .handoff-record{border-top:1px solid #52616a;margin-top:20px;padding-top:12px;overflow-wrap:anywhere}

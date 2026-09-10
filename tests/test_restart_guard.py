@@ -2,6 +2,13 @@ import pytest
 from carla_safety_agent.restart_guard import verify_idle
 
 
+@pytest.mark.parametrize('state',['running','needs_attention','unknown',None])
+def test_routine_restart_refuses_pending_map_handoff(state):
+    from carla_safety_agent.restart_guard import verify_handoff_idle
+    with pytest.raises(ValueError):verify_handoff_idle({'state':state})
+    verify_handoff_idle({'state':'restored'})
+
+
 @pytest.mark.parametrize('scheduler', [{'state': 'running'}, {}, None])
 def test_restart_refuses_scheduler_even_between_simulations(scheduler):
     with pytest.raises(ValueError, match='scheduler'):

@@ -40,6 +40,7 @@ from carla_safety_agent.natural_language import NaturalLanguageCompiler
 from carla_safety_agent.scenario_archive import archive_scenario, read_verified_scenario
 from carla_safety_agent.build_plan import build_plan
 from carla_safety_agent.session import SessionJournal
+from carla_safety_agent.scene_handoff import SceneHandoff
 from carla_safety_agent.batch_catalog import BatchCatalog
 from carla_safety_agent.batch_control import control_batch
 from carla_safety_agent.batch_service import BatchService
@@ -82,12 +83,24 @@ def simulation_operation(function):
     """Drain editor RPC operations before handing the world to an evaluator."""
     @wraps(function)
     def guarded(*args, **kwargs):
+        handoff=globals().get('HANDOFF')
+        entered_episode=globals().get('_world_episode')
+        def check_episode():
+            current=globals().get('_world_episode')
+            if entered_episode is not None and current is not None and entered_episode!=current:
+                raise ValueError('World changed while this operation waited; refresh and submit again')
+        if handoff and function.__name__!='acknowledge_scene_handoff':handoff.require_idle()
         if function.__name__ in ('start_e2e','start_bundle_registration'):
             if not _simulation_lock.acquire(blocking=False):
                 raise ValueError('A scene or asset operation is still running; wait before starting another task')
-            try:return function(*args,**kwargs)
+            try:
+                check_episode()
+                if handoff:handoff.require_idle()
+                return function(*args,**kwargs)
             finally:_simulation_lock.release()
         with _simulation_lock:
+            check_episode()
+            if handoff and function.__name__!='acknowledge_scene_handoff':handoff.require_idle()
             return function(*args, **kwargs)
     return guarded
 
@@ -125,6 +138,7 @@ BLENDER = BlenderPipeline(PROJECT_ROOT)
 SESSION = SessionJournal(PROJECT_ROOT / 'data')
 BATCHES = BatchCatalog(PROJECT_ROOT / 'data/experiment-queues')
 SCENES = SceneStore(PROJECT_ROOT / 'data/scenes')
+HANDOFF = SceneHandoff(PROJECT_ROOT/'data/scene-handoffs')
 VISIBILITY = VisibilityStore(PROJECT_ROOT / 'data')
 MATERIALS = MaterialLibrary(PROJECT_ROOT / 'data')
 _thumbnail_dir = os.environ.get("THUMBNAIL_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), ".runtime", "thumbnails"))
@@ -576,6 +590,7 @@ def batch_scheduler_control(data):
         return {'ok': True, 'scheduler': BATCH_SERVICE.cancel(data['batch_id'], data['scheduler_id'])}
     if data['action'] != 'start':
         raise ValueError('Unknown scheduler action')
+    HANDOFF.require_idle()
     BATCHES.read(data['batch_id'])
     return {'ok': True, 'scheduler': BATCH_SERVICE.start(data['batch_id'])}
 
@@ -715,19 +730,24 @@ def recover_session():
     return {'ok': True, 'session': SESSION.snapshot()}
 
 
-@simulation_operation
 def system_preflight():
     """Read-only local checks; never connect a second client during evaluation."""
     checks = [{'id': 'model_environment', 'ok': UNIAD_PYTHON.is_file(), 'detail': str(UNIAD_PYTHON)},
               {'id': 'disk_space', 'ok': shutil.disk_usage(PROJECT_ROOT).free > 1024**3,
                'free_bytes': shutil.disk_usage(PROJECT_ROOT).free},
               {'id': 'session_idle', 'ok': not evaluation_active(), 'detail': SESSION.snapshot()['state']}]
-    if not evaluation_active():
+    try:
+        handoff=HANDOFF.status()
+        checks.append({'id':'map_handoff','ok':handoff['state'] not in ('running','needs_attention'),'detail':handoff['state']})
+    except (ValueError,OSError) as exc:
+        checks.append({'id':'map_handoff','ok':False,'detail':str(exc)})
+    if not evaluation_active() and checks[-1]['ok']:
         try:
-            world = connect_world()
-            require_idle_native_world(world)
-            checks.append({'id': 'carla', 'ok': True, 'map': world.get_map().name,
-                           'synchronous': world.get_settings().synchronous_mode})
+            with _simulation_lock:
+                world = connect_world()
+                require_idle_native_world(world)
+                checks.append({'id': 'carla', 'ok': True, 'map': world.get_map().name,
+                               'synchronous': world.get_settings().synchronous_mode})
         except Exception as exc:
             checks.append({'id': 'carla', 'ok': False, 'detail': str(exc)})
     return {'ok': True, 'ready': all(c['ok'] for c in checks), 'checks': checks,
@@ -836,6 +856,7 @@ def decode_texture(payload: bytes, size: tuple[int, int]) -> tuple[Image.Image, 
 def connect_world():
     global _carla_client, _world_episode
     with _simulation_lock:
+        HANDOFF.require_idle()
         if evaluation_active():
             raise RuntimeError("Closed-loop evaluation owns CARLA; wait for it to stop")
         if _carla_client is None:
@@ -1261,6 +1282,118 @@ def capture_scene_document():
 def restore_scene(data):
     saved = SCENES.read(str(data['scene_id']), data.get('version'))
     return restore_scene_document(saved)
+
+
+def handoff_preflight(selection):
+    """Caller holds simulation lock. Refuse unrelated dynamic owners before load."""
+    from carla_safety_agent.scene_store import identifier
+    from carla_safety_agent.world_readiness import map_matches
+    from carla_safety_agent.actor_materials import actor_texture_digests
+    from carla_safety_agent.material_library import material_edits
+    if not isinstance(selection,dict) or set(selection)!={'scene_id','version'}:
+        raise ValueError('Select an exact local scene ID and version')
+    for value in selection.values():identifier(value)
+    require_asset_import_idle()
+    if BATCH_SERVICE.status().get('state')=='running':raise ValueError('Stop the batch scheduler before changing maps')
+    world=connect_world();require_idle_native_world(world)
+    saved=SCENES.read(selection['scene_id'],selection['version'])
+    document=validate_scene(saved['document'])
+    from carla_safety_agent.scene_handoff import available_map
+    target=available_map(document['map'],_carla_client.get_available_maps())
+    if map_matches(document['map'],world.get_map().name):raise ValueError('Use same-map restore for this selection')
+    provenance=_provenance.records(world.id);inventory=[]
+    for actor in world.get_actors():
+        if actor.type_id.startswith('controller.'):
+            raise ValueError('External actor controllers prevent map handoff')
+        if not actor.type_id.startswith(('vehicle.','walker.','static.prop.')):continue
+        record=provenance.get(str(actor.id),{})
+        if record.get('origin')!='user' or record.get('type_id')!=actor.type_id or not record.get('stable_id'):
+            raise ValueError(f'Unmanaged dynamic actor {actor.id} ({actor.type_id}) prevents map handoff')
+        inventory.append({'id':actor.id,'type_id':actor.type_id,'stable_id':record['stable_id']})
+    baseline=capture_scene_document()
+    if {row['stable_id'] for row in inventory}!={obj['stable_id'] for obj in baseline['objects']}:
+        raise ValueError('Actor inventory has not reached a stable saved snapshot; wait before previewing')
+    registry=BLENDER.registry()
+    for obj in document['objects']:
+        if obj['blueprint_id'] not in registry:world.get_blueprint_library().find(obj['blueprint_id'])
+    for value in set(material_edits(document.get('environment_materials',[])).values())|actor_texture_digests(document):
+        MATERIALS.texture(value)
+    return world,saved,baseline,sorted(inventory,key=lambda row:row['id']),target
+
+
+@simulation_operation
+def preview_scene_handoff(data):
+    world,saved,baseline,inventory,_=handoff_preflight(data)
+    return {'ok':True,**HANDOFF.preview(data,saved['document'],baseline,world.id,inventory)}
+
+
+@simulation_operation
+def confirm_scene_handoff(data):
+    if not isinstance(data,dict) or set(data)!={'review_token','confirmed'} or data['confirmed'] is not True:
+        raise ValueError('Explicit destructive map handoff confirmation required')
+    selection=HANDOFF.selection(data['review_token'])
+    world,saved,baseline,inventory,target=handoff_preflight(selection)
+    HANDOFF.consume(data,saved['document'],baseline,world.id,inventory)
+    backup=SCENES.save(baseline,'跨地图恢复前工作台备份')
+    row=HANDOFF.begin({'selection':selection,'source_episode':str(world.id),
+        'source_map':baseline['map'],'target_map':saved['document']['map']},backup['head'])
+    try:
+        threading.Thread(target=perform_scene_handoff,args=(row,saved,baseline,inventory,target),daemon=True).start()
+    except Exception as exc:
+        try:HANDOFF.update(row['request_id'],state='failed_before_switch',error=str(exc))
+        finally:HANDOFF.worker_active=False
+        raise
+    return {'ok':True,**row}
+
+
+def perform_scene_handoff(row,saved,baseline,inventory,target):
+    """One bridge-owned native operation; interruption stays gated after restart."""
+    from carla_safety_agent.bundle_restore_review import baseline_digest
+    from carla_safety_agent.world_readiness import map_matches
+    from carla_safety_agent.world_health import observe_idle
+    switched=False
+    with _simulation_lock,HANDOFF.owner_scope():
+        try:
+            world=connect_world();require_idle_native_world(world)
+            if str(world.id)!=row['source_episode'] or baseline_digest(capture_scene_document())!=baseline_digest(baseline):
+                raise ValueError('World changed before map loading')
+            if list(world.get_actors().filter('controller.*')):raise ValueError('External actor controllers prevent map loading')
+            actual=[{'id':a.id,'type_id':a.type_id,'stable_id':_provenance.records(world.id).get(str(a.id),{}).get('stable_id')}
+                for a in world.get_actors() if a.type_id.startswith(('vehicle.','walker.','static.prop.'))]
+            if sorted(actual,key=lambda item:item['id'])!=inventory:raise ValueError('Dynamic inventory changed before map loading')
+            HANDOFF.update(row['request_id'],phase='loading_map')
+            # Persist intent before the destructive RPC. A timeout may mean
+            # load actually happened; never automatically load the old map.
+            switched=True
+            _carla_client.set_timeout(120)
+            try:world=_carla_client.load_world(target)
+            finally:_carla_client.set_timeout(5)
+            if str(world.id)==row['source_episode'] or not map_matches(saved['document']['map'],world.get_map().name):
+                raise RuntimeError('Loaded world identity does not match target')
+            require_idle_native_world(world)
+            HANDOFF.update(row['request_id'],phase='restoring_scene',target_episode=str(world.id))
+            result=restore_scene_document(saved)
+            health=observe_idle(_carla_client,saved['document']['map'])
+            HANDOFF.update(row['request_id'],state='restored',phase='verified',bindings=result['bindings'],
+                restored=result['restored'],health={**health,'episode':str(health['episode'])},
+                note='Managed target scene restored on a new episode; original runtime world was discarded. Backup retains managed state only.')
+        except Exception as exc:
+            try:HANDOFF.update(row['request_id'],state='needs_attention' if switched else 'failed_before_switch',error=str(exc))
+            except Exception as journal_error:print(f'Map handoff requires inspection: {exc}; journal error: {journal_error}',flush=True)
+        finally:HANDOFF.worker_active=False
+
+
+@simulation_operation
+def acknowledge_scene_handoff(data):
+    if HANDOFF.worker_active:raise ValueError('Map handoff worker is still active')
+    with HANDOFF.owner_scope():
+        require_asset_import_idle()
+        world=connect_world();require_idle_native_world(world)
+        from carla_safety_agent.world_health import observe_idle
+        observe_idle(_carla_client,world.get_map().name)
+        if BATCH_SERVICE.status().get('state')=='running':raise ValueError('Batch scheduler must be stopped')
+        row=HANDOFF.acknowledge(data)
+    return {'ok':True,**row,'observed_map':world.get_map().name,'observed_episode':str(world.id)}
 
 
 @simulation_operation
@@ -2048,6 +2181,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         request = urlparse(self.path)
         params = parse_qs(request.query)
+        if request.path=='/scenes/handoff':
+            try:
+                result={'ok':True,**HANDOFF.status()}
+                self._headers();self.wfile.write(json.dumps(result).encode())
+            except (ValueError,OSError) as exc:
+                self._headers(400);self.wfile.write(json.dumps({'ok':False,'error':str(exc)}).encode())
+            return
         if request.path in ('/projects/bundle','/projects/bundle/download'):
             try:
                 bundle_id=params.get('bundle_id',[''])[0]
@@ -2354,6 +2494,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         request = urlparse(self.path)
         if request.path not in ("/apply", "/apply/road", "/apply/building",
+                                '/scenes/handoff/preview','/scenes/handoff/confirm','/scenes/handoff/acknowledge',
                                 '/projects/bundle/export','/projects/bundle/upload','/projects/bundle/import','/projects/bundle/doctor',
                                 '/projects/bundle/restore-preview','/projects/bundle/restore-confirm','/projects/bundle/registration',
                                 '/batches/create', '/datasets/quality', '/datasets/recovery', '/datasets/excerpt',
@@ -2382,7 +2523,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(b'{"ok":false,"error":"Request body exceeds 16 MiB limit"}')
                 return
             payload = self.rfile.read(length)
-            if request.path == '/projects/bundle/export':
+            if request.path in ('/scenes/handoff/preview','/scenes/handoff/confirm','/scenes/handoff/acknowledge'):
+                operation={'/scenes/handoff/preview':preview_scene_handoff,'/scenes/handoff/confirm':confirm_scene_handoff,
+                    '/scenes/handoff/acknowledge':acknowledge_scene_handoff}[request.path]
+                result=operation(json.loads(payload or b'{}'))
+            elif request.path == '/projects/bundle/export':
                 result=BUNDLES.export(json.loads(payload or b'{}'))
             elif request.path == '/projects/bundle/upload':
                 result=BUNDLES.upload(payload)

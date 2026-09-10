@@ -35,12 +35,13 @@
 - [诊断片段归档](CAPTURE_EXCERPTS.md)：新增保存/ZIP下载/独立回放，规则与VAD真实录制验证通过；最新完整Python测试764项、TypeScript通过。
 - 后续S1：最新引擎VAD双向Town04/05换图及六RGB/深度/预测可视化通过；严格会话进程身份观察与规则worker SIGKILL恢复通过，最新774项Python测试。当前episode9525653911212935787，具体证据见计划尾部。
 - [真实执行阶段](EXECUTION_PROGRESS.md)：加载/推理步数/60秒实景保留倒计时与清理状态已接入，VAD/TCP实际运行、浏览器倒计时及原始数据清理通过；最新786项Python测试和TypeScript通过。
+- [显式跨地图恢复](SCENE_MAP_HANDOFF.md)：本地场景版本的预检、备份、独立确认、后台换图与失败门控；Town04/05双向完整GUI、Audi纹理版本和天气/相机恢复实测通过，最新811项Python测试。当前episode4224606802182015836，桥接PID需运行时检查。
 - [项目包界面](PROJECT_BUNDLE_UI.md)、[迁移命令与不包含项](PROJECT_MIGRATION.md)
 - [预测空间契约](PREDICTION_SPATIAL_CONTRACT.md)
 
 ## 尚不能宣称完成的范围
 
-- 场景恢复目前仅同地图；跨地图恢复需明确破坏当前世界的边界与失败处理，不能暗中load_world。
+- 普通恢复仍为同地图合并；[显式跨地图恢复](SCENE_MAP_HANDOFF.md)已加入本地场景版本入口，Town04/05双向网页恢复通过，失败保留门控并需检查；不代表任意地图、项目ZIP直接跨图或所有引擎故障恢复已验收。
 - 对象纹理版本已验证Audi A2车身和walker.pedestrian.0001裤装槽14；其他型号、任意原厂车色属性、逐笔编辑历史未覆盖。行人需附加studio-pedestrian-slot-material引擎补丁，不能只更新Python。
 - 任意外部Unreal写入、外部CLI或preset进程并不自动受全部会话互斥和崩溃恢复保护。
 - 源资产导入失败保留已创建资产与报告，不是跨引擎/文件系统原子回滚。

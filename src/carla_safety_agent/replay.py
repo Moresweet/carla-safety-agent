@@ -283,7 +283,10 @@ def replay_trajectory(root, run_id, frame, horizon_s=5.0):
         raise ValueError('Index/sample identity mismatch')
     selected=[e for e in entries if abs(float(e['timestamp'])-timestamp)<=horizon_s]
     if len(selected)>2000: raise ValueError('Trajectory window exceeds 2000 samples')
-    history,future=[],[]
+    from .prediction_trajectory import replay_prediction
+    prediction=replay_prediction(metadata,pose)
+    reference=(prediction.get('contract') or {}).get('reference_offset_body_m',[0.,0.,0.])
+    history,future,reference_history,reference_future=[],[],[],[]
     for entry in selected:
         record=json.loads(_indexed_file(path,entry,'frame.json').read_text())
         if record['frame']!=entry['frame'] or float(record['timestamp'])!=float(entry['timestamp']):
@@ -295,6 +298,10 @@ def replay_trajectory(root, run_id, frame, horizon_s=5.0):
         xyz=(inverse @ matrix[:,3])[:3].tolist()
         point={'frame':entry['frame'],'dt_s':dt,'xyz_m':xyz}
         (history if dt<=0 else future).append(point)
+        reference_point=(inverse @ matrix @ np.array([*reference,1.]))[:3].tolist()
+        (reference_history if dt<=0 else reference_future).append({'frame':entry['frame'],'dt_s':dt,'xyz_m':reference_point})
+    prediction.update(reference_history=reference_history,reference_future=reference_future)
     return {'frame':int(frame),'history':history,'future':future,'source':'recorded_ego_pose',
+            'prediction':prediction,
             'coordinates':'current ego CARLA x forward, y right, z up',
             'interpolated':False,'horizon_s':horizon_s}

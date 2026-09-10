@@ -16,6 +16,7 @@ from regression_material_slots import ROOT, request
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--atlas', required=True)
+    parser.add_argument('--fixture', choices=['gas-station','bench'], default='gas-station')
     args = parser.parse_args()
     atlas = Path(args.atlas).resolve()
     assert ROOT/'runs/validation' in atlas.parents and atlas.is_file()
@@ -27,9 +28,10 @@ def main():
     world = client.get_world()
     before = observe_idle(client, world.get_map().name, seconds=1)
     camera = world.get_spectator().get_transform()
-    target = 'SM_GasStation01_13'
+    target = 'SM_Bench01_123' if args.fixture == 'bench' else 'SM_GasStation01_13'
+    category = 'static_props' if args.fixture == 'bench' else 'buildings'
     objects = request('/catalog/objects?'+urllib.parse.urlencode(
-        {'category': 'buildings', 'q': target, 'limit': 200}))['objects']
+        {'category': category, 'q': target, 'limit': 200}))['objects']
     obj = next(o for o in objects if o['name'] == target+'_SM_0')
     catalog = request('/materials/catalog?object_id='+str(obj['id']))
     assert catalog['target'] == target and not catalog['overrides']
@@ -41,7 +43,8 @@ def main():
     try:
         loc = obj['location']
         center = carla.Location(**loc)
-        eye = center + carla.Location(x=-12, y=-12, z=18)
+        eye = center + (carla.Location(x=-2, y=-3, z=1.5) if args.fixture == 'bench'
+                        else carla.Location(x=-12, y=-12, z=18))
         delta = center-eye
         rotation = carla.Rotation(pitch=math.degrees(math.atan2(delta.z, math.hypot(delta.x, delta.y))),
                                   yaw=math.degrees(math.atan2(delta.y, delta.x)))

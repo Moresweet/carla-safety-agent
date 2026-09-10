@@ -229,11 +229,20 @@ try {
   }
   const materialFlag=process.argv.indexOf('--material-name');
   if(materialFlag>=0){
-    const name=process.argv[materialFlag+1];assert(name==='SM_GasStation01_13','Only the verified fixture is supported');
+    const name=process.argv[materialFlag+1];assert(['SM_GasStation01_13','SM_Bench01_123'].includes(name),'Only bounded material fixtures are supported');
     const textureFlag=process.argv.indexOf('--texture');assert(textureFlag>=0);
     const texture=resolve(process.argv[textureFlag+1]);await readFile(texture);
     await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Edit World').click()`);
     for(let i=0;i<100;i++){if(await evaluate(`!!document.querySelector('.catalog-list input')`))break;await delay(200)}
+    if(name==='SM_Bench01_123'){
+      let categoryReady=false;
+      for(let i=0;i<100;i++){
+        categoryReady=await evaluate(`[...document.querySelectorAll('.catalog-groups button')].some(b=>b.querySelector('span')?.textContent==='static props')`);
+        if(categoryReady)break;await delay(200);
+      }
+      assert(categoryReady,'Static props category did not load');
+      await evaluate(`[...document.querySelectorAll('.catalog-groups button')].find(b=>b.querySelector('span')?.textContent==='static props').click()`);
+    }
     await evaluate(`(()=>{const input=document.querySelector('.catalog-list input');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(name)});input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
     let ready=false;
     for(let i=0;i<100;i++){ready=await evaluate(`document.querySelector('.object-inspector h3')?.textContent.startsWith(${JSON.stringify(name)})`);if(ready)break;await delay(200)}
@@ -359,11 +368,44 @@ try {
       if(ready)break;await delay(200);
     }
     assert(ready,'Replay metadata did not load');
+    const replayIndexFlag=process.argv.indexOf('--replay-index');
+    if(replayIndexFlag>=0){
+      const position=Number(process.argv[replayIndexFlag+1]);assert(Number.isInteger(position)&&position>=0);
+      const index=await (await fetch('http://127.0.0.1:8765/datasets/index?run_id='+encodeURIComponent(dataset))).json();
+      assert(position<index.frames.length);
+      const wanted=index.frames[position].frame;
+      await evaluate(`(()=>{const slider=document.querySelector('input[aria-label="回放时间轴"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(slider,${position});slider.dispatchEvent(new Event('input',{bubbles:true}));slider.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+      for(let i=0;i<100;i++){ready=await evaluate(`document.querySelector('[aria-label="真实轨迹与预测对比"]')?.getAttribute('data-frame')===${JSON.stringify(String(wanted))}`);if(ready)break;await delay(200)}
+      assert(ready,'Requested replay frame did not render');
+    }
     const quality=await evaluate(`document.querySelector('[aria-label="回放索引质量"]').textContent`);
     assert(quality.includes('严格递增')&&quality.includes('不等于传感器丢帧数量'));
     const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
     await writeFile(join(output,'replay-quality.png'),Buffer.from(screenshot.data,'base64'));
     interactions.push('recorded_dataset_quality_visible');
+    if(process.argv.includes('--prediction-overlay')||process.argv.includes('--legacy-prediction-no-overlay')||process.argv.includes('--warmup-no-prediction')){
+      let trackText;
+      for(let i=0;i<100;i++){
+        trackText=await evaluate(`document.querySelector('[aria-label="真实轨迹与预测对比"]')?.textContent`);
+        if(trackText&&(trackText.includes('绿色点线')||trackText.includes('不叠加模型预测')))break;
+        await delay(200);
+      }
+      assert(trackText,'Trajectory comparison unavailable');
+      const count=await evaluate(`document.querySelectorAll('[aria-label="真实轨迹与预测对比"] circle[fill="#5de2bc"]').length`);
+      if(process.argv.includes('--prediction-overlay')){
+        assert(count>0&&trackText.includes('不计算 ADE/FDE'),trackText);
+        if(process.argv.includes('--expect-reused'))assert(trackText.includes('复用已有预测'),trackText);
+      }else if(process.argv.includes('--warmup-no-prediction')){
+        assert.equal(count,0);assert(trackText.includes('history warm-up'),trackText);
+      }else{
+        assert.equal(count,0);assert(trackText.includes('Legacy data has no explicit prediction coordinate contract'),trackText);
+      }
+      await evaluate(`document.querySelector('[aria-label="真实轨迹与预测对比"]').scrollIntoView({block:'center'})`);
+      const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      await writeFile(join(output,'prediction-overlay.png'),Buffer.from(shot.data,'base64'));
+      await writeFile(join(output,'prediction-overlay.json'),JSON.stringify({count,trackText},null,2));
+      interactions.push(count?'explicit_prediction_spatial_overlay_without_fake_timing':process.argv.includes('--warmup-no-prediction')?'warmup_does_not_fabricate_prediction':'legacy_prediction_not_silently_promoted');
+    }
     if(process.argv.includes('--depth-diagnostic')){
       await evaluate(`document.querySelector('input[aria-label="RGB点云投影"]').click()`);
       await delay(100);

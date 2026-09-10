@@ -253,7 +253,7 @@ class SensorCapture:
             raise ValueError('Frame must be a non-negative integer')
         return self.process({}, None, control, frame_id=frame)
 
-    def process(self, input_data, agent, control, frame_id=None):
+    def process(self, input_data, agent, control, frame_id=None, *, planning=None):
         if self.closed:
             return
         req = self.request()
@@ -301,6 +301,13 @@ class SensorCapture:
             control={n: float(getattr(control, n)) for n in ('steer', 'throttle', 'brake')},
             ego={'id': self.ego.id, 'matrix': transform.get_matrix(), 'velocity': vars_vector(self.ego.get_velocity())})
         metadata['trajectory_ego_m'] = safe(outputs.get('plan', [outputs[k] for k in ('wp_1', 'wp_2', 'wp_3', 'wp_4') if k in outputs]))
+        planning=planning or {}
+        metadata['planning_outputs'] = safe(planning.get('outputs'))
+        metadata['planning_anchor'] = safe(planning.get('anchor'))
+        metadata['planning_observed_calls'] = planning.get('calls',0)
+        metadata['planning_warmup_steps'] = planning.get('warmup_steps')
+        from .prediction_trajectory import capture_prediction
+        metadata['prediction'] = capture_prediction(agent,metadata)
         # Keep lightweight live previews atomic. Recording remains full resolution.
         generation = self.live/'frames'/str(frame)
         generation.mkdir(parents=True, exist_ok=True)

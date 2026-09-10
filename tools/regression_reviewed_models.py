@@ -14,13 +14,18 @@ def main():
     parser.add_argument('--capture', action='store_true')
     parser.add_argument('--description', default='Town04 前车急刹，自车 5 m/s')
     parser.add_argument('--require-generated-assets', action='store_true')
+    parser.add_argument('--require-prediction-contract',action='store_true')
     args=parser.parse_args()
+    if args.require_prediction_contract and not args.capture:
+        parser.error('--require-prediction-contract requires --capture')
     assert request('system/preflight')['ready']
     assert request('batches/scheduler')['scheduler']['state']!='running'
     rows=[]
     output=ROOT/'runs/validation'/('reviewed-models-'+uuid.uuid4().hex+'.json')
     for model in args.models:
-        plan=request('scenario/compile',{'description':args.description,'max_duration_s':1})
+        duration=3 if args.require_prediction_contract and model=='admlp' else 1
+        prediction_counts={'warmup':0,'fresh':0,'reused':0}
+        plan=request('scenario/compile',{'description':args.description,'max_duration_s':duration})
         if args.require_generated_assets:
             from pathlib import Path
             document=json.loads(Path(plan['scenario_path']).read_text())
@@ -46,6 +51,26 @@ def main():
         assert bool(captures)==args.capture, 'Capture toggle not honored'
         for dataset in captures:
             subprocess.run([sys.executable,str(ROOT/'tools/validate_capture_dataset.py'),str(dataset)],check=True)
+            if args.require_prediction_contract:
+                from carla_safety_agent.prediction_trajectory import replay_prediction
+                entries=json.loads((dataset/'index.json').read_text())['frames']
+                assert entries
+                for entry in entries:
+                    metadata=json.loads((dataset/entry['path']/'frame.json').read_text())
+                    prediction=replay_prediction(metadata,metadata['ego']['matrix'])
+                    if prediction.get('source_state')=='warmup':
+                        assert model in ('tcp','admlp')
+                        warmup=metadata['prediction']
+                        assert 0<=metadata['model_step']<warmup['required_history_steps']
+                        assert metadata['planning_observed_calls']==0 and metadata['planning_anchor'] is None
+                        prediction_counts['warmup']+=1
+                        continue
+                    assert prediction['state']=='available',prediction
+                    assert prediction['points'] and prediction['timing_verified'] is False
+                    prediction_counts['reused' if prediction['reused'] else 'fresh']+=1
+                assert prediction_counts['fresh']>0,'Only warm-up was exercised; no real planning output'
+                if model=='admlp':
+                    assert prediction_counts['fresh']>=2 and prediction_counts['reused']>0
         import carla
         client=carla.Client('127.0.0.1',2000);client.set_timeout(10)
         world=client.get_world()
@@ -57,8 +82,10 @@ def main():
             assert resources['state']=='recovered'
             assert sum(row['type_id']=='static.prop.mesh' for row in resources['actors']) == sum(asset['count'] for asset in document['generated_assets'])
         rows.append({'model':model,'execution_id':execution,'capture_requested':args.capture,
+                     'prediction_spatial_contract_verified':args.require_prediction_contract,
+                     'duration_s':duration,'prediction_frames':prediction_counts,
                      'captures':[str(p) for p in captures],'cleanup_verified':True})
-        output.write_text(json.dumps({'scope':'One-second native reviewed-plan routing, capture and cleanup; not driving quality','runs':rows},indent=2))
+        output.write_text(json.dumps({'scope':'Short native reviewed-plan routing, capture and cleanup; ADMLP prediction probe is 3s to exceed warm-up; not driving quality','runs':rows},indent=2))
         print(json.dumps({'model':model,'state':'verified','report':str(output)}),flush=True)
 
 

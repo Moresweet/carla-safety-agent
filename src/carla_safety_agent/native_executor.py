@@ -187,6 +187,8 @@ class NativeScenarioExecutor:
             if os.environ.get('CSA_SENSOR_CAPTURE') == '1':
                 from .sensor_capture import SensorCapture
                 capture = SensorCapture(world, ego, sensor_specs, os.environ['CSA_EVALUATION_CONTROL_DIR'], scenario=spec.to_dict(), client=client, journal=journal)
+            from .planning_observation import PlanningObservation
+            planning_observation=PlanningObservation(agent) if capture else None
             rig.warmup()
             self._focus_spectator(carla, world, ego)
             world.tick()
@@ -200,10 +202,13 @@ class NativeScenarioExecutor:
                 sensor_data = agent.sensor_interface.get_data(frame)
                 elapsed = (step + 1) * settings.fixed_delta_seconds
                 exact_input = {k: (v[0], v[1].copy() if hasattr(v[1], 'copy') else v[1]) for k, v in sensor_data.items()} if capture else None
-                control = agent.run_step(sensor_data, elapsed)
+                control = (planning_observation.run_step(sensor_data,elapsed,frame=frame,
+                           timestamp=world.get_snapshot().timestamp.elapsed_seconds,
+                           ego_matrix=ego.get_transform().get_matrix()) if capture
+                           else agent.run_step(sensor_data, elapsed))
                 if capture:
                     try:
-                        capture.process(exact_input, agent, control)
+                        capture.process(exact_input, agent, control,planning=planning_observation.snapshot())
                     except Exception as exc:
                         print(f'Recording failed, model remains running: {exc}', flush=True)
                         capture.error = str(exc)

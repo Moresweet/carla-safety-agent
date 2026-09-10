@@ -1,6 +1,7 @@
 "use client";
 import {useRef,useState} from 'react';
 import BundleRestorePanel from './BundleRestorePanel';
+import BundleRegistrationPanel from './BundleRegistrationPanel';
 const bridge='http://127.0.0.1:8765';
 type Bundle={bundle_id:string;archive:string;download_url:string;scenes:{scene_id:string;name:string;history:string[]}[];manifest:{files:Record<string,unknown>;dependencies:{maps:string[];blueprints:string[];material_slots:unknown[];generated_asset_sources?:Record<string,string>;model_ids?:string[]}}};
 type Diagnostic={bundle_id:string;observed_at:number;episode:string;current_map:string;all_declared_dependencies_available:boolean;checks:{kind:string;reference:string|string[];state:string;reason?:string}[]};
@@ -30,6 +31,11 @@ export default function ProjectBundlePanel({sceneId}:{sceneId:string}){
   finally{active.current=false;setBusy(false)}
  }
  const dependencies=bundle?.manifest.dependencies;
+ async function openRegistered(id:string){
+  setBusy(true);setError('');
+  try{const r=await fetch(bridge+'/projects/bundle?bundle_id='+encodeURIComponent(id)),v=await r.json() as Bundle&{error?:string};if(!r.ok)throw Error(v.error??'新项目包不可用');setBundle(v);setDiagnostic(null);setConfirmed(false);setStatus('已打开新注册引用的项目包；实景未修改，仍需单独预览并确认恢复。')}
+  catch(e){setError(String(e))}finally{setBusy(false)}
+ }
  return <section aria-label="项目打包迁移" className="bundle-panel">
   <h2>项目包 · 导出与隔离导入</h2>
   <p>导出上方选中场景的全部保存版本和引用纹理，可附带精准材质预览、已登记 Blender 源文件及模型文件校验引用。不包含权重、采集数据、源码、Unreal 编译资产或 Python/CUDA 环境。</p>
@@ -62,7 +68,8 @@ export default function ProjectBundlePanel({sceneId}:{sceneId:string}){
    <p>隔离导入只创建 data/imported-projects 下的新目录，不覆盖当前项目、不执行包中脚本、不切换地图。包中源资产仍须显式导入 Unreal。</p>
    <label><input type="checkbox" checked={confirmed} disabled={busy} onChange={e=>setConfirmed(e.target.checked)}/>确认创建隔离项目目录，不直接恢复实景</label>
    <button disabled={busy||!confirmed} onClick={()=>void execute('/projects/bundle/import',JSON.stringify({bundle_id:bundle.bundle_id,confirmed:true}))}>隔离导入已检查项目包</button>
-   <BundleRestorePanel key={bundle.bundle_id} bundleId={bundle.bundle_id} scenes={bundle.scenes} disabled={busy} onBusy={setBusy}/>
+   {!!Object.keys(dependencies.generated_asset_sources??{}).length&&<BundleRegistrationPanel key={'register:'+bundle.bundle_id} bundleId={bundle.bundle_id} count={Object.keys(dependencies.generated_asset_sources??{}).length} disabled={busy} onBusy={setBusy} onRegistered={id=>void openRegistered(id)}/>}
+   <BundleRestorePanel key={'restore:'+bundle.bundle_id} bundleId={bundle.bundle_id} scenes={bundle.scenes} disabled={busy} onBusy={setBusy}/>
   </div>}
  </section>;
 }

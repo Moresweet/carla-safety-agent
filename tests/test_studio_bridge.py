@@ -29,6 +29,26 @@ def test_focus_never_draws_native_debug_shapes_into_sensor_images():
                        for n in ast.walk(function)), function.name
 
 
+def test_task_start_does_not_queue_behind_long_asset_operation():
+    import threading
+    from functools import wraps
+    lock=threading.RLock();held=threading.Event();release=threading.Event()
+    def owner():
+        with lock:held.set();release.wait(5)
+    thread=threading.Thread(target=owner);thread.start();assert held.wait(2)
+    try:
+        env=functions('simulation_operation',wraps=wraps,_simulation_lock=lock)
+        def start_e2e():pytest.fail('Queued task unexpectedly executed')
+        with pytest.raises(ValueError,match='still running'):env['simulation_operation'](start_e2e)()
+    finally:release.set();thread.join(2)
+
+
+def test_native_asset_registration_blocks_model_start_before_other_access():
+    def busy():raise ValueError('native import active')
+    env=functions('start_e2e',SESSION=SimpleNamespace(existing_batch_request=lambda _:None),require_asset_import_idle=busy)
+    with pytest.raises(ValueError,match='native import active'):env['start_e2e']({'action':'run'})
+
+
 def test_corrupt_origin_store_refuses_editor_spawn_before_native_mutation():
     def fail(_): raise ValueError('Corrupt provenance')
     env=functions('_spawn_editor_object',connect_world=lambda:SimpleNamespace(id=1),

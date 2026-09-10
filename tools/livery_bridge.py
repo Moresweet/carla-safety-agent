@@ -31,6 +31,7 @@ from carla_safety_agent.blender_pipeline import BlenderPipeline
 from carla_safety_agent.dataset import list_datasets
 from carla_safety_agent.quality_service import QualityService
 from carla_safety_agent.recovery_service import RecoveryService
+from carla_safety_agent.bundle_registration_service import BundleRegistrationService,native_import_busy
 from carla_safety_agent.provenance import ActorProvenance
 from carla_safety_agent.uv_audit import audit_uv
 from carla_safety_agent.replay import replay_index, replay_file, replay_projection, replay_trajectory, replay_events, replay_editor_events, replay_boxes
@@ -80,6 +81,11 @@ def simulation_operation(function):
     """Drain editor RPC operations before handing the world to an evaluator."""
     @wraps(function)
     def guarded(*args, **kwargs):
+        if function.__name__ in ('start_e2e','start_bundle_registration'):
+            if not _simulation_lock.acquire(blocking=False):
+                raise ValueError('A scene or asset operation is still running; wait before starting another task')
+            try:return function(*args,**kwargs)
+            finally:_simulation_lock.release()
         with _simulation_lock:
             return function(*args, **kwargs)
     return guarded
@@ -92,6 +98,7 @@ _world_episode = None
 _provenance = ActorProvenance(PROJECT_ROOT / '.runtime/actor-provenance.json')
 from carla_safety_agent.bundle_workbench import BundleWorkbench
 BUNDLES = BundleWorkbench(PROJECT_ROOT)
+BUNDLE_REGISTRATION = BundleRegistrationService(BUNDLES,lambda:require_registration_idle())
 from carla_safety_agent.bundle_restore_review import RestoreReviews
 BUNDLE_RESTORE_REVIEWS = RestoreReviews()
 _uv_audit = audit_uv(PROJECT_ROOT / 'tools/livery-designer/public')
@@ -288,6 +295,28 @@ def _abort_e2e_start(process, error):
         threading.Thread(target=_finish_e2e, args=(process,), daemon=True).start()
 
 
+def require_registration_idle():
+    if evaluation_active() or BATCH_SERVICE.status().get('state')=='running':
+        raise ValueError('Stop model/capture execution and the batch scheduler before importing assets')
+
+
+def require_asset_import_idle():
+    if BUNDLE_REGISTRATION.active is not None or native_import_busy(PROJECT_ROOT):
+        raise ValueError('Native asset registration is still active; wait for its recorded outcome')
+
+
+@simulation_operation
+def start_bundle_registration(data):
+    return {'ok':True,**BUNDLE_REGISTRATION.start(data)}
+
+
+@simulation_operation
+def import_blender_asset(data):
+    require_registration_idle()
+    require_asset_import_idle()
+    return BLENDER.import_to_carla(str(data['job_id']),data.get('name'))
+
+
 def collection_request(data):
     if data.get('recording') and not evaluation_active():
         raise RuntimeError('请先启动独立采集或闭环测试')
@@ -335,6 +364,7 @@ def start_e2e(data: dict) -> dict:
     if existing is not None:
         return {'ok': True, 'replayed': True, 'execution_id': existing['run_id'],
                 'session': existing, 'job': {'state': existing['state'], 'kind': existing['kind']}}
+    require_asset_import_idle()
     action = str(data.get("action", "doctor"))
     if action not in ("doctor", "model-smoke", "run", "preset-run", "sensor-rig", "rule-run"):
         raise RuntimeError(f"Unknown UniAD action: {action}")
@@ -2107,6 +2137,13 @@ class Handler(BaseHTTPRequestHandler):
             self._headers()
             self.wfile.write(json.dumps(result).encode())
             return
+        if request.path == '/projects/bundle/registration':
+            try:
+                result=BUNDLE_REGISTRATION.status(params.get('request_id',[''])[0])
+                self._headers();self.wfile.write(json.dumps({'ok':True,**result}).encode())
+            except (ValueError,OSError) as exc:
+                self._headers(400);self.wfile.write(json.dumps({'ok':False,'error':str(exc)}).encode())
+            return
         if request.path in ('/datasets/quality','/datasets/recovery'):
             try:
                 result = (QUALITY.status(params.get('run_id', [''])[0]) if request.path=='/datasets/quality'
@@ -2290,7 +2327,7 @@ class Handler(BaseHTTPRequestHandler):
         request = urlparse(self.path)
         if request.path not in ("/apply", "/apply/road", "/apply/building",
                                 '/projects/bundle/export','/projects/bundle/upload','/projects/bundle/import','/projects/bundle/doctor',
-                                '/projects/bundle/restore-preview','/projects/bundle/restore-confirm',
+                                '/projects/bundle/restore-preview','/projects/bundle/restore-confirm','/projects/bundle/registration',
                                 '/batches/create', '/datasets/quality', '/datasets/recovery',
                                 '/batches/control',
                                 '/batches/scheduler',
@@ -2325,6 +2362,8 @@ class Handler(BaseHTTPRequestHandler):
                 result=BUNDLES.import_isolated(json.loads(payload or b'{}'))
             elif request.path == '/projects/bundle/doctor':
                 result=diagnose_bundle(json.loads(payload or b'{}'))
+            elif request.path == '/projects/bundle/registration':
+                result=start_bundle_registration(json.loads(payload or b'{}'))
             elif request.path == '/projects/bundle/restore-preview':
                 result=preview_bundle_restore(json.loads(payload or b'{}'))
             elif request.path == '/projects/bundle/restore-confirm':
@@ -2388,7 +2427,7 @@ class Handler(BaseHTTPRequestHandler):
                 result = BLENDER.run(data)
             elif request.path == "/blender/import":
                 data = json.loads(payload or b"{}")
-                result = BLENDER.import_to_carla(str(data["job_id"]), data.get("name"))
+                result = import_blender_asset(data)
             elif request.path == "/blender/spawn":
                 data = json.loads(payload or b"{}")
                 result = spawn_object(str(data["blueprint_id"]), data.get("transform", {}))

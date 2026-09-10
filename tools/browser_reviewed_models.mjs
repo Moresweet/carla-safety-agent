@@ -122,7 +122,39 @@ try {
     await evaluate(`document.querySelector('.bundle-panel').scrollIntoView({block:'start'})`);
     const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
     await writeFile(join(output,'project-bundle.png'),Buffer.from(shot.data,'base64'));
-    let restoreStatus=null;
+    let restoreStatus=null,registeredBundleId=null;
+    if(process.argv.includes('--bundle-register')){
+      assert(process.argv.includes('--bundle-sources'),'Registration test requires source packaging');
+      await evaluate(`document.querySelector('[aria-label="项目包源资产注册"]').scrollIntoView({block:'center'})`);
+      assert(await evaluate(`document.querySelector('[aria-label="项目包源资产注册"] button').disabled`));
+      await evaluate(`document.querySelector('[aria-label="确认注册项目包源资产"]').click()`);await delay(100);
+      await evaluate(`document.querySelector('[aria-label="项目包源资产注册"] button').click()`);
+      let registration;
+      for(let i=0;i<1200;i++){
+        const requestId=await evaluate(`sessionStorage.getItem('bundle-registration:'+${JSON.stringify(uploadedId)})`);
+        if(requestId){
+          const r=await fetch('http://127.0.0.1:8765/projects/bundle/registration?request_id='+requestId);
+          registration=await r.json();
+          assert(registration.state!=='needs_attention',JSON.stringify(registration));
+          if(registration.state==='registered')break;
+        }
+        const error=await evaluate(`document.querySelector('[aria-label="项目包源资产注册"] [role=alert]')?.textContent`);
+        assert(!error,error);await delay(500);
+      }
+      assert.equal(registration?.state,'registered','Native registration did not finish');
+      await writeFile(join(output,'bundle-registration-report.json'),JSON.stringify(registration,null,2));
+      registeredBundleId=registration.output_bundle_id;
+      let open=false;
+      for(let i=0;i<50;i++){open=await evaluate(`[...document.querySelectorAll('[aria-label="项目包源资产注册"] button')].some(b=>b.textContent==='打开已注册的新项目包'&&!b.disabled)`);if(open)break;await delay(200)}
+      assert(open,'New registered package action unavailable');
+      const registered=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      await writeFile(join(output,'bundle-registration-completed.png'),Buffer.from(registered.data,'base64'));
+      await evaluate(`[...document.querySelectorAll('[aria-label="项目包源资产注册"] button')].find(b=>b.textContent==='打开已注册的新项目包').click()`);
+      let opened=false;
+      for(let i=0;i<50;i++){opened=await evaluate(`document.querySelector('.bundle-panel a')?.href.includes(${JSON.stringify(registeredBundleId)})`);if(opened)break;await delay(200)}
+      assert(opened,'New remapped package was not opened');
+      interactions.push('confirmed_native_source_registration_opened_new_remapped_package');
+    }
     if(process.argv.includes('--bundle-restore')){
       await evaluate(`[...document.querySelectorAll('[aria-label="项目包实景恢复"] button')].find(b=>b.textContent==='预览实景恢复范围').click()`);
       let ready=false;
@@ -141,7 +173,7 @@ try {
       await writeFile(join(output,'bundle-restore-completed.png'),Buffer.from(restored.data,'base64'));
       interactions.push('reviewed_confirmed_same_map_world_restore_with_baseline_backup');
     }
-    await writeFile(join(output,'bundle-report.json'),JSON.stringify({sceneId,exportedId,uploadedId,imported,diagnostic,restoreStatus},null,2));
+    await writeFile(join(output,'bundle-report.json'),JSON.stringify({sceneId,exportedId,uploadedId,registeredBundleId,imported,diagnostic,restoreStatus},null,2));
     interactions.push('saved_scene_export_uploaded_validated_and_explicitly_imported_to_isolated_directory');
   }
   if(process.argv.includes('--idle-controls')){

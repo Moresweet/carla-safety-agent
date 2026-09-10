@@ -52,3 +52,21 @@ def test_stale_cancel_cannot_cancel_new_scheduler_for_same_batch():
         assert not service.cancelled.is_set()
     finally:
         release.set(); service.worker.join(3)
+
+
+@pytest.mark.parametrize('phase',['construct','start'])
+def test_thread_launch_failure_is_not_a_permanent_running_scheduler(monkeypatch,phase):
+    service=BatchService(lambda batch:{'action':'paused'})
+    def fail(*args,**kwargs):raise RuntimeError('controlled thread allocation failure')
+    with monkeypatch.context() as patch:
+        if phase=='construct':patch.setattr(threading,'Thread',fail)
+        else:patch.setattr(threading.Thread,'start',fail)
+        with pytest.raises(RuntimeError,match='allocation failure'):service.start('batch1')
+    status=service.status()
+    assert status['state']=='needs_attention'
+    assert status['ended_at']>=status['started_at']
+    assert status['failure_phase']=='scheduler_launch'
+    assert 'allocation failure' in status['error']
+    assert service.worker is None
+    service.start('batch1');service.worker.join(3)
+    assert service.status()['state']=='paused'

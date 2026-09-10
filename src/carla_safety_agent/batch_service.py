@@ -29,8 +29,20 @@ class BatchService:
             self.record = {'state': 'running', 'batch_id': batch_id,
                            'scheduler_id': uuid.uuid4().hex,
                            'started_at': time.time(), 'last_step': None}
-            self.worker = threading.Thread(target=self._run, args=(batch_id,), daemon=True)
-            self.worker.start()
+            self.worker = None
+            try:
+                self.worker = threading.Thread(target=self._run, args=(batch_id,), daemon=True)
+                self.worker.start()
+            except Exception as exc:
+                # A failed allocation must not strand every later operation
+                # behind a scheduler that says running but has no worker.
+                self.record.update(error=str(exc), failure_phase='scheduler_launch')
+                if self.worker is None or not self.worker.is_alive():
+                    self.worker = None
+                    self.record.update(state='needs_attention', ended_at=time.time())
+                # If an unusual start implementation launched before raising,
+                # retain ownership and the running gate until that worker exits.
+                raise
             return copy.deepcopy(self.record)
 
     def cancel(self, batch_id, scheduler_id):

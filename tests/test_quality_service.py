@@ -37,6 +37,14 @@ def test_recording_and_escape_rejected(tmp_path):
         service.start('../capture-a')
 
 
+def test_recovered_capture_can_be_reaudited_but_pending_cannot(tmp_path):
+    service,_=make_service(tmp_path,'saved_recovered')
+    with patch('threading.Thread.start'):
+        assert service.start('capture-a')['state']=='running'
+    pending,_=make_service(tmp_path/'pending','recovery_pending')
+    with pytest.raises(ValueError,match='saved'):pending.start('capture-a')
+
+
 def test_changed_manifest_and_audit_failure_are_incomplete(tmp_path):
     service, path = make_service(tmp_path)
     def mutate(*args):

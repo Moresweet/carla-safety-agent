@@ -403,7 +403,7 @@ try {
   const datasetFlag=process.argv.indexOf('--dataset');
   if(datasetFlag>=0){
     const dataset=process.argv[datasetFlag+1];
-    assert(/^capture-[A-Za-z0-9-]+$/.test(dataset),'Expected a capture dataset ID');
+    assert(/^(capture-[A-Za-z0-9-]+|recovered-[a-f0-9]{32})$/.test(dataset),'Expected a capture dataset ID');
     await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Collect Data').click()`);
     let ready=false;
     for(let i=0;i<100;i++){
@@ -417,6 +417,11 @@ try {
       if(ready)break;await delay(200);
     }
     assert(ready,'Replay metadata did not load');
+    if(dataset.startsWith('recovered-')){
+      const warning=await evaluate(`document.querySelector('[aria-label="中断采集恢复提示"]')?.textContent`);
+      assert(warning?.includes('不是完整录制')&&warning.includes('原始目录保留'));
+      interactions.push('recovered_subset_warning_visible');
+    }
     const replayIndexFlag=process.argv.indexOf('--replay-index');
     if(replayIndexFlag>=0){
       const position=Number(process.argv[replayIndexFlag+1]);assert(Number.isInteger(position)&&position>=0);

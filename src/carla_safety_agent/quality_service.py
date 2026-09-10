@@ -41,7 +41,7 @@ class QualityService:
         manifest = json.loads((path / 'manifest.json').read_text())
         if manifest.get('run_id') != run_id:
             raise ValueError('Dataset identity mismatch')
-        if manifest.get('status') not in ('saved', 'saved_limit', 'saved_cleanup_error'):
+        if manifest.get('status') not in ('saved', 'saved_limit', 'saved_cleanup_error', 'saved_recovered'):
             raise ValueError('Only saved captures can be audited')
         if manifest.get('schema_version') != 'carla-safety-dataset/0.2':
             raise ValueError('Legacy captures do not contain the unified sensor contract')

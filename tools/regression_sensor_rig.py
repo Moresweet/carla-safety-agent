@@ -48,9 +48,12 @@ def main():
         displacement = sum((last['ego']['matrix'][axis][3]-first['ego']['matrix'][axis][3])**2 for axis in range(3))**.5
         if args.mode=='autopilot':
             assert displacement > .5, 'Rule-driving vehicle did not move'
-        if args.mode in ('stationary','manual'):
-            from carla_safety_agent.owned_resources import read_resources,resource_path
-            assert read_resources(resource_path(ROOT/'data',execution_id),status)['state']=='recovered'
+        from carla_safety_agent.owned_resources import read_resources,resource_path
+        resources=read_resources(resource_path(ROOT/'data',execution_id),status)
+        assert resources['state']=='recovered'
+        if args.mode=='autopilot':
+            from carla_safety_agent.traffic_manager_ownership import require_stopped_manager
+            require_stopped_manager(resources['traffic_manager'])
         import carla
         client=carla.Client('127.0.0.1',2000); client.set_timeout(5)
         world=client.get_world()

@@ -12,6 +12,7 @@ from carla_safety_agent.sensor_capture import SensorCapture, atomic_json
 from carla_safety_agent.session import SessionJournal
 from carla_safety_agent.manual_control import current_control
 from carla_safety_agent.owned_resources import journal_from_environment
+from carla_safety_agent.traffic_manager_ownership import acquire_local_manager, require_unused_port
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -35,8 +36,8 @@ def main():
     previous = world.get_settings()
     if previous.synchronous_mode: raise RuntimeError('Another synchronous owner is already active')
     journal = journal_from_environment(world)
-    if journal is not None and args.mode == 'autopilot':
-        raise RuntimeError('Autopilot resource recovery requires Traffic Manager ownership support')
+    if args.mode == 'autopilot':
+        require_unused_port(8050)
     ego = capture = manager = None
     stopped = False
     def stop(signum, frame):
@@ -60,7 +61,9 @@ def main():
         if journal:
             journal.register(ego)  # ego remains reachable by finally if fsync fails.
         if args.mode == 'autopilot':
-            manager = client.get_trafficmanager(8050)
+            manager, manager_record = acquire_local_manager(client,8050)
+            if journal:
+                journal.register_manager(manager_record)
             manager.set_synchronous_mode(True)
             manager.set_random_device_seed(42)
             ego.set_autopilot(True,8050)

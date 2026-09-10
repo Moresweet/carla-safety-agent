@@ -61,6 +61,15 @@ class OwnedResourceJournal:
         self.document['actors'].append(entry)
         durable_write(self.path, self.document)
 
+    def register_manager(self, record):
+        from .traffic_manager_ownership import validate_manager_record
+        validate_manager_record(record)
+        previous=self.document.get('traffic_manager')
+        if previous is not None and previous!=record:
+            raise ValueError('Traffic Manager ownership changed')
+        self.document['traffic_manager']=json.loads(json.dumps(record))
+        durable_write(self.path,self.document)
+
 
 class OwnedActors(list):
     def __init__(self, journal=None):
@@ -127,6 +136,9 @@ def read_resources(path, session):
                 not re.fullmatch(r'[A-Za-z0-9_.-]{1,200}', row['type_id'])):
             raise ValueError('Invalid owned actor identity')
         ids.add(row['id'])
+    if 'traffic_manager' in document:
+        from .traffic_manager_ownership import validate_manager_record
+        validate_manager_record(document['traffic_manager'])
     return document
 
 
@@ -169,6 +181,9 @@ def recover_owned_resources(root, session, client, carla, *, observe=observed_pr
     for actor in world.get_actors(list(ids)):
         if actor.id not in expected or actor.type_id != expected[actor.id]:
             raise RuntimeError('Owned actor type changed; refusing all mutations')
+    if 'traffic_manager' in document:
+        from .traffic_manager_ownership import require_stopped_manager
+        require_stopped_manager(document['traffic_manager'])
     ordered = sorted(rows, key=lambda row: not row['type_id'].startswith('sensor.'))
     if ordered:
         responses = client.apply_batch_sync([carla.command.DestroyActor(row['id']) for row in ordered], False)

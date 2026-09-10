@@ -18,7 +18,7 @@ from regression_material_slots import ROOT, request
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--sensor-rig-mode', choices=('stationary', 'manual'))
+    parser.add_argument('--sensor-rig-mode', choices=('stationary', 'manual', 'autopilot'))
     args = parser.parse_args()
     assert request('/system/preflight')['ready']
     assert request('/batches/scheduler')['scheduler']['state'] != 'running'
@@ -56,6 +56,8 @@ def main():
         else:
             raise TimeoutError('Owned worker did not reach a captured frame')
         owner = session['process']
+        if args.sensor_rig_mode=='autopilot':
+            assert document.get('traffic_manager',{}).get('port')==8050, 'Traffic Manager ownership was not recorded'
         pid = owner['pid']
         assert observed_process_identity(pid) == owner, 'Worker identity changed'
         command = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
@@ -88,6 +90,9 @@ def main():
         assert session['returncode'] == -signal.SIGKILL, session
         recovered = read_resources(path, session)
         assert recovered['state'] == 'recovered'
+        if args.sensor_rig_mode=='autopilot':
+            from carla_safety_agent.traffic_manager_ownership import require_stopped_manager
+            require_stopped_manager(recovered['traffic_manager'])
         client = carla.Client('127.0.0.1', 2000)
         client.set_timeout(10)
         health = observe_idle(client, document['map'])

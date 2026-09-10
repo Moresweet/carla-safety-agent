@@ -89,6 +89,33 @@ def test_existing_journal_never_overwritten(tmp_path):
     assert journal.path.read_bytes() == original
 
 
+@pytest.mark.parametrize('listener_alive',[False,True])
+def test_manager_listener_must_be_gone_before_any_actor_deletion(tmp_path,monkeypatch,listener_alive):
+    journal,world,actors,client,carla,session,calls=setup(tmp_path)
+    record={'port':8050,'listener_inodes':[1234],'scope':'worker_local_listener'}
+    journal.register_manager(record)
+    record['listener_inodes'].append(999)
+    assert json.loads(journal.path.read_text())['traffic_manager']['listener_inodes']==[1234]
+    def check(actual):
+        assert actual['listener_inodes']==[1234]
+        if listener_alive:raise RuntimeError('listener remains')
+    monkeypatch.setattr('carla_safety_agent.traffic_manager_ownership.require_stopped_manager',check)
+    if listener_alive:
+        with pytest.raises(RuntimeError,match='listener remains'):
+            recover_owned_resources(tmp_path,session,client,carla,observe=lambda _:None)
+        assert not calls
+    else:
+        assert recover_owned_resources(tmp_path,session,client,carla,observe=lambda _:None)['state']=='recovered'
+        assert calls==[([11,10],False)]
+
+
+def test_manager_registration_rejects_changed_owner(tmp_path):
+    journal,*_=setup(tmp_path)
+    journal.register_manager({'port':8050,'listener_inodes':[1234],'scope':'worker_local_listener'})
+    with pytest.raises(ValueError,match='ownership changed'):
+        journal.register_manager({'port':8050,'listener_inodes':[5678],'scope':'worker_local_listener'})
+
+
 @pytest.mark.parametrize('unsafe', [None, 'alive_actor', 'synchronous', 'failed_worker'])
 def test_legacy_format_only_observes_successful_clean_exit(tmp_path, unsafe):
     journal, world, actors, client, carla, session, calls = setup(tmp_path)

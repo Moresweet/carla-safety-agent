@@ -4,7 +4,9 @@
 
 目前覆盖原生执行器持有的车辆、交互对象、模型传感器和统一采集辅助传感器，以及静止/人工独立采集的车辆和传感器。独立采集在车辆控制前登记车辆，SensorCapture 接收同一个日志；登记写盘失败仍保留本进程车辆引用用于清理。车辆销毁使用不触发tick的精确ID批量应答，不依赖刚创建对象的客户端快照。
 
-Traffic Manager 自动驾驶采集、规则驾驶及外部 Leaderboard 任务尚未接入该持久化清单，不能把本能力外推给它们。其正常清理仍保留；日志不伪造 Traffic Manager 所有权。未来接入需覆盖自动驾驶注销、服务状态及进程终止顺序，不能仅删除车辆就声称全部恢复。
+Traffic Manager 自动驾驶采集现使用专用8050端口：改变世界设置前检查端口空闲，获取服务后以 Linux `/proc` 监听 socket 与本进程文件描述符交集证明服务归本进程所有，再持久化记录，之后才设置同步和注册车辆。端口被占用、无法读取身份或验证失败时拒绝继续。正常退出注销车辆并清理；进程异常退出后，恢复前要求该端口完全没有监听者，端口被其他进程复用也拒绝恢复。恢复过程不调用 get_trafficmanager，不创建替代服务或重置其他服务。
+
+规则驾驶及外部 Leaderboard 任务尚未接入该持久化清单，不能把本能力外推给它们。跨网络命名空间与非 Linux 环境也不在此所有权证明的范围内。
 
 恢复条件：
 
@@ -22,6 +24,8 @@ Traffic Manager 自动驾驶采集、规则驾驶及外部 Leaderboard 任务尚
 
 故障验收工具 `tools/regression_worker_crash_recovery.py` 仅终止它自己通过工作台创建并重复核对身份的 AD-MLP 测试进程，不终止模拟器。测试记录保存于 runs/validation，录制中断的数据不因此自动变为完整数据集。
 
-该工具也支持 `--sensor-rig-mode stationary` 或 `manual`，仅终止自己启动且命令行、执行ID、PID启动身份均匹配的独立采集进程；不会发送人工驾驶油门。正常退出可用 `regression_sensor_rig.py --mode stationary` 验证原始数据和资源日志恢复状态。
+该工具也支持 `--sensor-rig-mode stationary`、`manual` 或 `autopilot`，仅终止自己启动且命令行、执行ID、PID启动身份均匹配的独立采集进程；不会发送人工驾驶油门。正常退出可用 `regression_sensor_rig.py --mode stationary` 验证原始数据和资源日志恢复状态。
+
+自动驾驶采集实测：正常120帧/40样本通过（sensor-rig-91dee10b18934f368530860594de677e.json）；随后独有进程 SIGKILL，16个登记对象清理、8050端口关闭、同episode异步推进通过（worker-crash-recovery-71be1f4042374407a50f253c56127fb0.json），实验保留failed/-9；再次启动120帧/40样本通过（sensor-rig-ab7c840018514bd79fad40788e22a293.json）。这是工作进程故障，不是模拟器崩溃验收。
 
 2026-09-10：新格式正常退出、主动停止与一次录制中 SIGKILL 的实机恢复通过。强杀报告 worker-crash-recovery-7bf3c4daaee04ebaa7152cc7ce6d37b4.json，21个已登记对象无残留，同episode恢复异步并持续推进。此处不声明全部故障矩阵完成。

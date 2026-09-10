@@ -95,8 +95,8 @@ try {
       await enter(wanted);await delay(100);
       let updateRequests=0,injected=false;
       await cdp('Network.enable');
-      socket.addEventListener('message',event=>{const value=JSON.parse(event.data);if(value.method==='Network.requestWillBeSent'&&value.params.request.method==='POST'&&value.params.request.url.endsWith('/objects/update'))updateRequests++});
-      await cdp('Fetch.enable',{patterns:[{urlPattern:'*://127.0.0.1:8765/objects/update',requestStage:'Request'}]});
+      socket.addEventListener('message',event=>{const value=JSON.parse(event.data);if(value.method==='Network.requestWillBeSent'&&value.params.request.method==='POST'&&value.params.request.url.endsWith('/objects/update-reviewed'))updateRequests++});
+      await cdp('Fetch.enable',{patterns:[{urlPattern:'*://127.0.0.1:8765/objects/update-reviewed',requestStage:'Request'}]});
       const intercept=async event=>{const value=JSON.parse(event.data);if(value.method!=='Fetch.requestPaused')return;const p=value.params;
         if(p.request.method==='POST'&&!injected){injected=true;await cdp('Fetch.fulfillRequest',{requestId:p.requestId,responseCode:400,responseHeaders:[{name:'Content-Type',value:'application/json'},{name:'Access-Control-Allow-Origin',value:'*'}],body:Buffer.from(JSON.stringify({error:'Injected transform rejection for draft regression'})).toString('base64')})}
         else await cdp('Fetch.continueRequest',{requestId:p.requestId});

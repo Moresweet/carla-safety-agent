@@ -148,6 +148,8 @@ class EvaluationControl:
         actors = [_actor_record(actor, origins.get(str(actor.id), {}).get('origin', 'evaluation'))
                   for actor in world.get_actors()
                   if actor.type_id.startswith(("vehicle.", "walker.", "static.prop."))]
+        for record in actors:
+            record['edit_identity']={'episode':str(world.id),'actor_id':record['id'],'type_id':record['name']}
         if self.blueprints is None:
             patterns = ("vehicle.*", "walker.pedestrian.*", "static.prop.*")
             self.blueprints = sorted({bp.id for pattern in patterns
@@ -314,6 +316,9 @@ class EvaluationControl:
             spec = data.get("transform", {})
             from .scene_store import validate_transform_patch
             validate_transform_patch(spec)
+            if 'expected' in data:
+                from .transform_review import verify_review
+                verify_review(data['expected'],world.id,actor,current)
             loc, rot = spec.get("location", {}), spec.get("rotation", {})
             actor.set_transform(carla.Transform(carla.Location(
                 x=float(loc.get("x", current.location.x)),

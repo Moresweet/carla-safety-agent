@@ -1,6 +1,11 @@
 export const axes=['x','y','z','yaw'] as const;
 export type TransformFields=Record<typeof axes[number],string>;
-export type TransformItem={location:{x:number;y:number;z:number};rotation?:{yaw:number}};
+export type EditIdentity={episode:string;actor_id:number;type_id:string};
+export type TransformReview=EditIdentity&{location:{x:number;y:number;z:number};yaw:number};
+export type TransformItem={location:{x:number;y:number;z:number};rotation?:{yaw:number};edit_identity?:EditIdentity|null};
+export function transformReview(item:TransformItem):TransformReview|null{
+ return item.edit_identity?{...item.edit_identity,location:{...item.location},yaw:item.rotation?.yaw??0}:null;
+}
 export function transformFields(item:TransformItem):TransformFields{
  return {x:String(item.location.x),y:String(item.location.y),z:String(item.location.z),yaw:String(item.rotation?.yaw??0)};
 }

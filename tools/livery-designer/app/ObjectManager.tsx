@@ -2,10 +2,11 @@
 import {useEffect,useMemo,useRef,useState} from "react";
 import {objectOriginLabel, type ObjectOrigin} from "./objectOrigin";
 import TransformEditor from './TransformEditor';
+import type {EditIdentity} from './transformDraft';
 
 const bridge="http://127.0.0.1:8765";
 type Category={id:string;group:string;coarse:string;count:number;editable:string};
-export type CatalogItem={key:string;id:number|string;source:"actor"|"environment";category:string;group:string;kind:string;name:string;label:string;visible?:boolean;origin?:ObjectOrigin;location:{x:number;y:number;z:number};extent:{x:number;y:number;z:number};rotation?:{pitch:number;yaw:number;roll:number}};
+export type CatalogItem={key:string;id:number|string;source:"actor"|"environment";category:string;group:string;kind:string;name:string;label:string;visible?:boolean;origin?:ObjectOrigin;edit_identity?:EditIdentity|null;location:{x:number;y:number;z:number};extent:{x:number;y:number;z:number};rotation?:{pitch:number;yaw:number;roll:number}};
 async function request(path:string,method="GET",data?:unknown){const r=await fetch(`${bridge}/${path}`,{method,headers:data?{"Content-Type":"application/json"}:undefined,body:data?JSON.stringify(data):undefined}),v=await r.json() as {error?:string;categories:Category[];objects:CatalogItem[];total:number};if(!r.ok)throw new Error(v.error);return v}
 
 export default function ObjectManager({onChanged,onTextureTarget}:{onChanged:()=>void;onTextureTarget:(item:CatalogItem)=>void}){
@@ -29,7 +30,7 @@ export default function ObjectManager({onChanged,onTextureTarget}:{onChanged:()=
    </div>
    <aside className="object-inspector"><h3>{selected?.name??'Select an object'}</h3>{selected&&<>
     <dl><div><dt>Source</dt><dd>{objectOriginLabel(selected.origin)}</dd></div><div><dt>Category</dt><dd>{selected.category}</dd></div><div><dt>ID</dt><dd>{selected.id}</dd></div></dl>
-    <TransformEditor key={selected.key+':'+selected.name} item={selected} editable={selected.source==='actor'} busy={busy} onApply={transform=>act('objects/update',{actor_id:selected.id,transform},'Actor transform updated',true)}/>
+    <TransformEditor key={selected.key+':'+selected.name+':'+JSON.stringify(selected.edit_identity)} item={selected} editable={selected.source==='actor'} busy={busy} onApply={(transform,expected)=>act('objects/update-reviewed',{actor_id:selected.id,transform,expected},'Actor transform updated',true)}/>
     <button disabled={busy} onClick={()=>void focus(selected)}>Focus & highlight</button><button disabled={busy} className="primary" onClick={()=>onTextureTarget(selected)}>Edit texture</button>
     {selected.source==='actor'?<><button disabled={busy} onClick={()=>void act('objects/duplicate',{actor_id:selected.id},'Actor duplicated',true)}>Duplicate</button><button disabled={busy} className="danger" onClick={()=>void act('objects/delete',{actor_id:selected.id},'Actor deleted',true)}>Delete actor</button></>:<button disabled={busy} onClick={()=>void visibility()}>{selected.visible===false?'Restore object':'Hide object'}</button>}
    </>}</aside>

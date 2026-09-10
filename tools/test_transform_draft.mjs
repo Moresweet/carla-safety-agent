@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {parseTransformFields,transformFields} from './livery-designer/app/transformDraft.ts';
+import {parseTransformFields,transformFields,transformReview} from './livery-designer/app/transformDraft.ts';
 const live={location:{x:1,y:2,z:3},rotation:{yaw:4}};
 const fields=transformFields(live);
 assert.deepEqual(parseTransformFields(fields),{location:{x:1,y:2,z:3},rotation:{yaw:4}});
@@ -10,3 +10,7 @@ assert.equal(transformFields({location:live.location}).yaw,'0');
 const draft={...fields,x:'8'};live.location.x=9;
 assert.equal(draft.x,'8');assert.equal(transformFields(live).x,'9');
 console.log('PASS: finite transform fields, explicit zero, independent draft and live values');
+assert.equal(transformReview(live),null);
+live.edit_identity={episode:'18446744073709551615',actor_id:7,type_id:'static.prop.test'};
+const expected=transformReview(live);live.location.x=15;
+assert.equal(expected.location.x,9);assert.equal(expected.episode,'18446744073709551615');

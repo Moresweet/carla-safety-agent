@@ -986,6 +986,8 @@ def actor_record(actor) -> dict:
             "extent": vector(extent),
             "rotation": {"pitch": rotation.pitch, "yaw": rotation.yaw, "roll": rotation.roll},
             "origin": _origin_for_actor(actor),
+            "edit_identity": ({'episode':str(globals()['_world_episode']),'actor_id':actor.id,'type_id':actor.type_id}
+                              if globals().get('_world_episode') is not None else None),
             "hero": actor.attributes.get("role_name") == "hero"}
 
 
@@ -1686,17 +1688,20 @@ def scene_history(data):
 
 
 @simulation_operation
-def update_actor(actor_id: int, transform_data: dict) -> dict:
+def update_actor(actor_id: int, transform_data: dict, expected=None) -> dict:
     from carla_safety_agent.scene_store import validate_transform_patch
+    from carla_safety_agent.transform_review import validate_review,verify_review
     validate_transform_patch(transform_data)
+    if expected is not None:validate_review(expected)
     if evaluation_active():
         return evaluation_command("update", {"actor_id": actor_id,
-                                              "transform": transform_data})
+                                              "transform": transform_data, **({'expected':expected} if expected is not None else {})})
     world = connect_world()
     actor = world.get_actor(actor_id)
     if not actor:
         raise RuntimeError(f"Actor {actor_id} is not running")
     current = actor.get_transform()
+    if expected is not None:verify_review(expected,world.id,actor,current)
     loc, rot = transform_data.get("location", {}), transform_data.get("rotation", {})
     actor.set_transform(carla.Transform(
         carla.Location(x=float(loc.get("x", current.location.x)),
@@ -2505,7 +2510,7 @@ class Handler(BaseHTTPRequestHandler):
                                 "/focus/static", "/focus/bev",
                                 "/focus/environment", "/camera/hero-lock",
                                 "/objects/environment/visibility",
-                                "/objects/spawn", "/objects/update",
+                                "/objects/spawn", "/objects/update", "/objects/update-reviewed",
                                 "/objects/duplicate", "/objects/delete",
                                 "/scenario/compile", "/scenario/run", "/scenario/evaluate", '/scenario/execute-plan',
                                 "/blender/create", "/blender/retexture",
@@ -2628,9 +2633,13 @@ class Handler(BaseHTTPRequestHandler):
             elif request.path == "/objects/spawn":
                 data = json.loads(payload or b"{}")
                 result = spawn_object(str(data["blueprint_id"]), data.get("transform", {}))
-            elif request.path == "/objects/update":
+            elif request.path in ("/objects/update", "/objects/update-reviewed"):
                 data = json.loads(payload or b"{}")
-                result = update_actor(int(data["actor_id"]), data.get("transform", {}))
+                if request.path.endswith('update-reviewed'):
+                    from carla_safety_agent.transform_review import validate_review
+                    result = update_actor(int(data['actor_id']),data.get('transform',{}),validate_review(data.get('expected')))
+                else:
+                    result = update_actor(int(data["actor_id"]), data.get("transform", {}))
             elif request.path == "/objects/duplicate":
                 data = json.loads(payload or b"{}")
                 result = duplicate_actor(int(data["actor_id"]))

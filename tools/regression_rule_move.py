@@ -1,6 +1,8 @@
 """Opt-in native rule-run edit regression; cleans up only its own prop."""
 import json
+import argparse
 import time
+import urllib.error
 from pathlib import Path
 
 from regression_scene_versions import ROOT, request
@@ -48,6 +50,9 @@ def wait_terminal(execution):
 
 def main():
     import carla
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--reviewed',action='store_true')
+    args=parser.parse_args()
     assert request('system/preflight')['ready']
     client = carla.Client('127.0.0.1', 2000)
     client.set_timeout(10)
@@ -77,8 +82,19 @@ def main():
             assert request('session/status')['session']['state'] in ACTIVE
             time.sleep(.5)
         assert dataset, 'No recording created'
-        moved = request('objects/update', {'actor_id': prop_id,
-                          'transform': {'location': {'x': 245.}}})
+        expected=None
+        if args.reviewed:
+            item=next(row for row in request('catalog/objects?category=spawned_props')['objects'] if row['id']==prop_id)
+            expected={**item['edit_identity'],'location':item['location'],'yaw':item['rotation']['yaw']}
+            def rejected(observation,fragment):
+                try:request('objects/update-reviewed',{'actor_id':prop_id,'transform':{'location':{'x':250.}},'expected':observation})
+                except urllib.error.HTTPError as exc:
+                    assert exc.code in (400,500)
+                    assert fragment in json.load(exc)['error']
+                else:raise AssertionError('Tick owner accepted a stale transform')
+            rejected({**expected,'episode':str((world.id+1)%2**64)},'World or actor changed')
+        moved = request('objects/update-reviewed' if args.reviewed else 'objects/update', {'actor_id': prop_id,
+                          'transform': {'location': {'x': 245.}},**({'expected':expected} if args.reviewed else {})})
         assert moved['object']['origin'] == 'user', moved
         # Read a subsequent native snapshot, not the cached command response pose.
         deadline = time.monotonic() + 10
@@ -88,14 +104,18 @@ def main():
                 break
             time.sleep(.1)
         assert abs(location.x - 245.) < .02, location
+        if args.reviewed:rejected(expected,'Actor moved')
         request('scenario/stop', {'run_id': execution})
         session = wait_terminal(execution)
         assert session['state'] == 'stopped', session
         result = json.loads(Path(session['configuration']['results']).read_text())
         records = [json.loads(p.read_text()) for p in Path(result['editor_commands']).glob('*.json')]
         updates = [r for r in records if (r.get('command') or {}).get('action') == 'update']
-        assert len(updates) == 1 and updates[0]['response']['ok'], updates
-        event = updates[0]
+        assert len(updates) == (3 if args.reviewed else 1),updates
+        accepted=[r for r in updates if r['response']['ok']]
+        assert len(accepted)==1,updates
+        if args.reviewed:assert sum(not r['response']['ok'] for r in updates)==2
+        event = accepted[0]
         assert event['execution_id'] == execution
         assert event['observed_frame_before'] == event['observed_frame_after']
         recorded = verify_recorded_move(dataset, execution, prop_id,
@@ -105,6 +125,7 @@ def main():
         report = {'execution_id': execution, 'dataset': str(dataset), 'actor_id': prop_id,
                   'origin': moved['object']['origin'], 'native_x': location.x,
                   'boundary_frame': event['observed_frame_before'], 'passed': True, **recorded,
+                  'reviewed_tick_owner_rejects_stale_world_and_pose':args.reviewed,
                   'limitations': ['Does not prove rendered texture or image/pose alignment']}
     finally:
         if execution:

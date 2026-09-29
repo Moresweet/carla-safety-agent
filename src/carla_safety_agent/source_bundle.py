@@ -1,5 +1,6 @@
 """Bounded committed-source snapshots. No execution, installation or Git network."""
 import hashlib
+import io
 import json
 import os
 import re
@@ -35,11 +36,35 @@ def _git(project, *args):
                                    stderr=subprocess.PIPE)
 
 
-def export_source(project, output):
+def uncommitted_source(project, commit):
+    # Inspect names only; never read uncommitted secrets into the archive.
+    changed = _git(project, 'diff', '--name-only', '-z', commit, '--').split(b'\0')
+    untracked = _git(project, 'ls-files', '--others', '--exclude-standard', '-z').split(b'\0')
+    return sorted({name.decode('utf-8') for name in changed + untracked
+                              if name and included(name.decode('utf-8'))})
+
+
+def source_export_status(project):
+    """Read-only admission evidence; does not stage, commit or export files."""
+    project=Path(project)
+    commit=_git(project,'rev-parse','--verify','HEAD^{commit}').decode().strip()
+    changes=uncommitted_source(project,commit)
+    return {'schema_version':'source-export-status/1','commit':commit,
+            'current_source_export_ready':not changes,'omitted_source_count':len(changes),
+            'uncommitted_source_omitted':changes,
+            'scope':'Selected committed source only; not dependencies, runtime data or cross-machine readiness'}
+
+
+def export_source(project, output, *, require_current=False):
     project, output = Path(project), Path(output)
     if output.exists() or output.is_symlink():
         raise ValueError('Source bundle output already exists')
     commit = _git(project, 'rev-parse', '--verify', 'HEAD^{commit}').decode().strip()
+    omitted_worktree = uncommitted_source(project, commit)
+    if require_current and omitted_worktree:
+        raise ValueError('Current-development export refused: uncommitted source would be omitted: '
+                         + ', '.join(omitted_worktree[:20])
+                         + (f' (+{len(omitted_worktree)-20} more)' if len(omitted_worktree)>20 else ''))
     tree = _git(project, 'ls-tree', '-rlz', commit)
     entries, omitted = [], []
     for record in tree.split(b'\0'):
@@ -59,6 +84,7 @@ def export_source(project, output):
     if not entries or len(entries) > 5000 or sum(row[3] for row in entries) > MAX_BYTES:
         raise ValueError('Empty or oversized committed source snapshot')
     manifest = {'schema_version': SCHEMA, 'commit': commit, 'files': {}, 'omitted': omitted,
+                'uncommitted_source_omitted': omitted_worktree,
                 'scope': 'Committed source only; uncommitted edits, runtime state and dependencies are not included'}
     temporary = output.with_name(output.name + '.partial-' + uuid.uuid4().hex)
     started = time.monotonic()
@@ -81,6 +107,10 @@ def export_source(project, output):
             stream.flush()
             os.fsync(stream.fileno())
         verify_source(temporary)
+        if require_current:
+            current_commit = _git(project, 'rev-parse', '--verify', 'HEAD^{commit}').decode().strip()
+            if current_commit != commit or uncommitted_source(project, commit):
+                raise ValueError('Selected source changed during export; refusing publication')
         os.link(temporary, output)  # Publish without ever replacing another file.
         directory = os.open(output.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -92,7 +122,12 @@ def export_source(project, output):
         raise RuntimeError(f'Source export not confirmed; inspect {temporary} and {output}: {exc}') from exc
     return {'ok': True, 'archive': str(output.resolve()), 'commit': commit,
             'files': len(entries), 'source_bytes': sum(row[3] for row in entries),
-            'omitted': omitted, 'runtime_verified': False}
+            'omitted': omitted, 'runtime_verified': False,
+            'uncommitted_source_omitted': omitted_worktree,
+            'has_omitted_uncommitted_source': bool(omitted_worktree),
+            'warnings': (['Source archive excludes current uncommitted source changes; '
+                          'it is a committed snapshot, not a backup of current development.']
+                         if omitted_worktree else [])}
 
 
 def _unique_pairs(pairs):
@@ -105,7 +140,8 @@ def _unique_pairs(pairs):
 
 
 def verify_source(path):
-    if Path(path).stat().st_size > MAX_BYTES + 8 * 1024 * 1024:
+    size = len(path.getbuffer()) if isinstance(path, io.BytesIO) else Path(path).stat().st_size
+    if size > MAX_BYTES + 8 * 1024 * 1024:
         raise ValueError('Oversized source archive')
     with zipfile.ZipFile(path) as archive:
         infos = archive.infolist()
@@ -117,11 +153,19 @@ def verify_source(path):
         if archive.getinfo('manifest.json').file_size > 4 * 1024 * 1024:
             raise ValueError('Oversized source manifest')
         manifest = json.loads(archive.read('manifest.json'), object_pairs_hook=_unique_pairs)
-        if (not isinstance(manifest, dict) or set(manifest) != {'schema_version', 'commit', 'files', 'omitted', 'scope'}
+        required = {'schema_version', 'commit', 'files', 'omitted', 'scope'}
+        if (not isinstance(manifest, dict) or not required <= set(manifest)
+                or set(manifest) - required - {'uncommitted_source_omitted'}
                 or manifest.get('schema_version') != SCHEMA or not isinstance(manifest.get('files'), dict)
                 or not isinstance(manifest['commit'], str) or not re.fullmatch(r'(?:[a-f0-9]{40}|[a-f0-9]{64})', manifest['commit'])
                 or not isinstance(manifest['omitted'], list) or any(not isinstance(v, str) for v in manifest['omitted'])):
             raise ValueError('Invalid source manifest')
+        omitted_worktree = manifest.get('uncommitted_source_omitted')
+        if 'uncommitted_source_omitted' in manifest:
+            if (not isinstance(omitted_worktree, list)
+                    or any(not isinstance(name, str) or not included(name) for name in omitted_worktree)
+                    or len(set(omitted_worktree)) != len(omitted_worktree)):
+                raise ValueError('Invalid uncommitted source omission list')
         files = manifest['files']
         if not files or set(names) != {'manifest.json', *('source/' + name for name in files)}:
             raise ValueError('Source members do not match manifest')
@@ -141,4 +185,43 @@ def verify_source(path):
             if hashlib.sha256(data).hexdigest() != record['sha256']:
                 raise ValueError('Source checksum mismatch: ' + name)
     return {'ok': True, 'commit': manifest.get('commit'), 'files': len(files),
+            'uncommitted_source_omitted': omitted_worktree,
+            'uncommitted_source_inventory_recorded': omitted_worktree is not None,
+            'warnings': (['Legacy archive: uncommitted source omissions were not recorded.']
+                         if omitted_worktree is None else
+                         ['Archive omits uncommitted source changes; not a current-development backup.']
+                         if omitted_worktree else []),
             'runtime_verified': False, 'code_executed': False}
+
+
+def restore_source(path, destination):
+    """Restore verified committed source into a new directory, never execute it.
+
+    Validate an immutable bounded in-memory snapshot so a changed archive path
+    cannot swap different content between verification and extraction.
+    """
+    destination = Path(destination)
+    if destination.exists() or destination.is_symlink():
+        raise ValueError('Restore destination must not exist')
+    with Path(path).open('rb') as stream:
+        data = stream.read(MAX_BYTES + 8 * 1024 * 1024 + 1)
+    snapshot = io.BytesIO(data)
+    verified = verify_source(snapshot)
+    snapshot.seek(0)
+    destination.mkdir()  # Never merge with an existing project, even an empty one.
+    try:
+        with zipfile.ZipFile(snapshot) as archive:
+            manifest = json.loads(archive.read('manifest.json'), object_pairs_hook=_unique_pairs)
+            for name, record in manifest['files'].items():
+                target = destination / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with target.open('xb') as output:
+                    output.write(archive.read('source/' + name))
+                target.chmod(int(record['mode'], 8) & 0o777)
+            # Keep provenance outside the source list; never imply a Git repo
+            # or dependencies were restored by extracting plain source files.
+            with (destination / 'SOURCE_RESTORE_RECEIPT.json').open('x') as output:
+                json.dump(verified, output, ensure_ascii=False, indent=2)
+    except BaseException as error:
+        raise RuntimeError(f'Incomplete source restore retained at {destination}: {error}') from error
+    return {**verified, 'destination': str(destination.resolve()), 'git_repository_restored': False}

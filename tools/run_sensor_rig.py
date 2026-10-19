@@ -45,7 +45,8 @@ def main():
         stopped = True
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
-    report = {'source':'sensor-rig','mode':args.mode,'frames':0,'recorded_frames':0}
+    report = {'source':'sensor-rig','mode':args.mode,'frames':0,'recorded_frames':0,
+              'execution_id':os.environ.get('CSA_EXECUTION_ID')}
     try:
         settings = world.get_settings()
         settings.synchronous_mode = True
@@ -86,9 +87,22 @@ def main():
             atomic_json(runtime/'sensor-rig-status.json',report)
             if getattr(capture,'stop_reason',None):
                 report['stop_reason']=capture.stop_reason
+                if capture.stop_reason not in ('frame_limit','storage_limit','disk_reserve','capture_quota'):
+                    raise RuntimeError(capture.error or 'Capture stopped for an unverified reason: '+str(capture.stop_reason))
                 break  # Valid samples reached an explicit recording bound, not a process failure.
             if capture.error: raise RuntimeError(capture.error)
         report['stopped'] = stopped
+    except Exception as exc:
+        # process_frame may fail before the ordinary per-frame status update.
+        # Preserve the actual capture identity/count and the original failure.
+        report['error'] = str(exc)
+        report['stopped'] = stopped
+        if capture:
+            report.update(run_id=getattr(capture,'run_id',None),
+                          recorded_frames=capture.count,
+                          stop_reason=getattr(capture,'stop_reason',None),
+                          capture_error=getattr(capture,'error',None))
+        raise
     finally:
         errors = []
         if capture:

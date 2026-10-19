@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from carla_safety_agent.project_bundle import export_bundle, import_bundle, read_bundle, prepare_generated_assets
+from carla_safety_agent.project_bundle import export_bundle, import_bundle, read_bundle, prepare_generated_assets, migrate_legacy_asset_flags
 
 
 def main():
@@ -20,6 +20,9 @@ def main():
                         help='Explicit source-package binding; cover all generated blueprints in scene history')
     inspect = commands.add_parser('inspect')
     inspect.add_argument('archive', type=Path)
+    migrate = commands.add_parser('migrate-legacy-asset-flags', help='Create a corrected copy of the exact supported historical asset metadata format')
+    migrate.add_argument('archive', type=Path)
+    migrate.add_argument('--output', type=Path, required=True)
     doctor = commands.add_parser('doctor')
     doctor.add_argument('archive', type=Path)
     doctor.add_argument('--project', type=Path, required=True)
@@ -50,6 +53,8 @@ def main():
     elif args.action == 'inspect':
         manifest, _ = read_bundle(args.archive)
         result = {'manifest': manifest, 'dependency_availability': 'not_checked'}
+    elif args.action == 'migrate-legacy-asset-flags':
+        result = migrate_legacy_asset_flags(args.archive, args.output)
     elif args.action == 'prepare-assets':
         result = prepare_generated_assets(args.archive, args.project)
     elif args.action == 'stage':

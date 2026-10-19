@@ -8,11 +8,44 @@ import os
 import subprocess
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 
 class BlenderPipeline:
+    @contextmanager
+    def operation_admission(self):
+        self.runtime.mkdir(parents=True, exist_ok=True)
+        with (self.runtime / 'bridge-restart.lock').open('a') as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise RuntimeError('Bridge restart in progress; asset operation rejected') from exc
+            yield lock.fileno()
+
+    @staticmethod
+    def observe_attempt(report):
+        """Read-only coordinator observation, never proof that a child has stopped."""
+        if report.get('state') not in ('preparing', 'generating', 'importing'):
+            return report
+        from .session import observed_process_identity
+        owner = report.get('owner')
+        status = 'unknown'
+        error = None
+        try:
+            if (not isinstance(owner, dict) or set(owner) != {'pid', 'start_ticks'}
+                    or not isinstance(owner['start_ticks'], str) or not owner['start_ticks'].isdigit()):
+                raise ValueError('Missing or invalid coordinator identity')
+            status = 'present' if observed_process_identity(owner['pid']) == owner else 'exited'
+        except (OSError, ValueError) as exc:
+            error = str(exc)
+        return {**report, 'observation': {
+            'coordinator': status, 'error': error,
+            'requires_attention': status != 'present',
+            'child_state': 'unknown', 'automatic_retry_allowed': False,
+            'note': 'Coordinator presence does not prove task progress; coordinator exit does not prove Blender/Unreal child exit. Inspect retained outputs before any recovery.'}}
+
     def __init__(self, project_root: Path, executable: str | None = None):
         self.project_root = project_root.resolve()
         self.executable = executable or os.environ.get("BLENDER_BIN", "/snap/bin/blender")
@@ -51,6 +84,10 @@ class BlenderPipeline:
 
     def run(self, request: dict[str, Any], *, plan_sha256=None) -> dict[str, Any]:
         spec = self._normalize(request)
+        with self.operation_admission() as admission_fd:
+            return self._run(request, spec, plan_sha256=plan_sha256, admission_fd=admission_fd)
+
+    def _run(self, request: dict[str, Any], spec, *, plan_sha256=None, admission_fd: int) -> dict[str, Any]:
         from .owned_resources import durable_write
         from .session import observed_process_identity
         raw = None
@@ -85,7 +122,7 @@ class BlenderPipeline:
             completed = subprocess.run([
                 self.executable, "--background", "--factory-startup", "--python", str(self.worker),
                 "--", str(spec_path), str(output),
-            ], capture_output=True, text=True, timeout=180)
+            ], capture_output=True, text=True, timeout=180, pass_fds=(admission_fd,))
             report.update(returncode=completed.returncode, log=completed.stdout[-2000:])
             if completed.returncode:
                 raise RuntimeError((completed.stderr or completed.stdout)[-4000:])
@@ -95,6 +132,16 @@ class BlenderPipeline:
             manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
             if not isinstance(manifest, dict) or manifest.get('ok') is not True:
                 raise ValueError('Blender did not report a successful export')
+            outputs = manifest.get('outputs')
+            if not isinstance(outputs, dict):
+                raise ValueError('Blender export output inventory is missing')
+            for kind in ('blend', 'glb', 'fbx'):
+                exported = outputs.get(kind)
+                expected = output / ('asset.' + kind)
+                if (not isinstance(exported, str) or Path(exported) != expected
+                        or expected.is_symlink() or not expected.is_file()
+                        or expected.stat().st_size == 0):
+                    raise ValueError(f'Blender export is incomplete: missing or invalid {kind} output')
             report.update(state='exported', ended_at=time.time())
             durable_write(report_path, report)
             manifest.update(job_id=job_id, log=completed.stdout[-2000:], generation_report=str(report_path))
@@ -107,7 +154,7 @@ class BlenderPipeline:
                 raise RuntimeError(f'Generation status could not be saved; inspect {report_path}; {exc}; {publication_error}') from exc
             raise RuntimeError(f'Blender generation did not complete; retained files: {report_path}: {exc}') from exc
 
-    def generation_attempts(self):
+    def generation_attempts(self, *, limit=100):
         reports = []
         for path in self.runtime.glob('*/generation.json'):
             if path.is_symlink() or path.parent.is_symlink() or path.stat().st_size > 65536:
@@ -120,10 +167,45 @@ class BlenderPipeline:
                     or type(report.get('started_at')) not in (int, float)
                     or not math.isfinite(report['started_at'])):
                 raise ValueError('Invalid generation report: ' + str(path))
-            reports.append(report)
-        return sorted(reports, key=lambda row: row['started_at'], reverse=True)[:100]
+            reports.append(self.observe_attempt(report))
+        return sorted(reports, key=lambda row: row['started_at'], reverse=True)[:limit]
+
+    def exported_asset(self, job_id):
+        """Reopen an explicitly completed export without executing external tools."""
+        if not isinstance(job_id, str) or not job_id.isascii() or not job_id.isalnum() or len(job_id)>64:
+            raise ValueError('Invalid Blender job id')
+        job = self.runtime / job_id
+        if job.is_symlink():
+            raise ValueError('Linked asset job')
+        def read(name):
+            path = job / name
+            if path.is_symlink() or path.stat().st_size > 65536:
+                raise ValueError('Invalid asset metadata')
+            value = json.loads(path.read_text())
+            if not isinstance(value, dict):
+                raise ValueError('Invalid asset metadata')
+            return value
+        report = read('generation.json')
+        if (report.get('schema_version') != 'carla-asset-generation/1'
+                or report.get('job_id') != job_id or report.get('attempt_id') != job_id
+                or report.get('state') != 'exported'):
+            raise ValueError('Only confirmed exports can be reopened')
+        manifest = read('manifest.json')
+        outputs = manifest.get('outputs')
+        if manifest.get('ok') is not True or not isinstance(outputs, dict):
+            raise ValueError('Invalid export manifest')
+        for kind in ('blend', 'glb', 'fbx'):
+            path = job / ('asset.' + kind)
+            if outputs.get(kind) != str(path) or path.is_symlink() or not path.is_file() or not path.stat().st_size:
+                raise ValueError('Export files are missing or invalid')
+        return {**manifest, 'job_id': job_id, 'generation_report': str(job / 'generation.json'),
+                'reopened': True}
 
     def import_to_carla(self, job_id: str, asset_name: str | None = None, *, require_clean_exit=True) -> dict[str, Any]:
+        with self.operation_admission():
+            return self._admitted_import(job_id, asset_name, require_clean_exit=require_clean_exit)
+
+    def _admitted_import(self, job_id: str, asset_name: str | None = None, *, require_clean_exit=True) -> dict[str, Any]:
         if require_clean_exit is not True:
             raise ValueError('Unreal import registration requires a clean process exit')
         self.runtime.mkdir(parents=True, exist_ok=True)
@@ -146,6 +228,7 @@ class BlenderPipeline:
         report_path = job / ('import-attempt-' + attempt_id + '.json')
         report = {'schema_version':'carla-asset-import/1','attempt_id':attempt_id,
                   'job_id':job_id,'state':'preparing','started_at':time.time(),
+                  'worker_state':'not_started',
                   'owner':observed_process_identity(os.getpid()),'report_path':str(report_path),
                   'live_world_modified':False,'automatic_rollback':False}
         durable_write(report_path,report,exclusive=True)
@@ -158,7 +241,10 @@ class BlenderPipeline:
         except BaseException as exc:
             report.update(state='needs_attention',ended_at=time.time(),error=str(exc),
                           note='Any created assets are retained at the recorded destination; no implicit retry or deletion')
-            save()
+            try:
+                save()
+            except OSError as publication_error:
+                raise RuntimeError(f'Import status could not be saved; inspect {report_path}; {exc}; {publication_error}') from exc
             raise RuntimeError(f'Asset import did not complete; inspect {report_path}: {exc}') from exc
 
     def _perform_import(self, job, asset_name, attempt_id, report, save, import_lock_fd):
@@ -188,6 +274,7 @@ class BlenderPipeline:
         environment = os.environ.copy()
         environment["CSA_UNREAL_IMPORT_REQUEST"] = str(request_path)
         report.update(state='importing',asset_name=safe_name,
+                      worker_state='launching',
                       import_lock_inherited_by_child=True,
                       destination='/Game/Carla/Static/Generated/'+safe_name,
                       request_path=str(request_path),result_path=str(result_path))
@@ -198,6 +285,8 @@ class BlenderPipeline:
             f"-abslog={job / ('unreal-' + attempt_id + '.log')}",
         ], capture_output=True, text=True, timeout=600, env=environment,
            pass_fds=(import_lock_fd,))
+        report.update(worker_state='exited', worker_returncode=completed.returncode)
+        save()
         log_path = job / ("unreal-log-" + attempt_id + ".json")
         log_path.write_text(json.dumps({
             "attempt_id": attempt_id, "returncode": completed.returncode,
@@ -222,22 +311,86 @@ class BlenderPipeline:
         registry = self.registry()
         registry[result["blueprint_id"]] = result
         self.runtime.mkdir(parents=True, exist_ok=True)
-        temporary = self.registry_path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(registry, indent=2), encoding="utf-8")
-        temporary.replace(self.registry_path)
+        from .owned_resources import durable_write
+        durable_write(self.registry_path, registry)
         result["log"] = completed.stdout[-3000:]
         return result
 
-    def import_attempts(self):
+    def import_attempts(self, *, limit=100):
         reports=[]
+        registry_error = None
+        try:
+            registry = self.registry()
+        except ValueError as exc:
+            registry, registry_error = {}, str(exc)
         for path in self.runtime.glob('*/import-attempt-*.json'):
-            if path.stat().st_size>65536:
-                raise ValueError('Oversized asset import report')
+            if path.is_symlink() or path.parent.is_symlink() or path.stat().st_size>65536:
+                raise ValueError('Invalid asset import report path or size')
             report=json.loads(path.read_text())
-            if not isinstance(report,dict) or report.get('schema_version')!='carla-asset-import/1':
+            attempt_id = path.stem.removeprefix('import-attempt-')
+            if (not isinstance(report,dict) or report.get('schema_version')!='carla-asset-import/1'
+                    or len(attempt_id) != 32 or any(ch not in '0123456789abcdef' for ch in attempt_id)
+                    or report.get('attempt_id') != attempt_id
+                    or report.get('job_id') != path.parent.name
+                    or report.get('state') not in ('preparing', 'importing', 'registered', 'needs_attention')
+                    or type(report.get('started_at')) not in (int, float)
+                    or not math.isfinite(report['started_at'])
+                    or report.get('report_path') != str(path)):
                 raise ValueError('Invalid asset import report: '+str(path))
-            reports.append(report)
-        return sorted(reports,key=lambda r:r['started_at'],reverse=True)[:100]
+            matches = [entry for entry in registry.values()
+                       if entry.get('import_attempt_id') == attempt_id]
+            registration = 'absent'
+            if registry_error:
+                registration = 'unknown'
+            elif matches:
+                name = report.get('asset_name')
+                expected = 'generated.prop.' + name.lower() if isinstance(name, str) else None
+                registration = 'matching' if (len(matches) == 1 and expected is not None
+                    and matches[0].get('blueprint_id') == expected
+                    and matches[0].get('import_returncode') == 0
+                    and matches[0]['mesh_path'].startswith('/Game/Carla/Static/Generated/' + name + '/')) else 'conflict'
+            reports.append({**self.observe_attempt(report), 'registration_observation': {
+                'state': registration, 'error': registry_error, 'native_verified': False,
+                'automatic_retry_allowed': False}})
+        return sorted(reports,key=lambda r:r['started_at'],reverse=True)[:limit]
+
+    def restart_status(self):
+        # UI history is truncated; restart safety must inspect every journal.
+        generations = self.generation_attempts(limit=None)
+        imports = self.import_attempts(limit=None)
+        def exited_generation(row):
+            # subprocess.run returned before returncode was recorded. This proves
+            # worker exit, not successful export or that the asset is repaired.
+            return (row['state'] == 'needs_attention'
+                    and type(row.get('returncode')) is int
+                    and type(row.get('ended_at')) in (int, float)
+                    and math.isfinite(row['ended_at'])
+                    and row['ended_at'] >= row['started_at'])
+        settled_failures = [row for row in generations if exited_generation(row)]
+        def settled_import(row):
+            from .asset_restart_review import has_review
+            if has_review(self.runtime, row['job_id'], row['attempt_id']):
+                return True
+            ended = row.get('ended_at')
+            if (row['state'] != 'needs_attention' or type(ended) not in (int, float)
+                    or not math.isfinite(ended) or ended < row['started_at']):
+                return False
+            if row.get('worker_state') == 'not_started':
+                return not any(key in row for key in ('destination', 'request_path', 'result_path', 'worker_returncode'))
+            return row.get('worker_state') == 'exited' and type(row.get('worker_returncode')) is int
+        settled_imports = [row for row in imports if settled_import(row)]
+        reports = ([row for row in generations if not exited_generation(row)]
+                   + [row for row in imports if not settled_import(row)])
+        return {'schema_version': 'asset-restart/1', 'unresolved': [
+            {'job_id': row['job_id'], 'attempt_id': row['attempt_id'], 'state': row['state']}
+            for row in reports if row['state'] not in ('exported', 'registered')],
+            'settled_generation_failures': [
+                {'job_id': row['job_id'], 'state': row['state'], 'returncode': row['returncode']}
+                for row in settled_failures],
+            'settled_import_failures': [
+                {'job_id': row['job_id'], 'attempt_id': row['attempt_id'],
+                 'state': row['state'], 'worker_state': row.get('worker_state', 'reviewed_prelaunch_rejection')}
+                for row in settled_imports]}
 
     def registry(self) -> dict[str, dict[str, Any]]:
         try:

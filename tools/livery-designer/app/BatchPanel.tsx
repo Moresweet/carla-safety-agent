@@ -2,16 +2,12 @@
 import {useEffect,useRef,useState} from 'react';
 import BatchScheduler from './BatchScheduler';
 import BatchComparison from './BatchComparison';
+import {batchApi as api,requireBatchIdentity} from './batchApi';
 
-const bridge='http://127.0.0.1:8765';
 type Batch={batch_id:string;job_count?:number;paused?:boolean;error?:string};
 type Attempt={attempt_id:string;state:string;execution_id:string|null;created_at:number;ended_at:number|null;phase:string|null;error:string|null;error_truncated:boolean};
 type Row={job_id:string;execution_state:string;attempt_count:number;attempts?:Attempt[];seed:number;variants:Record<string,string>;execution_id?:string;benchmark_passed:boolean|null;metrics?:Record<string,unknown>;metrics_error?:string;error?:string};
 type Report={paused:boolean;job_count:number;rows:Row[];state_counts:Record<string,number>};
-async function api<T>(path:string,body?:unknown):Promise<T>{
- const response=await fetch(bridge+path,{...(body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})});
- const value=await response.json() as T & {ok?:boolean;error?:string};if(!response.ok||value.ok===false)throw new Error(value.error||'请求失败');return value;
-}
 export default function BatchPanel(){
  const [items,setItems]=useState<Batch[]>([]),[cursor,setCursor]=useState<string|null>(null),[selected,setSelected]=useState(''),[report,setReport]=useState<Report|null>(null);
  const [busy,setBusy]=useState(false),[message,setMessage]=useState(''),[error,setError]=useState(''),[confirmed,setConfirmed]=useState(false);
@@ -19,7 +15,7 @@ export default function BatchPanel(){
  const [pollError,setPollError]=useState('');
  async function perform(work:()=>Promise<void>){if(lock.current)return;revision.current++;lock.current=true;setBusy(true);setError('');try{await work()}catch(e){setError(String(e))}finally{revision.current++;lock.current=false;setBusy(false)}}
  async function list(after?:string){const value=await api<{batches:Batch[];next_cursor:string|null}>('/batches'+(after?'?after='+encodeURIComponent(after):''));setItems(old=>after?[...old,...value.batches]:value.batches);setCursor(value.next_cursor)}
- async function read(id:string){setReport(null);setConfirmed(false);setSelected(id);const value=await api<{report:Report}>('/batches/report?batch_id='+encodeURIComponent(id));setReport(value.report)}
+ async function read(id:string){setReport(null);setConfirmed(false);setSelected(id);const value=await api<{batch_id:string;report:Report}>('/batches/report?batch_id='+encodeURIComponent(id));setReport(requireBatchIdentity(value,id))}
  useEffect(()=>{void perform(()=>list())},[]);
  useEffect(()=>{
   if(!selected)return;
@@ -27,7 +23,7 @@ export default function BatchPanel(){
   setPollError('');
   async function poll(){
    const version=revision.current;
-   if(!lock.current){try{const value=await api<{report:Report}>('/batches/report?batch_id='+encodeURIComponent(selected));if(!disposed&&!lock.current&&version===revision.current){setReport(old=>JSON.stringify(old)===JSON.stringify(value.report)?old:value.report);setPollError('')}}catch(e){if(!disposed&&version===revision.current)setPollError(`自动刷新失败：${String(e)}`)}}
+   if(!lock.current){try{const value=await api<{batch_id:string;report:Report}>('/batches/report?batch_id='+encodeURIComponent(selected));const next=requireBatchIdentity(value,selected);if(!disposed&&!lock.current&&version===revision.current){setReport(old=>JSON.stringify(old)===JSON.stringify(next)?old:next);setPollError('')}}catch(e){if(!disposed&&version===revision.current){setConfirmed(false);setPollError(`自动刷新失败：${String(e)}`)}}}
    if(!disposed)timer=setTimeout(poll,2000);
   }
   timer=setTimeout(poll,2000);return()=>{disposed=true;clearTimeout(timer)};
@@ -51,9 +47,18 @@ export default function BatchPanel(){
   {pollError&&<p role="alert">{pollError}。当前显示的是上次读取的报告。</p>}
   {report&&<>
    <p>共 {report.job_count} 项 · {report.paused?'已暂停排队':'允许新任务'} · {Object.entries(report.state_counts).map(([state,count])=>`${state}: ${count}`).join(' / ')}</p>
+   {report.rows.some(row=>row.metrics_error||row.error)&&<details>
+    <summary>结果异常明细（区分执行错误与指标校验）</summary>
+    <p>执行完成不代表驾驶通过。指标无法验证的任务不参与配对比较；不要为了修复报告而直接重跑仿真，先核对对应结果文件。</p>
+    {report.rows.filter(row=>row.metrics_error||row.error).map(row=><div key={row.job_id} style={{overflowWrap:'anywhere',margin:'12px 0'}}>
+     <p>任务 {row.job_id} · 执行 {row.execution_id??'尚未绑定'} · 状态 {row.execution_state}</p>
+     {row.error&&<p>执行错误：{row.error}</p>}
+     {row.metrics_error&&<p>指标校验失败（排除比较）：{row.metrics_error}</p>}
+    </div>)}
+   </details>}
    <label><input type="checkbox" checked={confirmed} disabled={busy} onChange={e=>setConfirmed(e.target.checked)}/>我已检查批次，允许本次推进启动一个真实评测任务</label>
    <div style={{display:'flex',gap:'12px',flexWrap:'wrap',margin:'12px 0'}}>
-    <button disabled={busy||!confirmed} onClick={()=>void control('advance')}>推进一步 / 核对执行结果</button>
+    <button disabled={busy||!!pollError||!confirmed} onClick={()=>void control('advance')}>推进一步 / 核对执行结果</button>
     <button disabled={busy} onClick={()=>void control(report.paused?'resume':'pause')}>{report.paused?'恢复排队':'暂停排队'}</button>
    </div>
    <div style={{overflowX:'auto'}}><table style={{width:'100%',textAlign:'left'}}><thead><tr>{['模型 / 场景','天气 / 纹理 / 种子','执行状态','驾驶结论','尝试','操作'].map(label=><th key={label}>{label}</th>)}</tr></thead><tbody>{report.rows.map(row=><tr key={row.job_id}>

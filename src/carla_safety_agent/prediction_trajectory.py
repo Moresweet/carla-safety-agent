@@ -3,14 +3,19 @@ import hashlib
 import inspect
 import math
 from functools import lru_cache
+from .navigation_reference import navigation_diagnostic
 
 SCHEMA='carla-prediction-spatial/2'
 PID='4a244e026b41acf0b9d3db3208bf0c15448f976024ebb495a70bdfc05c6eda9c'
 CONTROLLERS={'vad':PID,'uniad':PID,'uniad-tiny':PID,'uniad-base':PID,
+             'thinktwice':'d4343e889691d61d5521874a312a71775c48a67eacda0c6e8f6a6a5ac2af11c1',
+             'driveadapter':'d4343e889691d61d5521874a312a71775c48a67eacda0c6e8f6a6a5ac2af11c1',
              'tcp':'819840cbc5cbbcfdc4a6022705ebad9452ec5eb08c24fdc15c9244f150cc49e7',
              'admlp':'75c5474763d756f4d34f232076656b19ead52edf0ed6c9568848c539c4976e86'}
-ALIASES={'UniADAgent':'uniad','UniadAgent':'uniad','AD-MLP':'admlp','TCP':'tcp','VAD':'vad',
+ALIASES={'driveadapter-experimental':'driveadapter','thinktwice-experimental':'thinktwice','UniADAgent':'uniad','UniadAgent':'uniad','AD-MLP':'admlp','TCP':'tcp','VAD':'vad',
          'UniAD-Tiny':'uniad-tiny','UniAD-Base':'uniad-base'}
+ORIGINAL_MODELS = ('thinktwice', 'driveadapter')
+HEADING_MODELS = ('tcp', 'admlp', *ORIGINAL_MODELS)
 
 
 @lru_cache(maxsize=32)
@@ -22,7 +27,7 @@ def controller_digest(function):
 def raw_points(metadata,model):
     outputs=metadata.get('planning_outputs')
     if not isinstance(outputs,dict):raise ValueError('No controller telemetry')
-    if model in ('tcp','admlp'):
+    if model in HEADING_MODELS:
         points=[outputs.get('wp_'+str(i)) for i in range(1,5)]
     else:
         points=outputs.get('plan')
@@ -33,15 +38,15 @@ def raw_points(metadata,model):
            any(type(value) not in (int,float) or not math.isfinite(value) or abs(value)>10000 for value in point)
            for point in points):
         raise ValueError('Prediction components do not match the reviewed model output layout')
-    return [[float(value) for value in point[:2]] for point in points]
+    return [[float(value) for value in (point[:2][::-1] if model in ORIGINAL_MODELS else point[:2])] for point in points]
 
 
 def spatial_contract(model,digest):
     return {'schema_version':SCHEMA,'model':model,'controller_sha256':digest,
-            'raw_axes':'right_forward','unit':'m',
+            'raw_axes':'forward_right' if model in ORIGINAL_MODELS else 'right_forward','unit':'m',
             'ignored_for_spatial_plot':['relative_heading_rad'] if model=='admlp' else [],
-            'reference':'ego_heading' if model in ('tcp','admlp') else 'virtual_lidar',
-            'reference_offset_body_m':[0.,0.,0.] if model in ('tcp','admlp') else [-.39,0.,1.84],
+            'reference':'ego_heading' if model in HEADING_MODELS else 'virtual_lidar',
+            'reference_offset_body_m':[0.,0.,0.] if model in HEADING_MODELS else [-.39,0.,1.84],
             'telemetry_field':'planning_outputs',
             'point_dt_s':None}
 
@@ -54,10 +59,11 @@ def capture_prediction(agent,metadata):
         return {'state':'unavailable','reason':'Model coordinate contract not reviewed'}
     try:
         owner=getattr(agent,'net',None) if model in ('tcp','admlp') else getattr(agent,'pidcontroller',None)
+        if model in ORIGINAL_MODELS:owner=getattr(agent,'model',None)
         method=getattr(owner,'control_pid',None)
         digest=controller_digest(getattr(method,'__func__',method))
         if digest!=CONTROLLERS[model]:raise ValueError('Controller source differs from reviewed coordinate contract')
-        if model not in ('tcp','admlp'):
+        if model not in HEADING_MODELS:
             import numpy as np
             actual=np.asarray(getattr(agent,'lidar2ego',None),dtype=float)
             expected=np.array([[0,1,0,-.39],[-1,0,0,0],[0,0,1,1.84],[0,0,0,1]])
@@ -65,7 +71,7 @@ def capture_prediction(agent,metadata):
                 raise ValueError('Virtual LiDAR reference calibration differs from reviewed contract')
         if metadata.get('planning_anchor') is None:
             step,history=metadata.get('model_step'),metadata.get('planning_warmup_steps')
-            if (model in ('tcp','admlp') and type(step) is int and type(history) is int and 0<=step<history and
+            if (model in HEADING_MODELS and type(step) is int and type(history) is int and 0<=step<history and
                     metadata.get('planning_observed_calls')==0):
                 return {'state':'warmup','reason':'Model has not emitted a planning output during history warm-up',
                         'model_step':step,'required_history_steps':history}
@@ -129,6 +135,9 @@ def replay_prediction(metadata,pose):
         return {'state':'available','points':points,'contract':contract,'timing_verified':False,
                 'source_frame':anchor['frame'],'source_model_step':anchor['model_step'],
                 'prediction_age_s':age,'reused':anchor['frame']!=metadata['frame'],
+                'navigation_diagnostic':navigation_diagnostic(anchor,origin) if model=='driveadapter' else None,
+                'reference_warning':('DriveAdapter 使用运动补偿和平滑后的 GPS 导航位置；当前叠加使用 CARLA 真实车辆位姿，两者的精确一致性尚未验证，不能用于精确轨迹误差评估。'
+                                     if model=='driveadapter' else None),
                 'error_metrics_computed':False,'source':'saved_controller_prediction',
                 'note':'Spatial overlay only; prediction point timing and future error are not verified'}
     except (ValueError,TypeError,KeyError) as exc:

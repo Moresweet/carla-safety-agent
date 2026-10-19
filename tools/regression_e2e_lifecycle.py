@@ -34,7 +34,12 @@ def main():
     parser.add_argument('--output', required=True)
     parser.add_argument('--models', nargs='+', default=['vad', 'tcp', 'admlp', 'uniad-tiny', 'uniad-base', 'vad'])
     parser.add_argument('--route', default='26406')
+    parser.add_argument('--advance-frames', type=int, default=12)
+    parser.add_argument('--inference-timeout', type=int, default=240)
+    parser.add_argument('--require-planning-origin', action='store_true')
     args = parser.parse_args()
+    if not 12<=args.advance_frames<=5000:parser.error('advance-frames must be 12..5000')
+    if not 30<=args.inference_timeout<=7200:parser.error('inference-timeout must be 30..7200 seconds')
     output = Path(args.output)
     output.mkdir(parents=True, exist_ok=False)
     catalog = request('e2e/benchmark/catalog')
@@ -43,7 +48,9 @@ def main():
     wait_idle(5)
     reports = []
     for index, model in enumerate(args.models):
-        report = {'model': model, 'route': args.route, 'passed': False}
+        report = {'model': model, 'route': args.route, 'passed': False,
+                  'scope':'inference lifecycle with deliberate early stop; not route completion',
+                  'requested_advance_frames':args.advance_frames}
         reports.append(report)
         try:
             print(f'START {model}', flush=True)
@@ -64,7 +71,7 @@ def main():
             except urllib.error.HTTPError as exc:
                 assert exc.code >= 400
             report['duplicate_rejected'] = True
-            deadline = time.monotonic() + 240
+            deadline = time.monotonic() + args.inference_timeout
             first = None
             while time.monotonic() < deadline:
                 status = request('e2e/status')
@@ -75,13 +82,22 @@ def main():
                 telemetry = request('e2e/telemetry').get('telemetry')
                 if telemetry and telemetry['frame'] > 3:
                     first = first or telemetry['frame']
-                    if telemetry['frame'] >= first + 12:
+                    if telemetry['frame'] >= first + args.advance_frames:
                         break
                 time.sleep(2)
             else:
                 raise RuntimeError('Inference did not advance before deadline')
             report['frames'] = [first, telemetry['frame']]
             report['telemetry'] = telemetry
+            if args.require_planning_origin:
+                capture = request('capture/status')['capture']
+                report['planning_capture'] = capture
+                assert capture['prediction']['state'] == 'available', capture['prediction']
+                assert capture['planning_observed_calls'] > 0
+                assert capture['planning_anchor']['frame'] <= capture['frame']
+                assert capture['prediction']['anchor'] == capture['planning_anchor']
+                assert capture['prediction']['timing_verified'] is False
+                assert capture['recording'] is False
             assert telemetry['outputs']['trajectory_ego_m']
             report['cameras'] = {}
             for camera in telemetry['inputs']['camera_ids']:

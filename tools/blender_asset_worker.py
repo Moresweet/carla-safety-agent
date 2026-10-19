@@ -117,7 +117,7 @@ def main():
     blend, glb, fbx = export(output)
     meshes = mesh_objects()
     manifest = {
-        "ok": True,
+        "ok": fbx is not None,
         "name": spec.get("name", "GeneratedAsset"),
         "operation": "retexture" if source else "create",
         "objects": len(meshes),

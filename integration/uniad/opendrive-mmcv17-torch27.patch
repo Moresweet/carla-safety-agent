@@ -8,6 +8,24 @@
 @@ -17 +17 @@
 -#include <THC/THCAtomics.cuh>
 +#include <ATen/cuda/Atomic.cuh>
+@@ -31,0 +32 @@
++  if (num_query == 0) return;
+@@ -42,3 +43,4 @@
+-  if (err != cudaSuccess) {
+-    printf("error in ms_deformable_im2col_cuda: %s\n", cudaGetErrorString(err));
+-  }
++  TORCH_CHECK(err == cudaSuccess, "ms_deformable_im2col_cuda: ",
++              cudaGetErrorString(err), " batch=", batch_size,
++              " queries=", num_query, " heads=", num_heads,
++              " channels=", channels, " points=", num_point);
+@@ -57,0 +60 @@
++  if (num_query == 0) return;
+@@ -204,3 +207,2 @@
+-  if (err != cudaSuccess) {
+-    printf("error in ms_deformable_col2im_cuda: %s\n", cudaGetErrorString(err));
+-  }
++  TORCH_CHECK(err == cudaSuccess, "ms_deformable_col2im_cuda: ",
++              cudaGetErrorString(err));
 --- a/setup.py
 +++ b/setup.py
 @@ -268 +268 @@

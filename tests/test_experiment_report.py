@@ -17,6 +17,28 @@ def test_report_does_not_infer_success_from_completion(tmp_path):
     with pytest.raises(ValueError): summarize_queue(bad)
 
 
+@pytest.mark.parametrize('contents', ['[]', '{"execution_id":"a","execution_id":"b"}'])
+def test_bad_result_preserves_queue_report_but_excludes_metrics(tmp_path, contents):
+    q=ExperimentQueue(tmp_path/'queue')
+    q.create({**{a:[{'id':'base','configuration':{}}] for a in ('scenes','models','weather','textures')},'seeds':[1]})
+    claim=q.claim();job=claim['job_id'];attempt=claim['attempt']['attempt_id']
+    q.update_attempt(job,attempt,execution_id='run')
+    results=tmp_path/'results';results.mkdir()
+    path=results/'result.json';path.write_text(contents)
+    execution={'run_id':'run','kind':'rule-run','state':'completed',
+        'configuration':{'results':str(path),'scenario_sha256':'a'*64,
+            'request':{'batch_job_id':job,'batch_attempt_id':attempt}}}
+    q.update_attempt(job,attempt,execution_id='run',outcome='completed',
+        result={'source':'session_journal','execution':execution,'benchmark_passed':True})
+    before=q.read()
+    report=summarize_queue(before,results)
+    row=report['rows'][0]
+    assert report['all_executions_completed'] is True
+    assert row['metrics_error']
+    assert 'metrics' not in row and row['benchmark_passed'] is None
+    assert q.read()==before and path.read_text()==contents
+
+
 def test_pending_retry_does_not_inherit_old_failure(tmp_path):
     q = ExperimentQueue(tmp_path)
     q.create({**{a: [{'id': 'base', 'configuration': {}}] for a in ('scenes','models','weather','textures')}, 'seeds': [1]})

@@ -12,6 +12,12 @@ if not __debug__:
 
 root = Path(sys.argv[1]).resolve()
 manifest = json.loads((root/'manifest.json').read_text())
+projection = manifest.get('map_projection')
+if isinstance(projection,dict) and projection.get('state')=='available':
+    from carla_safety_agent.map_projection_archive import read_map_projection
+    read_map_projection(root,projection)
+    assert projection['map_name']==manifest['map'], 'Archived map identity mismatch'
+    assert manifest.get('files',{}).get('map_projection')==projection['path'], 'Map archive missing from portable file references'
 reference = manifest.get('scenario')
 if reference is not None:
     from carla_safety_agent.scenario_archive import read_verified_scenario
@@ -23,7 +29,9 @@ if reference is not None:
 archive = manifest.get('input_archive', 'model_input.npz')
 assert archive in ('model_input.npz', 'sensor_input.npz'), 'Unknown input archive'
 index = json.loads((root/'index.json').read_text())['frames']
-from carla_safety_agent.data_quality import validate_capture_index, validate_capture_frame
+if isinstance(index,list) and not index:
+    print('CSA_CAPTURE_QUALITY='+json.dumps({'schema_version':'capture-quality-reason/1','reason_code':'no_samples'}),flush=True)
+from carla_safety_agent.data_quality import validate_capture_index, validate_capture_frame, validate_ego_pose
 validate_capture_index(index, manifest)
 calibration = json.loads((root/'calibration.json').read_text())
 extrinsics_checked = 0
@@ -45,6 +53,12 @@ previous = -1
 for entry in index:
     folder = root/'samples'/f"{entry['frame']:010d}"
     meta = json.loads((folder/'frame.json').read_text())
+    try:
+        validate_ego_pose(meta.get('ego', {}).get('matrix'))
+    except (ValueError, AttributeError) as exc:
+        print('CSA_CAPTURE_QUALITY='+json.dumps({'schema_version':'capture-quality-reason/1',
+            'reason_code':'invalid_ego_pose','frame':entry['frame']}),flush=True)
+        raise ValueError(f"Invalid recorded ego pose at frame {entry['frame']}: {exc}") from exc
     cameras=('CAM_FRONT','CAM_FRONT_LEFT','CAM_FRONT_RIGHT','CAM_BACK','CAM_BACK_LEFT','CAM_BACK_RIGHT')
     validate_capture_frame(meta,entry,(*cameras, *('DEPTH_'+name for name in cameras),'LIDAR','BEV_RGB'))
     assert meta['synchronized'] and not meta['missing']
@@ -63,6 +77,18 @@ for entry in index:
             validate_input_coverage(required, model.files, meta.get('input_scalars', {}))
         if archive == 'sensor_input.npz':
             assert set(required).issubset(model.files), 'Missing raw input arrays'
+        for name in meta.get('actual_model_inputs', []):
+            if name in cameras or name not in meta.get('available', []):
+                continue  # Old recordings may contain only raw NPZ, no preview.
+            spec = calibration.get(name, {})
+            if spec.get('type') != 'sensor.camera.rgb':
+                continue
+            rgb = np.asarray(Image.open(folder/(name+'.png')))
+            raw = model[name]
+            assert rgb.ndim == 3 and rgb.shape[2] == 3, 'Invalid original model RGB preview'
+            assert raw.dtype == np.uint8 and raw.shape == (*rgb.shape[:2], 4), 'Invalid original model BGRA'
+            assert np.array_equal(rgb, raw[:, :, :3][:, :, ::-1]), 'Original model preview differs from raw input: '+name
+            assert rgb.shape[:2] == (spec['height'], spec['width']), 'Original model preview dimensions disagree'
         for name in ('CAM_FRONT','CAM_FRONT_LEFT','CAM_FRONT_RIGHT','CAM_BACK','CAM_BACK_LEFT','CAM_BACK_RIGHT'):
             rgb = np.asarray(Image.open(folder/(name+'.png')))
             assert rgb.ndim == 3 and rgb.shape[2] == 3, 'Invalid RGB shape'

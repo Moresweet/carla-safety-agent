@@ -3,8 +3,11 @@ import argparse
 import os
 import socket
 import subprocess
-from carla_safety_agent.restart_guard import verify_idle, verify_crash_restart, verify_recovery_restart,verify_handoff_idle
+from carla_safety_agent.restart_guard import verify_idle, verify_crash_restart, verify_recovery_restart,verify_handoff_idle,verify_dataset_jobs_idle
 from regression_scene_versions import request
+from carla_safety_agent.restart_guard import verify_asset_endpoint
+from carla_safety_agent.blender_pipeline import BlenderPipeline
+from pathlib import Path
 
 
 if __name__ == '__main__':
@@ -12,9 +15,15 @@ if __name__ == '__main__':
     modes=parser.add_mutually_exclusive_group()
     modes.add_argument('--after-crash',action='store_true')
     modes.add_argument('--resume-recovery',action='store_true')
+    modes.add_argument('--legacy-assets',action='store_true',
+                       help='Explicit first upgrade: local evidence for HTTP 404 or verified legacy GET catch-all')
     args=parser.parse_args()
     session=request('session/status')['session']
     scheduler=request('batches/scheduler')['scheduler']
+    verify_dataset_jobs_idle(request('datasets/jobs'))
+    verify_asset_endpoint(request,
+        lambda: BlenderPipeline(Path(__file__).resolve().parents[1]).restart_status(),
+        legacy_upgrade=args.legacy_assets)
     if not args.after_crash:verify_handoff_idle(request('scenes/handoff'))
     if args.after_crash:
         native=subprocess.run(['pgrep','-x','UE4Editor'],capture_output=True,check=False)

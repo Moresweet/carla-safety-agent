@@ -1,0 +1,43 @@
+diff --git a/include/rpc/detail/async_writer.h b/include/rpc/detail/async_writer.h
+index 62272fb..3e9af56 100644
+--- a/include/rpc/detail/async_writer.h
++++ b/include/rpc/detail/async_writer.h
+@@ -57,7 +57,10 @@ public:
+                             LOG_WARN("std::system_error during socket shutdown. "
+                                      "Code: {}. Message: {}", e.value(), e.message());
+                         }
+-                        socket_.close();
++                        socket_.close(e);
++                        if (e) {
++                            LOG_WARN("Socket close failed: {}", e.message());
++                        }
+                     }
+                 }));
+     }
+diff --git a/lib/rpc/detail/server_session.cc b/lib/rpc/detail/server_session.cc
+index d926be0..9a6861f 100644
+--- a/lib/rpc/detail/server_session.cc
++++ b/lib/rpc/detail/server_session.cc
+@@ -36,7 +36,11 @@ void server_session::close() {
+     LOG_INFO("Closing session.");
+     exit_ = true;
+     write_strand_.post([this, self]() {
+-        socket_.close();
++        std::error_code ec;
++        socket_.close(ec);
++        if (ec) {
++            LOG_WARN("Session socket close failed: {}", ec.message());
++        }
+         if (parent_)
+             parent_->close_session(self);
+     });
+@@ -140,7 +144,8 @@ void server_session::do_read() {
+             }
+         }));
+     if (exit_) {
+-        socket_.close();
++        // All session closes run on the write strand, including read exit.
++        close();
+     }
+ }
+ 

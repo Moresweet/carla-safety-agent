@@ -57,11 +57,12 @@ def recover_capture(source,destination_root,validator,python,require_inactive):
     evidence,total=inventory(source)
     manifest=json.loads((source/'manifest.json').read_text())
     if manifest.get('schema_version')!='carla-safety-dataset/0.2':raise ValueError('Only unified captures can be recovered')
-    if manifest.get('status') not in ('recording','saved_cleanup_error'):
-        raise ValueError('Only interrupted or cleanup-failed captures can be recovered')
+    if manifest.get('status') not in ('recording','saved_cleanup_error','saved_capture_error'):
+        raise ValueError('Only interrupted, capture-failed or cleanup-failed captures can be recovered')
     archive=manifest.get('input_archive')
     if archive not in ('sensor_input.npz','model_input.npz'):raise ValueError('Unknown capture archive')
     samples=source/'samples'
+    if not samples.exists():raise ValueError('No committed samples to recover (没有已提交样本可恢复)')
     folders=sorted(samples.iterdir())
     if len(folders)>10000:raise ValueError('Recovery supports at most 10000 sample directories')
     entries=[];omitted=[]

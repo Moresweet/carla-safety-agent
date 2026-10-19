@@ -19,6 +19,8 @@ const chrome=spawn('/usr/bin/google-chrome',['--headless=new','--disable-gpu','-
   '--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{stdio:'ignore'});
 let socket, diagnosticCDP;
 const browserErrors=[];
+const networkFailures=[];
+const pendingRequests=new Map();
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 try {
   let port;
@@ -37,8 +39,38 @@ try {
   diagnosticCDP=cdp;
   socket.addEventListener('message',event=>{const value=JSON.parse(event.data);if(value.method==='Runtime.exceptionThrown')browserErrors.push(value.params)});
   await cdp('Runtime.enable');
+  await cdp('Network.enable');
+  socket.addEventListener('message',event=>{const {method,params}=JSON.parse(event.data);
+    if(method==='Network.requestWillBeSent')pendingRequests.set(params.requestId,{url:params.request.url,method:params.request.method,timestamp:params.timestamp});
+    if(method==='Network.responseReceived'&&pendingRequests.has(params.requestId))Object.assign(pendingRequests.get(params.requestId),{status:params.response.status,protocol:params.response.protocol,timing:params.response.timing});
+    if(method==='Network.dataReceived'&&pendingRequests.has(params.requestId)){const request=pendingRequests.get(params.requestId);request.receivedBytes=(request.receivedBytes??0)+params.dataLength;}
+    if(method==='Network.loadingFailed')networkFailures.push({...params,request:pendingRequests.get(params.requestId)});
+    if(method==='Network.loadingFailed'||method==='Network.loadingFinished')pendingRequests.delete(params.requestId);
+  });
   await cdp('Page.enable');
   await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});
+  let imageFaultMode='transient';const imageFaultCounts=new Map();
+  if(process.argv.includes('--replay-faults')){
+    await cdp('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{
+      const original=window.fetch;window.__readFaults={mode:'transient',counts:{}};
+      window.fetch=async function(input,init){const url=new URL(typeof input==='string'?input:input.url,location.href),state=window.__readFaults;
+        if(url.pathname==='/scene/state'&&state.sceneOffline)return Response.json({ok:false,error:'Injected old world rejection',retryable:true},{status:503});
+        if(url.pathname==='/datasets/index'||url.pathname==='/datasets/frame'){
+          const key=url.pathname;state.counts[key]=(state.counts[key]||0)+1;
+          if(state.mode==='offline'||(state.mode==='transient'&&state.counts[key]<=2))throw new TypeError('Injected read-only connection failure');
+        }
+        return original.call(this,input,init);
+      };
+    })()`});
+    socket.addEventListener('message',event=>{
+      const message=JSON.parse(event.data);if(message.method!=='Fetch.requestPaused')return;
+      const {requestId,request}=message.params,url=new URL(request.url);url.searchParams.delete('read_retry');url.searchParams.delete('read_reload');
+      const count=(imageFaultCounts.get(url.href)||0)+1;imageFaultCounts.set(url.href,count);
+      const fail=imageFaultMode==='offline'||(imageFaultMode==='transient'&&count<=2);
+      void cdp(fail?'Fetch.failRequest':'Fetch.continueRequest',fail?{requestId,errorReason:'ConnectionFailed'}:{requestId}).catch(error=>browserErrors.push(String(error)));
+    });
+    await cdp('Fetch.enable',{patterns:[{urlPattern:'*://127.0.0.1:8765/datasets/file*',resourceType:'Image',requestStage:'Request'}]});
+  }
   if(process.argv.includes('--simulate-no-webgl')){
     await cdp('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{const original=HTMLCanvasElement.prototype.getContext;HTMLCanvasElement.prototype.getContext=function(kind,...args){return kind==='webgl'?null:original.call(this,kind,...args)}})()`});
   }
@@ -54,16 +86,32 @@ try {
   let models=[];
   for(let i=0;i<100;i++){
     models=await evaluate(`[...document.querySelectorAll('select[aria-label="生成场景测试模型"] option')].map(o=>({id:o.value,disabled:o.disabled}))`);
-    if(models.length===5)break;
+    if(models.length===5||(process.argv.includes('--offline-replay')&&models.length>0))break;
     // Server-rendered navigation can precede React hydration. Re-selecting
     // this read-only tab is idempotent; never retry mutation buttons here.
     if(i%5===0)await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Generate Scene')?.click()`);
     await delay(200);
   }
-  assert.deepEqual(models.map(m=>m.id).sort(),['admlp','tcp','uniad-base','uniad-tiny','vad']);
+  if(!process.argv.includes('--offline-replay'))assert.deepEqual(models.map(m=>m.id).sort(),['admlp','tcp','uniad-base','uniad-tiny','vad']);
+  else assert(process.argv.includes('--dataset'),'Offline replay requires an explicit saved dataset');
   const state=await evaluate(`(()=>{const section=document.querySelector('[aria-label="确认计划并选择模型"]');return {buttons:[...section.querySelectorAll('button')].map(b=>({text:b.textContent,disabled:b.disabled})),checkboxes:[...section.querySelectorAll('input')].map(b=>({checked:b.checked,disabled:b.disabled}))}})()`);
   assert(state.buttons[0].disabled,'Unreviewed plan must not start');
   const interactions=[];
+  if(process.argv.includes('--offline-replay'))interactions.push('offline_replay_only_model_readiness_not_validated');
+  if(process.argv.includes('--overview')){
+    const pages=[];
+    for(const [index,title] of buttons.entries()){
+      await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent===${JSON.stringify(title)}).click()`);
+      await delay(1800);
+      await evaluate(`window.scrollTo(0,0)`);
+      const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      const file=`overview-${String(index+1).padStart(2,'0')}.png`;
+      await writeFile(join(output,file),Buffer.from(shot.data,'base64'));
+      pages.push({title,file,text:await evaluate('document.body.innerText')});
+    }
+    await writeFile(join(output,'overview.json'),JSON.stringify(pages,null,2));
+    interactions.push('navigation_screenshots_only_not_feature_acceptance');
+  }
   if(process.argv.includes('--integration-status')){
     await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='End-to-End Test').click()`);
     let cards=[];
@@ -658,12 +706,15 @@ try {
   if(importJobFlag>=0){
     const job=process.argv[importJobFlag+1];assert(/^[a-zA-Z0-9]+$/.test(job));
     await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Asset Workshop').click()`);
+    const importHistory=`[...document.querySelectorAll('.asset-import-history')].find(section=>section.querySelector('h3')?.textContent==='持久化导入记录')`;
     let ready=false;
-    for(let i=0;i<100;i++){ready=await evaluate(`document.querySelector('.asset-import-history')?.textContent.includes(${JSON.stringify(job)})`);if(ready)break;await delay(200)}
+    for(let i=0;i<100;i++){ready=await evaluate(`${importHistory}?.textContent.includes(${JSON.stringify(job)})`);if(ready)break;await delay(200)}
     assert(ready,'Persisted import job not visible');
-    const text=await evaluate(`document.querySelector('.asset-import-history').textContent`);
+    const text=await evaluate(`${importHistory}.textContent`);
     assert(text.includes('已登记')&&text.includes('需要处理'),'Both success and rejected attempt should remain visible');
-    await evaluate(`(()=>{const section=document.querySelector('.asset-import-history');for(const d of section.querySelectorAll('details'))if(d.textContent.includes(${JSON.stringify(job)}))d.open=true;section.scrollIntoView({block:'start'});})()`);
+    const attempts=await evaluate(`[...${importHistory}.querySelectorAll('details')].filter(d=>d.textContent.includes(${JSON.stringify(job)})).map(d=>d.textContent)`);
+    assert(attempts.some(text=>text.includes('已登记'))&&attempts.some(text=>text.includes('需要处理')),'Both states must belong to the selected import job');
+    await evaluate(`(()=>{const section=${importHistory};for(const d of section.querySelectorAll('details'))if(d.textContent.includes(${JSON.stringify(job)}))d.open=true;section.scrollIntoView({block:'start'});})()`);
     const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
     await writeFile(join(output,'asset-import-history.png'),Buffer.from(screenshot.data,'base64'));
     interactions.push('persistent_import_success_and_failure_visible_without_mutation');
@@ -767,10 +818,329 @@ try {
     assert(ready,'Recorded dataset not listed');
     await evaluate(`(()=>{const s=document.querySelector('select[aria-label="数据集"]');s.value=${JSON.stringify(dataset)};s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     for(let i=0;i<100;i++){
-      ready=await evaluate(`!!document.querySelector('[aria-label="回放索引质量"]')&&!!document.querySelector('.replay-controls a[download]')`);
+      ready=await evaluate(`!!document.querySelector('[aria-label="回放索引质量"]')&&${process.argv.includes('--expect-empty-quota')?'true':"!!document.querySelector('.replay-controls a[download]')"}`);
       if(ready)break;await delay(200);
     }
     assert(ready,'Replay metadata did not load');
+    if(process.argv.includes('--quality-read-fault')||process.argv.includes('--quality-read-timeout')||process.argv.includes('--quality-read-malformed')){
+      const timeoutMode=process.argv.includes('--quality-read-timeout');
+      const malformedMode=process.argv.includes('--quality-read-malformed');
+      await evaluate(`(()=>{const original=window.fetch;window.__qualityReadCount=0;window.__qualityAbortCount=0;window.__restoreQualityRead=()=>{window.fetch=original};window.fetch=async function(input,init){const url=new URL(typeof input==='string'?input:input.url,location.href);if(url.pathname==='/datasets/quality'&&(!init?.method||init.method==='GET')){window.__qualityReadCount++;if(${malformedMode})return Response.json({ok:true,run_id:${JSON.stringify(dataset)},state:'passed',detail:{invalid:'object'}});if(${timeoutMode})return new Promise((resolve,reject)=>{const abort=()=>{window.__qualityAbortCount++;reject(init.signal.reason)};if(init.signal.aborted)abort();else init.signal.addEventListener('abort',abort,{once:true})});throw new TypeError('Injected quality read failure')}return original.call(this,input,init)}})()`);
+      const panel=`document.querySelector('[aria-label="原始数据质量检查"]')`;
+      let failed=false;
+      for(let i=0;i<180;i++){failed=await evaluate(`${panel}.textContent.includes('自动读取已停止')`);if(failed)break;await delay(100)}
+      assert(failed,'Quality read failure must stop polling');
+      await delay(2300);
+      assert.equal(await evaluate('window.__qualityReadCount'),1,'Failed quality read must not retry automatically');
+      if(timeoutMode)assert.equal(await evaluate('window.__qualityAbortCount'),1,'Timeout must abort the outstanding read');
+      assert(await evaluate(`${panel}.querySelector('button').disabled`),'Unknown report must block new audit');
+      if(malformedMode){
+        const text=await evaluate(`${panel}.textContent`);
+        assert(text.includes('校验日志格式异常')&&!text.includes('本次检查通过'),text);
+      }
+      await evaluate(`window.__restoreQualityRead();[...${panel}.querySelectorAll('button')].find(b=>b.textContent==='重新查询质量任务').click()`);
+      let restored=false;
+      for(let i=0;i<100;i++){restored=await evaluate(`!${panel}.textContent.includes('自动读取已停止')&&!${panel}.querySelector('button').disabled`);if(restored)break;await delay(100)}
+      assert(restored,'Explicit read should restore current report');
+      interactions.push(malformedMode?'quality_http200_malformed_report_rejected_no_retry_recovered':timeoutMode?'quality_read_timeout_aborted_single_request_explicit_recovery':'quality_read_failure_no_auto_retry_explicit_recovery');
+    }
+    if(process.argv.includes('--expect-empty-quota')){
+      const state=await evaluate(`(()=>{const controls=document.querySelector('.replay-controls');return {text:controls.textContent,buttons:[...controls.querySelectorAll('button')].map(b=>({text:b.textContent,disabled:b.disabled})),download:!!controls.querySelector('a[download]'),notice:document.querySelector('[aria-label="录制完成状态提示"]')?.textContent}})()`);
+      assert(state.text.includes('0 / 0 帧'),state.text);
+      assert(state.buttons.every(button=>button.disabled),'Empty capture playback must be disabled');
+      assert(!state.download,'No raw-frame download without samples');
+      const quality=await evaluate(`document.querySelector('[aria-label="回放索引质量"]').textContent`);
+      assert(quality.includes('没有可回放样本，无法验证时序')&&!quality.includes('严格递增'),quality);
+      assert(state.notice?.includes('capture_quota')&&state.notice.includes('不代表预定采集全部完成'),state.notice);
+      if(process.argv.includes('--expect-empty-quality-failed')){
+        let explained=false;
+        for(let i=0;i<100;i++){
+          explained=await evaluate(`document.querySelector('[aria-label="原始数据质量检查"]')?.textContent.includes('没有已录制样本，无法验证原始数据质量')`);
+          if(explained)break;await delay(100);
+        }
+        assert(explained,'Saved empty-sample quality failure must be explained');
+      }
+      interactions.push('empty_quota_recording_explained_playback_disabled_no_download');
+    }
+    const quotaFlag=process.argv.indexOf('--expect-quota-gib');
+    if(quotaFlag>=0){
+      const amount=process.argv[quotaFlag+1];assert(/^[1-9][0-9]*$/.test(amount));
+      const text=await evaluate(`document.querySelector('[aria-label="录制配额策略"]')?.textContent`);
+      assert(text?.includes(amount+' GiB')&&text.includes('不是文件系统硬配额'),text);
+      await evaluate(`document.querySelector('[aria-label="录制配额策略"]').scrollIntoView({block:'center'})`);
+      const shot=await cdp('Page.captureScreenshot',{format:'png'});
+      await writeFile(join(output,'capture-quota-policy.png'),Buffer.from(shot.data,'base64'));
+      interactions.push('recorded_quota_policy_visible_not_current_free_space');
+    }
+    if(process.argv.includes('--archive-capture')){
+      // Explicit mutation: one real archive; hide its POST response only after
+      // the server accepted it, then recover via the same persisted request ID.
+      const panel=`document.querySelector('[aria-label="录制归档"]')`;
+      const waitFor=async expression=>{for(let i=0;i<150;i++){if(await evaluate(expression))return;await delay(200)}throw Error('Archive UI condition timeout: '+expression)};
+      await waitFor(`!!${panel}`);
+      assert(await evaluate(`${panel}.querySelector('button').disabled`),'Archive must require confirmation');
+      await evaluate(`(()=>{const original=window.fetch;window.__archivePosts=[];window.__restoreArchiveFetch=()=>{window.fetch=original};window.fetch=async function(input,init){
+        const url=new URL(typeof input==='string'?input:input.url,location.href);
+        if(url.pathname==='/datasets/archive'&&init?.method==='POST'){
+          window.__archivePosts.push(JSON.parse(init.body));
+          const response=await original.call(this,input,init);
+          if(response.ok){await response.text();throw new TypeError('Injected accepted archive response loss')}
+          return response;
+        }
+        return original.call(this,input,init);
+      }})()`);
+      await evaluate(`${panel}.querySelector('input[type="checkbox"]').click()`);
+      await waitFor(`!${panel}.querySelector('button').disabled`);
+      await evaluate(`(()=>{const button=${panel}.querySelector('button');button.click();button.click()})()`);
+      await waitFor(`${panel}.textContent.includes('Injected accepted archive response loss')`);
+      await delay(1600);
+      const posts=await evaluate('window.__archivePosts');
+      assert.equal(posts.length,1,'Double click or lost response must not duplicate submission');
+      assert.equal(posts[0].run_id,dataset);
+      assert(await evaluate(`${panel}.querySelector('button').disabled`),'Retry needs fresh confirmation');
+      await evaluate(`${panel}.scrollIntoView({block:'center'})`);
+      const lost=await cdp('Page.captureScreenshot',{format:'png'});
+      await writeFile(join(output,'archive-response-lost.png'),Buffer.from(lost.data,'base64'));
+      await evaluate(`window.__restoreArchiveFetch();[...${panel}.querySelectorAll('button')].find(b=>b.textContent==='查询原归档任务').click()`);
+      await waitFor(`!!${panel}.querySelector('a[download]')`);
+      const id=posts[0].request_id;
+      const status=await (await fetch('http://127.0.0.1:8765/datasets/archive?request_id='+id)).json();
+      assert.equal(status.state,'archived');assert.equal(status.source_removed,false);
+      const repeat=await (await fetch('http://127.0.0.1:8765/datasets/archive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(posts[0])})).json();
+      assert.deepEqual(repeat,status,'Same-ID submission must return the existing finished job');
+      const href=await evaluate(`${panel}.querySelector('a[download]').href`);
+      assert.equal(new URL(href).searchParams.get('request_id'),id);
+      const response=await fetch(href);assert.equal(response.status,200);
+      let bytes=0;const digest=createHash('sha256');
+      for await(const chunk of response.body){bytes+=chunk.length;digest.update(chunk)}
+      assert.equal(bytes,status.archive_bytes);assert.equal(digest.digest('hex'),status.archive_sha256);
+      // Remount the data page: sessionStorage must recover the same job, not
+      // create a second archive. No new POST is made by this navigation.
+      await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Generate Scene').click()`);
+      await waitFor(`!${panel}`);
+      await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='Collect Data').click()`);
+      await waitFor(`[...document.querySelectorAll('select[aria-label="数据集"] option')].some(o=>o.value===${JSON.stringify(dataset)})`);
+      await evaluate(`(()=>{const s=document.querySelector('select[aria-label="数据集"]');s.value=${JSON.stringify(dataset)};s.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+      await waitFor(`!!${panel}?.querySelector('a[download]')`);
+      assert.equal(await evaluate(`${panel}.querySelector('a[download]').href`),href);
+      await evaluate(`${panel}.scrollIntoView({block:'center'})`);
+      const shot=await cdp('Page.captureScreenshot',{format:'png'});
+      await writeFile(join(output,'archive-completed.png'),Buffer.from(shot.data,'base64'));
+      await writeFile(join(output,'archive-result.json'),JSON.stringify({passed:true,status,download_bytes:bytes,response_loss_recovered:true,remount_same_request:true,source_removed:false},null,2));
+      interactions.push('real_archive_confirmation_response_loss_query_dedup_download_hash_remount_verified');
+    }
+    if(process.argv.includes('--storage-review')){
+      await evaluate(`document.querySelector('[aria-label="录制空间盘点"] button').click()`);
+      for(let i=0;i<200;i++){
+        ready=await evaluate(`document.querySelectorAll('[aria-label="录制空间盘点"] tbody tr').length>0`);
+        if(ready)break;await delay(200);
+      }
+      assert(ready,'Storage review did not render');
+      const storage=await evaluate(`(()=>{const panel=document.querySelector('[aria-label="录制空间盘点"]');return {text:panel.textContent,rows:[...panel.querySelectorAll('tbody tr')].map(row=>({id:row.cells[0].textContent,size:parseFloat(row.cells[1].textContent)})),overflow:panel.scrollWidth>panel.clientWidth+1}})()`);
+      assert(storage.text.includes('未标记或未发现引用不代表可以删除'));
+      assert(storage.text.includes('项目引用'),'Project reference counts missing');
+      assert(storage.text.includes('已登记划分引用'),'Registered split counts missing');
+      if(process.argv.includes('--expect-project-review-incomplete')){
+        assert(storage.text.includes('扫描不完整，请勿据此清理'),storage.text);
+        assert(storage.text.includes('Dependency manifest mismatch'),storage.text);
+      }
+      await writeFile(join(output,'storage-review.json'),JSON.stringify(storage,null,2));
+      assert(storage.rows.length>0&&!storage.overflow,'Storage table overflows page');
+      assert(storage.rows.every((row,i)=>!i||row.size<=storage.rows[i-1].size),'Storage not sorted descending');
+      await evaluate(`document.querySelector('[aria-label="录制空间盘点"]').scrollIntoView({block:'start'})`);
+      const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      await writeFile(join(output,'storage-review.png'),Buffer.from(shot.data,'base64'));
+      interactions.push('storage_review_manual_read_sorted_rows_without_deletion');
+      if(process.argv.includes('--storage-filters')){
+        const panel=`document.querySelector('[aria-label="录制空间盘点"]')`;
+        const setSearch=async value=>{
+          await evaluate(`(()=>{const input=${panel}.querySelector('[aria-label="空间盘点搜索"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,${JSON.stringify(value)});input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+          await delay(150);
+        };
+        await setSearch(dataset);
+        assert.equal(await evaluate(`${panel}.querySelectorAll('tbody tr').length`),1);
+        await evaluate(`${panel}.querySelector('tbody button').click()`);
+        await delay(150);
+        assert.equal(await evaluate(`document.querySelector('[aria-label="数据集"]').value`),dataset);
+        await setSearch('no-recording-matches-this-filter');
+        assert.equal(await evaluate(`${panel}.querySelectorAll('tbody tr').length`),0);
+        await setSearch('');
+        await evaluate(`${panel}.querySelector('input[type="checkbox"]').click()`);
+        await delay(150);
+        const kept=await evaluate(`[...${panel}.querySelectorAll('tbody tr')].map(row=>row.cells[3].textContent)`);
+        assert(kept.length>0&&kept.every(text=>!text.includes('未显式保留')));
+        await evaluate(`(()=>{const select=${panel}.querySelector('[aria-label="空间盘点状态"]');select.value='recording';select.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+        await delay(150);
+        const combined=await evaluate(`[...${panel}.querySelectorAll('tbody tr')].map(row=>({status:row.cells[2].textContent,keep:row.cells[3].textContent}))`);
+        assert(combined.every(row=>row.status==='recording'&&!row.keep.includes('未显式保留')));
+        await evaluate(`(()=>{const select=${panel}.querySelector('[aria-label="空间盘点状态"]');select.value='saved';select.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+        await delay(150);
+        const other=await evaluate(`[...${panel}.querySelectorAll('tbody button')].find(button=>button.textContent!==${JSON.stringify(dataset)})?.textContent`);
+        assert(other,'Need a different saved protected recording for navigation');
+        await evaluate(`[...${panel}.querySelectorAll('tbody button')].find(button=>button.textContent===${JSON.stringify(other)}).click()`);
+        for(let i=0;i<100;i++){
+          ready=await evaluate(`document.querySelector('[aria-label="数据集"]').value===${JSON.stringify(other)}&&document.querySelector('.replay-controls a[download]')?.href.includes(${JSON.stringify(other)})`);
+          if(ready)break;await delay(100);
+        }
+        assert(ready,'Cross-recording selection did not load matching replay link');
+        await evaluate(`${panel}.scrollIntoView({block:'start'})`);
+        const filteredShot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+        await writeFile(join(output,'storage-filters.png'),Buffer.from(filteredShot.data,'base64'));
+        await evaluate(`${panel}.querySelector('input[type="checkbox"]').click()`);
+        await evaluate(`(()=>{const select=${panel}.querySelector('[aria-label="空间盘点状态"]');select.value='';select.dispatchEvent(new Event('change',{bubbles:true}));const datasetSelect=document.querySelector('[aria-label="数据集"]');datasetSelect.value=${JSON.stringify(dataset)};datasetSelect.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+        await delay(150);
+        assert.equal(await evaluate(`${panel}.querySelectorAll('tbody tr').length`),storage.rows.length);
+        for(let i=0;i<100;i++){
+          ready=await evaluate(`document.querySelector('.replay-controls a[download]')?.href.includes(${JSON.stringify(dataset)})`);
+          if(ready)break;await delay(100);
+        }
+        assert(ready,'Original recording did not reload');
+        interactions.push('storage_search_empty_result_kept_filter_and_selection_verified');
+      }
+      if(process.argv.includes('--storage-malformed')){
+        await evaluate(`(()=>{const original=window.fetch;window.__storageRequests=0;window.__restoreStorageFetch=()=>{window.fetch=original};window.fetch=async function(input,init){const url=new URL(typeof input==='string'?input:input.url,location.href);if(url.pathname==='/datasets/storage'){window.__storageRequests++;return new Response(JSON.stringify({ok:true,recordings:[null],free_bytes:0}),{status:200,headers:{'Content-Type':'application/json'}})}return original.call(this,input,init)};const button=document.querySelector('[aria-label="录制空间盘点"] button');button.click();button.click()})()`);
+        for(let i=0;i<50;i++){
+          ready=await evaluate(`document.querySelector('[aria-label="录制空间盘点"] [role="alert"]')?.textContent.includes('格式异常')`);
+          if(ready)break;await delay(100);
+        }
+        assert(ready,'Malformed storage response did not show error');
+        assert.equal(await evaluate(`document.querySelectorAll('[aria-label="录制空间盘点"] tbody tr').length`),0,'Stale storage rows retained');
+        await delay(1200);
+        assert.equal(await evaluate('window.__storageRequests'),1,'Unexpected double request or automatic retry');
+        const faultShot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+        await writeFile(join(output,'storage-malformed.png'),Buffer.from(faultShot.data,'base64'));
+        await evaluate(`window.__restoreStorageFetch();document.querySelector('[aria-label="录制空间盘点"] button').click()`);
+        for(let i=0;i<200;i++){
+          ready=await evaluate(`document.querySelectorAll('[aria-label="录制空间盘点"] tbody tr').length>0`);
+          if(ready)break;await delay(200);
+        }
+        assert(ready,'Manual storage refresh did not recover');
+        interactions.push('malformed_storage_clears_stale_rows_no_retry_manual_recovery');
+      }
+    }
+    if(process.argv.includes('--capture-error-notice')){
+      assert(!process.argv.includes('--recover-capture'),'Simulated notice must not start real recovery');
+      await evaluate(`(()=>{const original=window.fetch;window.__restoreCaptureNotice=()=>{window.fetch=original};window.__captureNoticePosts=0;window.fetch=async function(input,init){
+        const url=new URL(typeof input==='string'?input:input.url,location.href);
+        if(url.pathname==='/datasets/recovery'&&(init?.method??'GET')==='POST'){window.__captureNoticePosts++;throw Error('Test forbids recovery writes')}
+        const response=await original.call(this,input,init);
+        if(url.pathname!=='/datasets')return response;
+        const doc=await response.clone().json();doc.datasets=doc.datasets.map(d=>d.run_id===${JSON.stringify(dataset)}?{...d,status:'saved_capture_error',error:'模拟磁盘写入失败',stop_reason:'capture_io_error'}:d);
+        return new Response(JSON.stringify(doc),{status:response.status,headers:{'Content-Type':'application/json'}});
+      };[...document.querySelectorAll('button')].find(b=>b.textContent==='刷新清单').click()})()`);
+      for(let i=0;i<50;i++){
+        ready=await evaluate(`document.querySelector('[aria-label="录制完成状态提示"]')?.textContent.includes('模拟磁盘写入失败')`);
+        if(ready)break;await delay(200);
+      }
+      assert(ready,'Capture error notice absent');
+      assert(await evaluate(`document.querySelector('[aria-label="录制完成状态提示"]').textContent.includes('不是完整成功数据')`));
+      assert(await evaluate(`document.querySelector('[aria-label="恢复中断录制"] button').disabled`));
+      assert.equal(await evaluate('window.__captureNoticePosts'),0);
+      await evaluate(`document.querySelector('[aria-label="录制完成状态提示"]').scrollIntoView({block:'center'})`);
+      const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      await writeFile(join(output,'capture-error-notice.png'),Buffer.from(shot.data,'base64'));
+      await evaluate('window.__restoreCaptureNotice()');
+      interactions.push('simulated_capture_error_notice_and_unconfirmed_recovery_gate_no_writes');
+    }
+    if(process.argv.includes('--retention-faults')){
+      assert(!process.argv.includes('--retention-toggle'),'Do not combine retention write and fault tests');
+      const before=await (await fetch('http://127.0.0.1:8765/datasets/retention')).json();
+      const panel=`document.querySelector('[aria-label="录制保留设置"]')`;
+      const waitFor=async expression=>{for(let i=0;i<150;i++){if(await evaluate(expression))return;await delay(100)}throw Error('Retention fault condition timeout: '+expression)};
+      await waitFor(`${panel}&&!${panel}.textContent.includes('保留状态未确认')`);
+      await evaluate(`(()=>{const original=window.fetch;window.__retentionFault={posts:0,reads:0,offline:false};window.__restoreRetentionFetch=()=>{window.fetch=original};window.fetch=async function(input,init){
+        const url=new URL(typeof input==='string'?input:input.url,location.href),state=window.__retentionFault;
+        if(url.pathname==='/datasets/retention'){
+          if((init?.method??'GET')==='POST'){state.posts++;return Response.json({ok:false,error:'Retention revision changed; refresh before editing'},{status:400})}
+          state.reads++;if(state.offline)throw new TypeError('Injected retention network failure');
+        }
+        return original.call(this,input,init);
+      }})()`);
+      await evaluate(`(()=>{const i=document.querySelector('[aria-label="录制保留原因"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(i,'故障回归原因保留');i.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await waitFor(`!${panel}.querySelector('button').disabled`);
+      await evaluate(`(()=>{const b=${panel}.querySelector('button');b.click();b.click()})()`);
+      await waitFor(`${panel}.textContent.includes('revision changed')&&${panel}.querySelector('button').disabled`);
+      assert.equal(await evaluate(`document.querySelector('[aria-label="录制保留原因"]').value`),'故障回归原因保留');
+      await delay(1200);
+      assert.equal(await evaluate('window.__retentionFault.posts'),1,'Failed writes must not retry');
+      if(process.argv.includes('--storage-review')){
+        assert.equal(await evaluate(`document.querySelectorAll('[aria-label="录制空间盘点"] tbody tr').length`),0);
+        assert(await evaluate(`document.querySelector('[aria-label="录制空间盘点"]').textContent.includes('旧盘点已清除')`));
+        interactions.push('retention_write_attempt_invalidates_storage_even_on_conflict');
+      }
+      await evaluate(`${panel}.scrollIntoView({block:'center'})`);
+      const shot=await cdp('Page.captureScreenshot',{format:'png'});
+      await writeFile(join(output,'retention-conflict.png'),Buffer.from(shot.data,'base64'));
+      await evaluate(`window.__retentionFault.offline=true;${panel}.querySelectorAll('button')[1].click()`);
+      await waitFor(`${panel}.textContent.includes('Injected retention network failure')&&!${panel}.querySelectorAll('button')[1].disabled`);
+      assert(await evaluate(`${panel}.querySelector('button').disabled`));
+      await delay(1200);
+      assert.equal(await evaluate('window.__retentionFault.reads'),1,'Failed reads require explicit refresh');
+      await evaluate(`window.__retentionFault.offline=false;${panel}.querySelectorAll('button')[1].click()`);
+      await waitFor(`!${panel}.textContent.includes('保留状态未确认')&&!${panel}.querySelector('button').disabled`);
+      assert.equal(await evaluate(`document.querySelector('[aria-label="录制保留原因"]').value`),'故障回归原因保留');
+      assert.deepEqual(await (await fetch('http://127.0.0.1:8765/datasets/retention')).json(),before,'Fault tests must not mutate real state');
+      await evaluate('window.__restoreRetentionFetch()');
+      interactions.push('retention_conflict_offline_no_retry_reason_preserved_explicit_refresh_verified');
+    }
+    if(process.argv.includes('--retention-toggle')){
+      const waitFor=async expression=>{for(let i=0;i<100;i++){if(await evaluate(expression))return;await delay(100)}throw Error('Retention condition timeout')};
+      const before=await (await fetch('http://127.0.0.1:8765/datasets/retention')).json();
+      assert(!Object.hasOwn(before.records,dataset),'Retention fixture must initially be unmarked');
+      const panel=`document.querySelector('[aria-label="录制保留设置"]')`;
+      await waitFor(`${panel}?.textContent.includes('未设置显式保留')`);
+      assert(await evaluate(`${panel}.querySelector('button').disabled`),'Empty reason must not submit');
+      for(const keep of [true,false]){
+        await evaluate(`(()=>{const input=document.querySelector('[aria-label="录制保留原因"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'浏览器保留标记回归');input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+        await waitFor(`!${panel}.querySelector('button').disabled`);
+        await evaluate(`(()=>{const button=${panel}.querySelector('button');button.click();button.click()})()`);
+        await waitFor(`${panel}.textContent.includes(${JSON.stringify(keep?'已标记保留：':'未设置显式保留')})&&!${panel}.querySelectorAll('button')[1].disabled`);
+        const state=await (await fetch('http://127.0.0.1:8765/datasets/retention')).json();
+        assert.equal(Object.hasOwn(state.records,dataset),keep);
+        assert.equal(state.revision,before.revision+(keep?1:2),'Duplicate click must not issue another mutation');
+        await evaluate(`${panel}.scrollIntoView({block:'center'})`);
+        const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+        await writeFile(join(output,keep?'retention-kept.png':'retention-released.png'),Buffer.from(shot.data,'base64'));
+      }
+      interactions.push('retention_reason_required_keep_unkeep_double_click_and_revision_verified');
+    }
+    if(process.argv.includes('--replay-faults')){
+      const waitFor=async(expression)=>{for(let i=0;i<150;i++){if(await evaluate(expression))return;await delay(100)}throw Error('Fault condition timeout: '+expression)};
+      const loaded=`[...document.querySelectorAll('.sensor-workbench .sensor-image img')].length===8&&[...document.querySelectorAll('.sensor-workbench .sensor-image img')].every(i=>i.complete&&i.naturalWidth>0&&i.style.visibility==='visible')`;
+      await waitFor(loaded);
+      assert.deepEqual(await evaluate('window.__readFaults.counts'),{'/datasets/index':3,'/datasets/frame':3});
+      assert.equal(imageFaultCounts.size,8);assert([...imageFaultCounts.values()].every(n=>n===3));
+      const shot=async name=>{const selector=name.startsWith('images-')?'.sensor-workbench':'.collection-selection';await evaluate(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'start'})`);const value=await cdp('Page.captureScreenshot',{format:'png'});await writeFile(join(output,name+'.png'),Buffer.from(value.data,'base64'))};
+      await shot('replay-transient-recovered');
+      await evaluate(`window.__readFaults={mode:'offline',counts:{}}`);
+      await evaluate(`(()=>{const s=document.querySelector('select[aria-label="数据集"]');s.value='';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);await delay(100);
+      await evaluate(`(()=>{const s=document.querySelector('select[aria-label="数据集"]');s.value=${JSON.stringify(dataset)};s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+      await waitFor(`document.querySelector('[aria-label="回放连接状态"]')?.textContent.includes('已停止自动重试')`);
+      await delay(1500);assert.deepEqual(await evaluate('window.__readFaults.counts'),{'/datasets/index':3});
+      assert.equal(await evaluate(`document.querySelectorAll('.sensor-workbench .sensor-image img').length`),0,'Failed index must not reveal old images');
+      await shot('replay-retry-exhausted');
+      imageFaultMode='normal';
+      await evaluate(`window.__readFaults.mode='normal';[...document.querySelectorAll('button')].find(b=>b.textContent==='重新读取回放').click()`);
+      await waitFor(loaded);await shot('replay-manual-recovered');
+      imageFaultMode='offline';imageFaultCounts.clear();
+      await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='重新加载图像').click()`);
+      await waitFor(`document.querySelectorAll('.sensor-workbench .recoverable-image [role=alert]').length===8`);
+      await delay(1500);assert.equal(imageFaultCounts.size,8);assert([...imageFaultCounts.values()].every(n=>n===3));
+      await shot('images-retry-exhausted');
+      imageFaultMode='normal';
+      await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='重新加载图像').click()`);
+      await waitFor(loaded);await shot('images-manual-recovered');
+      await evaluate('window.__readFaults.sceneOffline=true');
+      await waitFor(`document.querySelector('[aria-label="场景连接状态"]')?.textContent.includes('HTTP 503')`);
+      assert.equal(await evaluate(`document.querySelectorAll('nav button').length`),6,'Scene errors must not crash the page');
+      await evaluate('window.scrollTo(0,0)');
+      const sceneShot=await cdp('Page.captureScreenshot',{format:'png'});await writeFile(join(output,'scene-read-unavailable.png'),Buffer.from(sceneShot.data,'base64'));
+      await evaluate('window.__readFaults.sceneOffline=false');
+      await waitFor(`!document.querySelector('[aria-label="场景连接状态"]')`);
+      interactions.push('bounded_transient_GET_and_image_recovery','persistent_read_and_image_failure_stops_after_three_attempts','explicit_retry_recovers_without_old_frame_or_model_start');
+      interactions.push('scene_503_does_not_replace_valid_world_or_crash_ui_and_poll_recovers');
+      await writeFile(join(output,'fault-checks.json'),JSON.stringify({imageCounts:[...imageFaultCounts],reads:await evaluate('window.__readFaults.counts'),scope:'Injected read-only browser network faults against saved data; simulator not restarted'},null,2));
+    }
     if(process.argv.includes('--recover-capture')){
       assert(dataset.startsWith('capture-'),'Recovery must start from an original recording');
       await delay(3500);
@@ -874,21 +1244,84 @@ try {
       interactions.push('explicit_window_export_download_hash_and_subset_playback_verified');
     }
     const quality=await evaluate(`document.querySelector('[aria-label="回放索引质量"]').textContent`);
-    assert(quality.includes('严格递增')&&quality.includes('不等于传感器丢帧数量'));
+    assert(quality.includes(process.argv.includes('--expect-empty-quota')?'没有可回放样本':'严格递增')&&quality.includes('不等于传感器丢帧数量'));
     const screenshot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
     await writeFile(join(output,'replay-quality.png'),Buffer.from(screenshot.data,'base64'));
     interactions.push('recorded_dataset_quality_visible');
+    if(process.argv.includes('--expect-interrupted-warning')){
+      const notice=await evaluate(`document.querySelector('[aria-label="录制完成状态提示"]')?.textContent`);
+      assert(notice?.includes('recording 标记不能证明任务仍在运行'),String(notice));
+      await evaluate(`document.querySelector('[aria-label="录制完成状态提示"]').scrollIntoView({block:'center'})`);
+      const warningShot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      await writeFile(join(output,'capture-outcome-warning.png'),Buffer.from(warningShot.data,'base64'));
+      interactions.push('interrupted_recording_warning_visible_without_recovery_write');
+    }
+    if(process.argv.includes('--model-four-views')){
+      let loaded=false;
+      for(let i=0;i<100;i++){
+        loaded=await evaluate(`(()=>{const images=[...document.querySelectorAll('[aria-label="模型原始四视角"] img')];return images.length===4&&images.every(image=>image.complete&&image.naturalWidth>0)})()`);
+        if(loaded)break;
+        await delay(200);
+      }
+      assert(loaded,'Original four-view model images did not load');
+      await evaluate(`document.querySelector('[aria-label="模型原始四视角"]').scrollIntoView({block:'start'})`);
+      const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      await writeFile(join(output,'model-four-views.png'),Buffer.from(shot.data,'base64'));
+      await evaluate(`document.querySelector('[aria-label="模型原始四视角"] button').click()`);
+      let enlarged=false;
+      for(let i=0;i<100;i++){
+        enlarged=await evaluate(`(()=>{const image=document.querySelector('[aria-label="传感器大图"] img');return !!image&&image.alt==='rgb_front'&&image.complete&&image.naturalWidth===1600})()`);
+        if(enlarged)break;await delay(200);
+      }
+      assert(enlarged,'Original front image did not enlarge at recorded resolution');
+      const enlargedShot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+      await writeFile(join(output,'model-front-enlarged.png'),Buffer.from(enlargedShot.data,'base64'));
+      await evaluate(`document.querySelector('[aria-label="传感器大图"] button').click()`);
+      interactions.push('four_original_model_images_loaded_separately_from_auxiliary_views');
+    }
+    const sampleFlag=process.argv.indexOf('--sample-index');
+    if(sampleFlag>=0){
+      const sample=Number(process.argv[sampleFlag+1]);assert(Number.isSafeInteger(sample)&&sample>=0);
+      const index=await (await fetch('http://127.0.0.1:8765/datasets/index?run_id='+encodeURIComponent(dataset))).json();
+      assert(sample<index.frames.length,'Requested sample outside recorded index');
+      const expectedFrame=index.frames[sample].frame;
+      await evaluate(`(()=>{const slider=document.querySelector('input[aria-label="回放时间轴"]');Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(slider,${sample});slider.dispatchEvent(new Event('input',{bubbles:true}));slider.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+      let selected=false;
+      for(let i=0;i<100;i++){
+        selected=await evaluate(`(()=>{const a=document.querySelector('.replay-controls a[download]');return !!a&&new URL(a.href).searchParams.get('frame')===${JSON.stringify(String(expectedFrame))}})()`);
+        if(selected)break;await delay(200);
+      }
+      assert(selected,'Requested sample did not finish loading');
+      interactions.push('explicit_recorded_sample_selected_'+sample);
+    }
     if(process.argv.includes('--prediction-overlay')||process.argv.includes('--legacy-prediction-no-overlay')||process.argv.includes('--warmup-no-prediction')){
       let trackText;
       for(let i=0;i<100;i++){
         trackText=await evaluate(`document.querySelector('[aria-label="真实轨迹与预测对比"]')?.textContent`);
-        if(trackText&&(trackText.includes('绿色点线')||trackText.includes('不叠加模型预测')))break;
+        if(trackText&&(process.argv.includes('--prediction-overlay')?trackText.includes('绿色点线'):trackText.includes('不叠加模型预测')))break;
         await delay(200);
       }
       assert(trackText,'Trajectory comparison unavailable');
       const count=await evaluate(`document.querySelectorAll('[aria-label="真实轨迹与预测对比"] circle[fill="#5de2bc"]').length`);
       if(process.argv.includes('--prediction-overlay')){
         assert(count>0&&trackText.includes('不计算 ADE/FDE'),trackText);
+        if(process.argv.includes('--expect-map-projection')){
+          assert.equal(count,4);
+          assert(trackText.includes('已使用录制归档地图逐点转换预测轨迹'),trackText);
+          assert(trackText.includes('投影后导航原点与真值相差'),trackText);
+          assert(!trackText.includes('当前绿线仅为原有规则参照'),trackText);
+          assert(!trackText.includes('原版导航坐标与真值坐标的数值差'),trackText);
+        }
+        if(process.argv.includes('--expect-missing-navigation')){
+          assert(trackText.includes('DriveAdapter 使用运动补偿和平滑后的 GPS'),trackText);
+          assert(trackText.includes('没有有效的导航位姿观测'),trackText);
+          assert(trackText.includes('不按零偏差处理'),trackText);
+        }
+        if(process.argv.includes('--expect-navigation-diagnostic')){
+          assert(trackText.includes('预测生成时原版导航坐标与真值坐标的数值差'),trackText);
+          assert(trackText.includes('不能将此数值差解释为实际定位误差或预测轨迹误差'),trackText);
+          assert(!trackText.includes('没有有效的导航位姿观测'),trackText);
+        }
         if(process.argv.includes('--expect-reused'))assert(trackText.includes('复用已有预测'),trackText);
       }else if(process.argv.includes('--warmup-no-prediction')){
         assert.equal(count,0);assert(trackText.includes('history warm-up'),trackText);
@@ -900,17 +1333,51 @@ try {
       await writeFile(join(output,'prediction-overlay.png'),Buffer.from(shot.data,'base64'));
       await writeFile(join(output,'prediction-overlay.json'),JSON.stringify({count,trackText},null,2));
       interactions.push(count?'explicit_prediction_spatial_overlay_without_fake_timing':process.argv.includes('--warmup-no-prediction')?'warmup_does_not_fabricate_prediction':'legacy_prediction_not_silently_promoted');
+      if(process.argv.includes('--trajectory-backpressure')){
+        await evaluate(`(()=>{const original=window.fetch;window.__trajectoryProbe={mode:'hold',calls:0};window.fetch=async function(input,init){const url=new URL(typeof input==='string'?input:input.url,location.href);if(url.pathname==='/datasets/trajectory'){const probe=window.__trajectoryProbe;probe.calls++;if(probe.mode==='hold'){probe.mode='held';await new Promise(resolve=>{probe.release=resolve})}else if(probe.mode==='fail'){probe.mode='failed';throw new TypeError('Injected trajectory read failure')}}return original.call(this,input,init)}})()`);
+        await evaluate(`[...document.querySelectorAll('.replay-controls button')].find(b=>b.textContent==='播放').click()`);
+        for(let i=0;i<100;i++){if(await evaluate(`window.__trajectoryProbe.mode==='held'`))break;await delay(100)}
+        assert(await evaluate(`window.__trajectoryProbe.mode==='held'`),'Next trajectory was not requested');
+        const held=await evaluate(`document.querySelector('[aria-label="回放时间轴"]').value`);
+        await delay(1200);
+        assert.equal(await evaluate(`document.querySelector('[aria-label="回放时间轴"]').value`),held,'Playback skipped unread trajectory');
+        await evaluate(`window.__trajectoryProbe.mode='fail';window.__trajectoryProbe.release()`);
+        for(let i=0;i<100;i++){if(await evaluate(`window.__trajectoryProbe.mode==='failed'&&!![...document.querySelectorAll('.replay-controls button')].find(b=>b.textContent==='播放')`))break;await delay(100)}
+        assert(await evaluate(`window.__trajectoryProbe.mode==='failed'&&!![...document.querySelectorAll('.replay-controls button')].find(b=>b.textContent==='播放')`),'Trajectory failure did not pause');
+        const stopped=await evaluate(`document.querySelector('[aria-label="回放时间轴"]').value`);
+        await delay(500);
+        assert.equal(await evaluate(`document.querySelector('[aria-label="回放时间轴"]').value`),stopped);
+        await evaluate(`document.querySelector('[aria-label="真实轨迹与预测对比"]').scrollIntoView({block:'center'})`);
+        const failedShot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
+        await writeFile(join(output,'trajectory-read-paused.png'),Buffer.from(failedShot.data,'base64'));
+        // The injected failure is one-shot; subsequent requests use real data.
+        await evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='重试轨迹读取').click()`);
+        let recovered=false;
+        for(let i=0;i<100;i++){
+          recovered=await evaluate(`!!document.querySelector('[aria-label="归档地图投影"]')&&!document.querySelector('[aria-label="真实轨迹与预测对比"] [role="alert"]')`);
+          if(recovered)break;await delay(100);
+        }
+        assert(recovered,'Explicit trajectory retry did not recover real map projection');
+        assert.equal(await evaluate(`document.querySelector('[aria-label="回放时间轴"]').value`),stopped,'Retry must not resume playback implicitly');
+        await evaluate(`[...document.querySelectorAll('.replay-controls button')].find(b=>b.textContent==='播放').click()`);
+        for(let i=0;i<100;i++){if(await evaluate(`Number(document.querySelector('[aria-label="回放时间轴"]').value)>${Number(stopped)}`))break;await delay(100)}
+        assert(await evaluate(`Number(document.querySelector('[aria-label="回放时间轴"]').value)>${Number(stopped)}`),'Playback did not resume after explicit retry');
+        await evaluate(`[...document.querySelectorAll('.replay-controls button')].find(b=>b.textContent==='暂停').click()`);
+        await writeFile(join(output,'trajectory-backpressure.json'),JSON.stringify({held,stopped,heldMilliseconds:1200,readFailurePaused:true},null,2));
+        interactions.push('trajectory_delay_blocks_progress_and_read_failure_pauses');
+        interactions.push('explicit_trajectory_retry_recovers_then_manual_play_resumes');
+      }
     }
     if(process.argv.includes('--six-views')){
       for(const mode of ['RGB','深度']){
         await evaluate(`[...document.querySelectorAll('.sensor-toolbar button')].find(b=>b.textContent===${JSON.stringify(mode==='RGB'?'六视角 RGB':'六视角深度')}).click()`);
         let loaded=false;
         for(let i=0;i<100;i++){
-          loaded=await evaluate(`(()=>{const images=[...document.querySelectorAll('.surround-grid .sensor-tile img')];return images.length===6&&images.every(i=>i.complete&&i.naturalWidth>0&&i.naturalHeight>0)})()`);
+          loaded=await evaluate(`(()=>{const images=[...document.querySelectorAll('.surround-grid .sensor-tile img')].filter(i=>!i.closest('[aria-label="模型原始四视角"]'));return images.length===6&&images.every(i=>i.complete&&i.naturalWidth>0&&i.naturalHeight>0)})()`);
           if(loaded)break;await delay(200);
         }
         assert(loaded,'Six saved '+mode+' views must load');
-        await evaluate(`document.querySelector('.surround-grid .sensor-tile').parentElement.scrollIntoView({block:'start'})`);
+        await evaluate(`[...document.querySelectorAll('.surround-grid .sensor-tile')].find(i=>!i.closest('[aria-label="模型原始四视角"]')).parentElement.scrollIntoView({block:'start'})`);
         const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});
         await writeFile(join(output,mode==='RGB'?'six-rgb.png':'six-depth.png'),Buffer.from(shot.data,'base64'));
       }
@@ -965,7 +1432,7 @@ try {
   await writeFile(join(output,'report.json'),JSON.stringify({models,state,interactions,stoppedExecution,scope:'No model start; optional stop/texture writes are restricted to the explicitly supplied execution/actor identity',profile},null,2));
   console.log(JSON.stringify({output,models,state,interactions}));
 } catch(error) {
-  await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),browserErrors},null,2));
+  await writeFile(join(output,'failure.json'),JSON.stringify({error:String(error),browserErrors,networkFailures,pendingRequests:[...pendingRequests.values()]},null,2));
   if(diagnosticCDP){
     try {
       const shot=await diagnosticCDP('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});

@@ -29,6 +29,21 @@ def test_window_selection_is_timestamp_based_and_never_interpolates(tmp_path):
         with pytest.raises(ValueError):select_window(entries,manifest,*args)
 
 
+def test_excerpt_carries_verified_map_source_into_zip(tmp_path,monkeypatch):
+    from types import SimpleNamespace as NS
+    from carla_safety_agent.map_projection_archive import archive_map_projection,read_map_projection
+    source,_,manifest=fixture(tmp_path)
+    xml='<OpenDRIVE><header><geoReference>+proj=tmerc</geoReference></header></OpenDRIVE>'
+    ref=archive_map_projection(source,NS(name='Town04',to_opendrive=lambda:xml))
+    manifest['map_projection']=ref;manifest['files']['map_projection']=ref['path']
+    (source/'manifest.json').write_text(json.dumps(manifest))
+    monkeypatch.setattr('carla_safety_agent.capture_excerpt.audit_capture',lambda *_:{'state':'passed'})
+    dataset,bundle,_=create_excerpt(source,tmp_path/'output',12,.1,.1,'validator','python',lambda:None)
+    assert read_map_projection(dataset,ref)==xml
+    with zipfile.ZipFile(bundle) as archive:
+        assert archive.read(dataset.name+'/'+ref['path']).decode()==xml
+
+
 def test_audited_copy_zip_and_original_metadata_preserved(tmp_path,monkeypatch):
     source,_,_=fixture(tmp_path);original={str(p.relative_to(source)):p.read_bytes() for p in source.rglob('*') if p.is_file()}
     calls=[]

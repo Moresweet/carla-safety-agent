@@ -6,6 +6,7 @@ import threading
 from .capture_excerpt import create_excerpt,file_evidence,select_window
 from .capture_recovery import require_inactive_execution
 from .scene_store import atomic,read_json
+from .capture_quota import publish_capture
 
 
 class ExcerptService:
@@ -69,7 +70,7 @@ class ExcerptService:
             destination=self.datasets/dataset.name
             if destination.exists() or destination.is_symlink():raise ValueError('Excerpt destination already exists')
             archive=file_evidence(bundle.parent,bundle.name,max_bytes=8*1024**3)
-            dataset.rename(destination)
+            publish_capture(dataset,self.datasets)
             row={**row,'state':'ready','excerpt_run_id':destination.name,'archive':archive,
                 'window':report['window'],'raw_data_verified':True,'source_modified':False,
                 'note':'Audited excerpt, not a complete recording or automatically approved training data'}

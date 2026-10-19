@@ -10,7 +10,104 @@ from carla_safety_agent.project_bundle import export_bundle, read_bundle, prepar
 from carla_safety_agent.scene_store import SceneStore
 
 
-def fixture(tmp_path):
+@pytest.mark.parametrize('tamper', [False, True])
+def test_offline_restore_verifier_checks_imported_bytes(tmp_path, monkeypatch, tamper):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('offline_restore', Path(__file__).resolve().parents[1]/'tools/verify_bundle_offline_restore.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    package, blueprint, store, scene_id = fixture(tmp_path)
+    archive = tmp_path/'verify.zip'
+    export_bundle(store.root,tmp_path,[scene_id],archive,generated_assets={blueprint:package})
+    original = module.import_bundle
+    if tamper:
+        def damaged(*args):
+            destination = original(*args)
+            (destination/'data/generated-assets/index.json').write_bytes(b'changed')
+            return destination
+        monkeypatch.setattr(module,'import_bundle',damaged)
+        with pytest.raises(ValueError,match='Imported payload mismatch'):
+            module.verify(archive,tmp_path)
+    else:
+        result = module.verify(archive,tmp_path)
+        assert result['ok'] and result['verified_asset_sources'] == 2
+        assert not result['live_world_modified']
+
+
+@pytest.mark.parametrize('damage', [None, 'map', 'payload'])
+def test_explicit_legacy_flag_migration_preserves_source(tmp_path, damage):
+    from carla_safety_agent.project_bundle import migrate_legacy_asset_flags
+    package, blueprint, store, scene_id = fixture(tmp_path)
+    current = tmp_path/'current.zip'
+    export_bundle(store.root, tmp_path, [scene_id], current, generated_assets={blueprint:package})
+    manifest, files = read_bundle(current)
+    manifest['dependencies']['external_assets_included'] = False
+    del manifest['dependencies']['unreal_asset_binaries_included']
+    if damage == 'map': manifest['dependencies']['maps'] = []
+    if damage == 'payload': files[next(n for n in files if n.startswith('scenes/'))] += b'changed'
+    legacy = tmp_path/'legacy.zip'
+    with zipfile.ZipFile(legacy, 'w') as archive:
+        archive.writestr('manifest.json', json.dumps(manifest))
+        for name, payload in files.items(): archive.writestr(name,payload)
+    before = legacy.read_bytes()
+    output = tmp_path/'migrated.zip'
+    with pytest.raises(ValueError): read_bundle(legacy)
+    if damage:
+        with pytest.raises(ValueError): migrate_legacy_asset_flags(legacy,output)
+        assert not output.exists()
+    else:
+        result = migrate_legacy_asset_flags(legacy,output)
+        assert result['payloads_unchanged'] and read_bundle(output)[1] == files
+        with pytest.raises(ValueError): migrate_legacy_asset_flags(legacy,output)
+    assert legacy.read_bytes() == before
+
+
+@pytest.mark.parametrize('damage', [None, 'map', 'payload'])
+def test_real_legacy_project_reference_protection(tmp_path, damage):
+    from carla_safety_agent.capture_references import project_references
+    package, blueprint, store, scene_id = fixture(tmp_path, name='capture-retained-legacy')
+    current = tmp_path/'current.zip'
+    export_bundle(store.root, tmp_path, [scene_id], current, generated_assets={blueprint:package})
+    manifest, files = read_bundle(current)
+    manifest['dependencies']['external_assets_included'] = False
+    del manifest['dependencies']['unreal_asset_binaries_included']
+    if damage == 'map': manifest['dependencies']['maps'] = []
+    if damage == 'payload': files[next(n for n in files if n.startswith('scenes/'))] += b'changed'
+    bundles = tmp_path/'bundles'; bundles.mkdir()
+    legacy = bundles/'legacy.zip'
+    with zipfile.ZipFile(legacy, 'w') as archive:
+        archive.writestr('manifest.json', json.dumps(manifest))
+        for name, payload in files.items(): archive.writestr(name, payload)
+    before = legacy.read_bytes()
+    result = project_references(bundles)
+    assert not result['complete'] and result['warnings']
+    assert ('capture-retained-legacy' in result['references']) == (damage is None)
+    assert legacy.read_bytes() == before
+
+
+def test_nested_asset_metadata_retains_capture_references(tmp_path):
+    from carla_safety_agent.capture_references import project_references
+    package, blueprint, store, scene_id = fixture(tmp_path)
+    with zipfile.ZipFile(package) as archive:
+        payloads = {name: archive.read(name) for name in archive.namelist()}
+    manifest = json.loads(payloads['manifest.json'])
+    manifest['note'] = 'capture-asset-source'
+    payloads['manifest.json'] = json.dumps(manifest).encode()
+    annotated = tmp_path/'annotated.zip'
+    with zipfile.ZipFile(annotated, 'w') as archive:
+        for name, payload in payloads.items(): archive.writestr(name, payload)
+    bundles = tmp_path/'bundles'; bundles.mkdir()
+    output = bundles/'project.zip'
+    export_bundle(store.root, tmp_path, [scene_id], output, generated_assets={blueprint:annotated})
+    before = output.read_bytes()
+    result = project_references(bundles)
+    assert result['complete']
+    refs = result['references']['capture-asset-source']
+    assert len(refs) == 1 and refs[0]['entry'].endswith('.zip!manifest.json')
+    assert output.read_bytes() == before
+
+
+def fixture(tmp_path, name='generated'):
     source = tmp_path/'source'; source.mkdir()
     (source/'asset.fbx').write_bytes(b'fbx source')
     (source/'texture.png').write_bytes(b'texture source')
@@ -20,7 +117,7 @@ def fixture(tmp_path):
     store = SceneStore(tmp_path/'scenes')
     saved = store.save({'map':'Town04', 'objects':[{
         'stable_id':'stable-barrier', 'blueprint_id':blueprint,
-        'transform':{'location':dict(x=1,y=2,z=3),'rotation':dict(pitch=0,yaw=0,roll=0)}}]}, 'generated')
+        'transform':{'location':dict(x=1,y=2,z=3),'rotation':dict(pitch=0,yaw=0,roll=0)}}]}, name)
     return package, blueprint, store, saved['head']['scene_id']
 
 

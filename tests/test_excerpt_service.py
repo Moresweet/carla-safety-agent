@@ -27,7 +27,7 @@ def test_explicit_request_idempotency_and_restart(tmp_path,monkeypatch):
     with pytest.raises(ValueError,match='not ready'):restarted.download(data['request_id'])
 
 
-@pytest.mark.parametrize('fault',[None,'changed','audit','active'])
+@pytest.mark.parametrize('fault',[None,'changed','audit','active','quota','busy'])
 def test_only_verified_copy_published_and_download_hash_checked(tmp_path,monkeypatch,fault):
     service,source,data=setup(tmp_path,monkeypatch)
     with patch('threading.Thread.start'):row=service.start(data)
@@ -36,12 +36,21 @@ def test_only_verified_copy_published_and_download_hash_checked(tmp_path,monkeyp
     if fault=='active':
         def active(*_):raise ValueError('worker active')
         monkeypatch.setattr('carla_safety_agent.excerpt_service.require_inactive_execution',active)
-    service._run(row,source,'execution')
+    from contextlib import nullcontext
+    from carla_safety_agent.capture_quota import capture_write_lock
+    before=(source/'manifest.json').read_bytes()
+    if fault=='quota':monkeypatch.setattr('carla_safety_agent.capture_quota.check_capture_quota',lambda *_:('capture_quota','quota reached'))
+    with capture_write_lock(service.datasets) if fault=='busy' else nullcontext():
+        service._run(row,source,'execution')
     result=service.status(data['request_id'])
     assert result['state']==('failed' if fault else 'ready') and service.active is None
     if fault:
         assert not list(tmp_path.glob('excerpt-*'))
         with pytest.raises(ValueError):service.download(data['request_id'])
+        if fault in ('quota','busy'):
+            assert (source/'manifest.json').read_bytes()==before
+            assert list((service.reports/data['request_id']).glob('excerpt-*/manifest.json'))
+            assert result.get('excerpt_run_id') is None
     else:
         assert (tmp_path/result['excerpt_run_id']/'manifest.json').is_file()
         archive=service.download(data['request_id']);archive.write_bytes(b'changed')

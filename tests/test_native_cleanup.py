@@ -13,6 +13,62 @@ def rig_class():
     return env['NativeSensorRig']
 
 
+@pytest.mark.parametrize('tags', [('SPEED',), ('speed',), ('speed', 'aux_speed')])
+def test_speed_callback_uses_declared_sensor_ids(tags):
+    registered, received = [], []
+    interface = NS(register_sensor=lambda tag, *args: registered.append(tag),
+                   update_sensor=lambda tag, data, frame: received.append((tag, data, frame)))
+    ego = NS(get_velocity=lambda: NS(x=3., y=4., z=0.),
+             get_transform=lambda: NS(get_forward_vector=lambda: NS(x=.6, y=.8, z=0.)))
+    rig = rig_class()(None, None, ego, interface)
+    rig.setup([{'id': tag, 'type': 'sensor.speedometer'} for tag in tags])
+    rig.add_speed(123)
+    assert registered == list(tags)
+    assert received == [(tag, {'speed': 5.}, 123) for tag in tags]
+
+
+def test_lidar_callback_decodes_owned_xyzi_array():
+    import numpy as np
+    callbacks, received = [], []
+    sensor = NS(id=42, listen=callbacks.append)
+    world = NS(get_blueprint_library=lambda: NS(find=lambda _: NS(has_attribute=lambda _: False)),
+               spawn_actor=lambda *args, **kwargs: sensor)
+    carla = NS(Transform=lambda *args: None, Location=lambda **kwargs: None,
+               Rotation=lambda **kwargs: None)
+    interface = NS(register_sensor=lambda *args: None,
+                   update_sensor=lambda tag, value, frame: received.append((tag, value, frame)))
+    rig = rig_class()(carla, world, None, interface)
+    rig.setup([{'id': 'lidar', 'type': 'sensor.lidar.ray_cast'}])
+    raw = bytearray(np.arange(8, dtype=np.float32).tobytes())
+    callbacks[0](NS(raw_data=raw, frame=20))
+    raw[:] = bytes(len(raw))
+    assert received[0][0] == 'lidar' and received[0][2] == 20
+    np.testing.assert_array_equal(received[0][1], np.arange(8, dtype=np.float32).reshape(2, 4))
+
+
+@pytest.mark.parametrize('supported', [True, False])
+def test_explicit_blueprint_attributes_are_required_before_spawn(supported):
+    calls = []
+    blueprint = NS(has_attribute=lambda name: supported,
+                   set_attribute=lambda name, value: calls.append((name, value)))
+    sensor = NS(id=42, listen=lambda cb: None)
+    def spawn(*args, **kwargs):
+        calls.append('spawn')
+        return sensor
+    world = NS(get_blueprint_library=lambda: NS(find=lambda _: blueprint), spawn_actor=spawn)
+    carla = NS(Transform=lambda *a: None, Location=lambda **kw: None, Rotation=lambda **kw: None)
+    rig = rig_class()(carla, world, None, NS(register_sensor=lambda *a: None))
+    specs = [{'id': 'lidar', 'type': 'sensor.lidar.ray_cast',
+              'blueprint_attributes': {'channels': '64'}}]
+    if supported:
+        rig.setup(specs)
+        assert calls == [('channels', '64'), 'spawn']
+    else:
+        with pytest.raises(ValueError, match='required blueprint attribute unavailable: channels'):
+            rig.setup(specs)
+        assert calls == []
+
+
 @pytest.mark.parametrize('failure',['register','listen'])
 def test_partially_initialized_sensor_remains_owned_for_cleanup(failure):
     calls=[]

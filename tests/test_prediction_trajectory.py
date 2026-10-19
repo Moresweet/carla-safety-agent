@@ -13,12 +13,12 @@ def sample(model='vad',pose=None):
     return {'source':'model-input','model':model,'outputs':outputs,'planning_outputs':outputs,
             'frame':10,'model_step':1,'timestamp':1.,'planning_anchor':anchor,
             'prediction':{'state':'available','contract':prediction.spatial_contract(model,prediction.CONTROLLERS[model]),
-                          'right_forward_m':points,'anchor':anchor,'timing_verified':False}}
+                          'right_forward_m':[p[::-1] for p in points] if model in ('thinktwice','driveadapter') else points,'anchor':anchor,'timing_verified':False}}
 
 
 @pytest.mark.parametrize('model',list(prediction.CONTROLLERS))
 def test_capture_contract_only_with_matching_controller_source(monkeypatch,model):
-    agent=NS(net=NS(control_pid=lambda:None),pidcontroller=NS(control_pid=lambda:None),
+    agent=NS(net=NS(control_pid=lambda:None),pidcontroller=NS(control_pid=lambda:None),model=NS(control_pid=lambda:None),
              lidar2ego=[[0,1,0,-.39],[-1,0,0,0],[0,0,1,1.84],[0,0,0,1]])
     metadata=sample(model)
     monkeypatch.setattr(prediction,'controller_digest',lambda _:prediction.CONTROLLERS[model])
@@ -27,11 +27,36 @@ def test_capture_contract_only_with_matching_controller_source(monkeypatch,model
     assert prediction.capture_prediction(agent,metadata)['state']=='unavailable'
 
 
+@pytest.mark.parametrize('model',['driveadapter','driveadapter-experimental','thinktwice','vad'])
+def test_replay_discloses_navigation_reference_without_rewriting_saved_contract(model):
+    import copy
+    metadata=sample(prediction.ALIASES.get(model,model))
+    metadata['model']=model
+    original=copy.deepcopy(metadata)
+    result=prediction.replay_prediction(metadata,np.eye(4))
+    assert result['state']=='available'
+    assert bool(result['reference_warning'])==model.startswith('driveadapter')
+    assert result['timing_verified'] is False
+    assert result['error_metrics_computed'] is False
+    assert metadata==original
+
+
 def test_forward_right_mapping_and_yaw_invariance():
     pose=np.eye(4);pose[:2,:2]=[[0,-1],[1,0]];pose[:3,3]=[100,200,30]
     result=prediction.replay_prediction(sample('admlp',pose),pose)
     assert result['points'][0]['xyz_m']==[10.,2.,0.]
     assert result['points'][0]['dt_s'] is None
+
+
+@pytest.mark.parametrize('model', ['thinktwice', 'driveadapter'])
+def test_original_saved_pid_points_are_forward_right_not_virtual_lidar(model):
+    metadata=sample(model)
+    result=prediction.replay_prediction(metadata,np.eye(4))
+    assert result['state']=='available'
+    assert result['points'][0]['xyz_m']==[2.,10.,0.]
+    assert result['contract']['raw_axes']=='forward_right'
+    assert result['contract']['reference_offset_body_m']==[0.,0.,0.]
+    assert result['timing_verified'] is False
     assert result['timing_verified'] is False and result['error_metrics_computed'] is False
 
 
@@ -94,25 +119,26 @@ def test_early_contract_with_unverified_origin_is_refused():
 
 
 @pytest.mark.parametrize('failure',[False,True])
-def test_tcp_observes_planning_branch_without_replacing_control(failure):
+@pytest.mark.parametrize('owner_name',['net','model'])
+def test_tcp_observes_planning_branch_without_replacing_control(failure,owner_name):
     from carla_safety_agent.planning_observation import PlanningObservation
     calls=[];chosen=object()
     class Base:
         def run_step(self,inputs,timestamp):
-            self.net.control_pid('original_prediction')
+            getattr(self,owner_name).control_pid('original_prediction')
             self.pid_metadata={'agent':'only_ctrl'}
             if failure:raise RuntimeError('inference failure')
             return chosen
     agent=Base();agent.step=1
     def original(value):calls.append(value);return 0,0,False,{'wp_1':(2,10)}
-    agent.net=NS(control_pid=original)
+    setattr(agent,owner_name,NS(control_pid=original))
     observer=PlanningObservation(agent)
     def run():return observer.run_step({},0,frame=10,timestamp=1.,ego_matrix=np.eye(4).tolist())
     if failure:
         with pytest.raises(RuntimeError,match='inference failure'):run()
     else:
         assert run() is chosen
-    assert agent.net.control_pid is original and calls==['original_prediction']
+    assert getattr(agent,owner_name).control_pid is original and calls==['original_prediction']
     assert observer.snapshot()['outputs']=={'wp_1':(2,10)} and agent.pid_metadata=={'agent':'only_ctrl'}
 
 
@@ -131,14 +157,17 @@ def test_observation_retains_original_anchor_when_model_reuses_control():
         step=-1
         def run_step(self,inputs,elapsed):
             self.step+=1
+            self._planning_navigation_reference={'model_step':self.step,'world_xy_m':[self.step,0.]}
             if self.step==0:
                 self.net.control_pid()
+                self._planning_navigation_reference['world_xy_m'][0]=999
             return 'unchanged control'
     agent=Agent();agent.net=NS(control_pid=lambda:(0,0,False,{'wp_1':(1,2)}))
     observer=PlanningObservation(agent)
     for frame in (10,11):
         assert observer.run_step({},0,frame=frame,timestamp=float(frame),ego_matrix=np.eye(4).tolist())=='unchanged control'
     assert observer.snapshot()['calls']==1 and observer.snapshot()['anchor']['frame']==10
+    assert observer.snapshot()['anchor']['navigation_reference']['world_xy_m']==[0,0.]
 
 
 def test_warmup_is_explicit_not_a_fabricated_prediction(monkeypatch):

@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {parseStorageReview,filterStorageRows} from './livery-designer/app/storageReview.ts';
+const row={directory:'capture-test',status:null,allocated_bytes:12,keep_reason:null,derived_referenced_by:[],queue_referenced_by:[],project_referenced_by:[],split_referenced_by:[]};
+const valid={ok:true,schema_version:'capture-storage-inventory/1',complete:false,allocated_bytes:12,free_bytes:0,warnings:['partial'],recordings:[row]};
+assert.equal(parseStorageReview(valid).complete,false);
+for(const value of [undefined,null,{},'none'])assert.throws(()=>parseStorageReview({...valid,recordings:[{...row,project_referenced_by:value}]}));
+for(const value of [undefined,null,{},'none'])assert.throws(()=>parseStorageReview({...valid,recordings:[{...row,split_referenced_by:value}]}));
+for(const value of [null,{}, {...valid,free_bytes:NaN},{...valid,allocated_bytes:-1},{...valid,warnings:null},{...valid,complete:'true'},{...valid,recordings:[null]}, {...valid,recordings:[row,row]},{...valid,recordings:[{...row,queue_referenced_by:null}]}])assert.throws(()=>parseStorageReview(value));
+assert.throws(()=>parseStorageReview({ok:false,error:'retention corrupt'}),/retention corrupt/);
+console.log('Storage response validation passed');
+const rows=[row,{...row,directory:'capture-kept',status:'saved',keep_reason:'baseline'}];
+assert.deepEqual(filterStorageRows(rows,' KEPT ','saved',true),[rows[1]]);
+assert.deepEqual(filterStorageRows(rows,'','unknown',false),[row]);
+assert.equal(filterStorageRows(rows,'missing','',false).length,0);
+assert.equal(rows.length,2);
+console.log('Storage filters passed');

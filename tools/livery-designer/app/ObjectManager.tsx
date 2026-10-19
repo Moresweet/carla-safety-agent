@@ -3,26 +3,45 @@ import {useEffect,useMemo,useRef,useState} from "react";
 import {objectOriginLabel, type ObjectOrigin} from "./objectOrigin";
 import TransformEditor from './TransformEditor';
 import PositionHistory from './PositionHistory';
+import {deletionResultText,objectRestoreSelection,type ObjectRestoreSelection} from './deletionResult';
 import type {EditIdentity} from './transformDraft';
+import {restoreObjectRequest} from './restoreObjectRequest';
 
 const bridge="http://127.0.0.1:8765";
 type Category={id:string;group:string;coarse:string;count:number;editable:string};
 export type CatalogItem={key:string;id:number|string;source:"actor"|"environment";category:string;group:string;kind:string;name:string;label:string;visible?:boolean;origin?:ObjectOrigin;edit_identity?:EditIdentity|null;location:{x:number;y:number;z:number};extent:{x:number;y:number;z:number};rotation?:{pitch:number;yaw:number;roll:number}};
-async function request(path:string,method="GET",data?:unknown){const r=await fetch(`${bridge}/${path}`,{method,headers:data?{"Content-Type":"application/json"}:undefined,body:data?JSON.stringify(data):undefined}),v=await r.json() as {error?:string;categories:Category[];objects:CatalogItem[];total:number};if(!r.ok)throw new Error(v.error);return v}
+async function request(path:string,method="GET",data?:unknown){const r=await fetch(`${bridge}/${path}`,{method,headers:data?{"Content-Type":"application/json"}:undefined,body:data?JSON.stringify(data):undefined}),v=await r.json() as {ok?:boolean;backup?:unknown;error?:string;categories:Category[];objects:CatalogItem[];total:number};if(!r.ok||v.ok===false)throw new Error(v.error);return v}
 
 export default function ObjectManager({onChanged,onTextureTarget}:{onChanged:()=>void;onTextureTarget:(item:CatalogItem)=>void}){
  const [origin,setOrigin]=useState("all");
  const [categories,setCategories]=useState<Category[]>([]),[category,setCategory]=useState("buildings"),[items,setItems]=useState<CatalogItem[]>([]),[query,setQuery]=useState(""),[offset,setOffset]=useState(0),[total,setTotal]=useState(0),[selected,setSelected]=useState<CatalogItem|null>(null),[status,setStatus]=useState("Ready"),[revision,setRevision]=useState(0),[busy,setBusy]=useState(false),[loadError,setLoadError]=useState('');
  const pending=useRef(false);
+ const [restoreSelection,setRestoreSelection]=useState<ObjectRestoreSelection|null>(null);
+ const [restoreConfirmed,setRestoreConfirmed]=useState(false);
  useEffect(()=>{let alive=true,loading=false;const load=async()=>{if(loading)return;loading=true;try{const v=await request('catalog/categories');if(alive)setCategories(v.categories)}catch(e){if(alive)setLoadError(String(e))}finally{loading=false}};void load();const timer=setInterval(()=>void load(),2500);return()=>{alive=false;clearInterval(timer)}},[revision]);
  useEffect(()=>{let alive=true,loading=false;const load=async()=>{if(loading)return;loading=true;try{const v=await request(`catalog/objects?category=${encodeURIComponent(category)}&q=${encodeURIComponent(query)}&offset=${offset}&limit=50&origin=${origin}`);if(!alive)return;setItems(v.objects);setTotal(v.total);setCategories(current=>current.map(c=>c.id===category?{...c,count:v.total}:c));setSelected(current=>v.objects.find(item=>item.key===current?.key)??v.objects[0]??null);setLoadError('')}catch(e){if(alive)setLoadError(String(e))}finally{loading=false}};const delay=setTimeout(()=>void load(),180),live=setInterval(()=>void load(),2000);return()=>{alive=false;clearTimeout(delay);clearInterval(live)}},[category,query,offset,revision,origin]);
  const groups=useMemo(()=>Object.entries(categories.reduce<Record<string,Category[]>>((a,c)=>{(a[c.group]??=[]).push(c);return a},{})),[categories]);
- async function act(path:string,data:unknown,message:string,refreshList=false){if(pending.current)return false;pending.current=true;setBusy(true);try{await request(path,"POST",data);setStatus(message);if(refreshList)setRevision(v=>v+1);onChanged();return true}catch(e){setStatus(e instanceof Error?e.message:"Operation failed");return false}finally{pending.current=false;setBusy(false)}}
+ async function act(path:string,data:unknown,message:string,refreshList=false){if(pending.current)return false;pending.current=true;setBusy(true);try{const result=await request(path,"POST",data);setStatus(path==='objects/delete'?deletionResultText(result.backup):message);if(path==='objects/delete'){setRestoreSelection(objectRestoreSelection(result.backup));setRestoreConfirmed(false)}if(path==='objects/restore-missing'){setRestoreSelection(null);setRestoreConfirmed(false)}if(refreshList)setRevision(v=>v+1);onChanged();return true}catch(e){setStatus(e instanceof Error?e.message:"Operation failed");return false}finally{pending.current=false;setBusy(false)}}
  async function focus(item:CatalogItem){setSelected(item);await act(item.source==="actor"?"focus/actor":"focus/environment",item.source==="actor"?{actor_id:item.id}:{object_id:item.id},`Focused ${item.name}`)}
  async function visibility(){if(!selected||selected.source!=="environment")return;const visible=selected.visible===false;await act("objects/environment/visibility",{object_id:selected.id,visible},visible?"Object restored":"Object hidden",true)}
+ async function restoreDeleted(){
+  if(pending.current||!restoreSelection||!restoreConfirmed)return;
+  pending.current=true;setBusy(true);setRestoreConfirmed(false);
+  try{
+   const actorId=await restoreObjectRequest(restoreSelection,true);
+   setStatus(`指定对象恢复已确认，运行时 ID ${actorId}`);setRestoreSelection(null);
+   setRevision(v=>v+1);onChanged();
+  }catch(e){setStatus(String(e))}finally{pending.current=false;setBusy(false)}
+ }
  return <section className="object-manager">
   <div className="manager-head"><div><span className="eyebrow">WORLD OBJECTS</span><h2>Scene Object Manager</h2></div><span role="status">{busy?'操作中…':status}</span></div>
   {loadError&&<p role="alert">目录刷新失败：{loadError}</p>}
+  {restoreSelection&&<fieldset disabled={busy}><legend>恢复最近删除的对象</legend>
+   <p>对象 {restoreSelection.stable_id} · 快照 {restoreSelection.scene_id} / {restoreSelection.version}</p>
+   <p>仅恢复此缺失对象及已记录的受支持材质，不回退其他对象的新修改。不是完整撤销/重做；此快捷入口仅保留在当前页面，快照仍在项目版本中。</p>
+   <label><input type="checkbox" checked={restoreConfirmed} onChange={e=>setRestoreConfirmed(e.target.checked)}/>确认恢复上述对象</label>
+   <button disabled={busy||!restoreConfirmed} onClick={()=>void restoreDeleted()}>恢复此对象</button>
+  </fieldset>}
   <div className="manager-grid"><aside className="catalog-groups">{groups.map(([group,list])=><div key={group}><b>{group.replaceAll('_',' ')}</b>{list.map(c=><button disabled={busy} key={c.id} className={category===c.id?'active':''} onClick={()=>{setCategory(c.id);setOffset(0);setSelected(null)}}><span>{c.id.replaceAll('_',' ')}</span><em>{c.count}</em></button>)}</div>)}</aside>
    <div className="catalog-list"><label>对象来源<select aria-label="对象来源" disabled={busy} value={origin} onChange={e=>{setOrigin(e.target.value);setOffset(0)}}><option value="all">全部来源</option><option value="existing">场景原有</option><option value="user">用户新增</option><option value="evaluation">评测生成</option><option value="unknown">来源未知</option></select></label>
     <input disabled={busy} placeholder="Search name or ID" value={query} onChange={e=>{setQuery(e.target.value);setOffset(0)}}/>

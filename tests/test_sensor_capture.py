@@ -9,6 +9,28 @@ from carla_safety_agent.uv_audit import audit_uv
 from carla_safety_agent.sensor_capture import SensorCapture, CAMERAS
 
 
+@pytest.mark.parametrize('recording', [True, False])
+@pytest.mark.parametrize('active', [True, False])
+def test_old_execution_recording_command_does_not_change_current_capture(tmp_path, monkeypatch, recording, active):
+    monkeypatch.setenv('CSA_EXECUTION_ID', 'new')
+    capture=object.__new__(SensorCapture)
+    capture.root=tmp_path; capture.run=tmp_path if active else None
+    capture.last_request='current'; capture.every=2
+    capture._accepted_recording_request={'id':'current','recording':active,'every':2,'max_frames':3}
+    (tmp_path/'collection-request.json').write_text(json.dumps({'id':'old-command','execution_id':'old','recording':recording}))
+    request=capture.request()
+    assert request['recording'] is active and request['id']=='current'
+    assert request['every']==2 and request['max_frames']==3
+
+
+def test_matching_execution_recording_command_is_read(tmp_path, monkeypatch):
+    monkeypatch.setenv('CSA_EXECUTION_ID', 'new')
+    capture=object.__new__(SensorCapture); capture.root=tmp_path
+    command={'id':'request','execution_id':'new','recording':True,'every':1,'max_frames':3}
+    (tmp_path/'collection-request.json').write_text(json.dumps(command))
+    assert capture.request()==command
+
+
 def test_depth_channel_order_and_units():
     values = np.array([[[0,0,0,255], [255,255,255,255], [0,0,1,255]]], dtype=np.uint8)
     meters = depth_meters(values)
@@ -38,6 +60,23 @@ def test_close_reports_manifest_failure():
     def fail(status): raise OSError('disk full')
     capture.manifest=fail
     assert 'disk full' in capture.close()[0]
+
+
+def test_write_failure_is_not_finalized_as_success(tmp_path):
+    import errno
+    import threading
+    capture=object.__new__(SensorCapture)
+    capture.live=tmp_path
+    capture.lock=threading.Condition();capture.sensors=[];capture.run=None
+    statuses=[]
+    capture.manifest=lambda status:statuses.append(status)
+    def fail(*args, **kwargs): raise OSError(errno.ENOSPC,'No space left on device')
+    capture._process=fail
+    with pytest.raises(OSError): capture.process({},None,None)
+    assert capture.stop_reason == 'capture_io_error'
+    assert 'No space left' in capture.error
+    assert capture.close() == []
+    assert statuses == ['saved_capture_error']
 
 
 def test_sample_reserve_accounts_for_raw_and_derived_arrays():
@@ -105,7 +144,9 @@ def test_uv_audit_reports_missing_and_invalid(tmp_path):
 
 
 @pytest.mark.parametrize('with_scenario', [False, True])
-def test_standalone_capture_records_real_rig_arrays_without_model_claim(tmp_path, monkeypatch, with_scenario):
+@pytest.mark.parametrize('limit_reason', ['frame_limit','storage_limit','disk_reserve','capture_quota','quota_unknown'])
+@pytest.mark.parametrize('write_failure', ['npz','png','index','manifest'])
+def test_standalone_capture_records_real_rig_arrays_without_model_claim(tmp_path, monkeypatch, with_scenario, limit_reason, write_failure):
     import threading
     capture = object.__new__(SensorCapture)
     capture.source = 'sensor-rig'
@@ -139,6 +180,8 @@ def test_standalone_capture_records_real_rig_arrays_without_model_claim(tmp_path
     manifest = json.loads((capture.run/'manifest.json').read_text())
     assert manifest['family']=='sensor-rig' and manifest['model'] is None
     assert manifest['execution_id']=='verified-session-id'
+    assert manifest['capture_quota_policy']['valid'] is True
+    assert manifest['capture_quota_policy']['limit_bytes'] == capture.quota_policy['limit_bytes']
     if with_scenario:
         from carla_safety_agent.scenario_archive import read_verified_scenario
         reference = manifest['scenario']
@@ -182,12 +225,29 @@ def test_standalone_capture_records_real_rig_arrays_without_model_claim(tmp_path
     (folder/'frame.json').write_text(json.dumps(meta))
     (capture.run/'manifest.json').write_text(json.dumps(manifest))
     run_path=capture.run
-    capture.request=lambda:{'recording':True,'id':'record','every':1,'max_frames':1}
+    capture.request=lambda:{'recording':True,'id':'record','every':1,'max_frames':1 if limit_reason=='frame_limit' else 2000}
+    if limit_reason == 'storage_limit': capture.bytes = 20*1024**3
+    import shutil
+    original_disk_usage = shutil.disk_usage
+    from carla_safety_agent.sensor_capture import check_capture_quota as original_quota_check
+    if limit_reason in ('capture_quota','quota_unknown'):
+        monkeypatch.setattr('carla_safety_agent.sensor_capture.check_capture_quota',
+                            lambda root,reserve,**kwargs:(limit_reason,'Quota admission stopped'))
+    if limit_reason == 'disk_reserve':
+        monkeypatch.setattr('carla_safety_agent.sensor_capture.shutil.disk_usage',
+                            lambda _:SimpleNamespace(free=1024**3))
+    preserved = (folder/'sensor_input.npz').read_bytes()
     capture.samples={name:{13:value} for name,value in samples.items()}
     capture.process_frame(13,SimpleNamespace(steer=0,throttle=0,brake=1))
-    assert capture.run is None and capture.stop_reason=='frame_limit'
+    assert capture.run is None and capture.stop_reason==limit_reason
+    assert (folder/'sensor_input.npz').read_bytes() == preserved
+    assert not (run_path/'samples'/'0000000013').exists()
     bounded_manifest=json.loads((run_path/'manifest.json').read_text())
     assert bounded_manifest['status']=='saved_limit' and bounded_manifest['frame_count']==1
+    assert bounded_manifest['stop_reason'] == limit_reason
+    if limit_reason == 'disk_reserve': assert '1 GiB free disk reserve' in capture.error
+    monkeypatch.setattr('carla_safety_agent.sensor_capture.shutil.disk_usage', original_disk_usage)
+    monkeypatch.setattr('carla_safety_agent.sensor_capture.check_capture_quota', original_quota_check)
     capture.run=run_path  # Continue corruption tests against the committed sample.
     # The validator must reject a raw archive missing a camera, even if its PNG exists.
     with np.load(folder/'sensor_input.npz') as archive:
@@ -202,3 +262,82 @@ def test_standalone_capture_records_real_rig_arrays_without_model_claim(tmp_path
     (capture.run/'calibration.json').write_text(json.dumps(specs))
     result=subprocess.run([sys.executable,str(checker),str(capture.run)],capture_output=True,text=True)
     assert result.returncode != 0 and 'Extrinsics are not inverse' in result.stderr
+    # New model recording with original four-view names must trigger capture,
+    # independently of the auxiliary six CAM_* views.
+    capture.source = 'model-input'
+    capture.run = None
+    names = ('rgb_front', 'rgb_left', 'rgb_right', 'rgb_back')
+    capture.specs.update({name: {'type': 'sensor.camera.rgb','width':2,'height':2} for name in names})
+    capture.request = lambda: {'recording': True, 'id': 'four-view-model', 'every': 1, 'max_frames': 2}
+    capture.process({name: (13, image.copy()) for name in names},
+                    SimpleNamespace(step=32), SimpleNamespace(steer=0, throttle=0, brake=1))
+    assert capture.count == 1
+    model_folder = capture.run/'samples'/'0000000013'
+    model_frame = json.loads((model_folder/'frame.json').read_text())
+    assert model_frame['actual_model_inputs'] == list(names)
+    with np.load(model_folder/'model_input.npz') as archive:
+        assert set(archive.files) == set(names)
+        np.testing.assert_array_equal(archive['rgb_front'], image)
+    from PIL import Image
+    for name in names:
+        np.testing.assert_array_equal(np.asarray(Image.open(model_folder/(name+'.png'))), image[:,:,:3][:,:,::-1])
+        assert name in model_frame['available']
+    # Fail a real next-sample write after admission, preserving one valid frame.
+    import errno
+    from carla_safety_agent.capture_recovery import recover_capture, inventory
+    model_run = capture.run
+    committed = (model_folder/'model_input.npz').read_bytes()
+    capture.samples = {name:{14:value} for name,value in samples.items()}
+    capture.world.get_snapshot = lambda:SimpleNamespace(frame=14,timestamp=SimpleNamespace(elapsed_seconds=.7))
+    def full_disk(path, **arrays):
+        Path(path).write_bytes(b'partial archive')
+        raise OSError(errno.ENOSPC, 'injected disk full during NPZ write')
+    original_save = Image.Image.save
+    import carla_safety_agent.sensor_capture as capture_module
+    original_json = capture_module.atomic_json
+    def failed_metadata(path, value):
+        if Path(path) == model_run/(write_failure+'.json'):
+            raise OSError(errno.ENOSPC,'injected disk full during metadata write')
+        return original_json(path,value)
+    def failed_png(image_self, path, *args, **kwargs):
+        if Path(path).suffix == '.png' and Path(path).parent.name == '0000000014':
+            Path(path).write_bytes(b'partial png')
+            raise OSError(errno.ENOSPC,'injected disk full during PNG write')
+        return original_save(image_self,path,*args,**kwargs)
+    with monkeypatch.context() as injection:
+        if write_failure == 'npz': injection.setattr('carla_safety_agent.sensor_capture.np.savez', full_disk)
+        elif write_failure == 'png': injection.setattr(Image.Image,'save',failed_png)
+        else: injection.setattr(capture_module,'atomic_json',failed_metadata)
+        with pytest.raises(OSError, match='injected disk full'):
+            capture.process({name:(14,image.copy()) for name in names},
+                            SimpleNamespace(step=33),SimpleNamespace(steer=0,throttle=0,brake=1))
+    metadata_failure = write_failure in ('index','manifest')
+    expected_count = 2 if metadata_failure else 1
+    assert capture.count == expected_count and len(capture.frame_index) == expected_count
+    assert (model_run/'samples/0000000014/frame.json').exists() == metadata_failure
+    if write_failure == 'png':
+        with np.load(model_run/'samples/0000000014/model_input.npz') as raw:
+            assert set(raw.files) == set(names)
+        assert any(p.read_bytes() == b'partial png' for p in (model_run/'samples/0000000014').glob('*.png'))
+    assert (model_folder/'model_input.npz').read_bytes() == committed
+    capture.sensors = []
+    if metadata_failure:
+        # Disk stays unavailable through finalization: close must report failure.
+        with monkeypatch.context() as injection:
+            injection.setattr(capture_module,'atomic_json',failed_metadata)
+            assert any('Manifest finalization' in error for error in capture.close())
+    else:
+        assert capture.close() == []
+    failed_manifest = json.loads((model_run/'manifest.json').read_text())
+    assert failed_manifest['status'] == ('recording' if write_failure=='manifest' else 'saved_capture_error')
+    if write_failure != 'manifest': assert failed_manifest['stop_reason'] == 'capture_io_error'
+    assert len(json.loads((model_run/'index.json').read_text())['frames']) == 1
+    before = inventory(model_run)
+    # Use the actual raw-data validator, not a mocked audit result.
+    recovered = recover_capture(model_run,model_run.parent,checker,sys.executable,lambda:None)
+    assert inventory(model_run) == before
+    recovered_manifest = json.loads((recovered/'manifest.json').read_text())
+    assert recovered_manifest['status'] == 'saved_recovered'
+    assert recovered_manifest['frame_count'] == expected_count
+    assert recovered_manifest['recovery']['omitted_uncommitted_tail'] == ([] if metadata_failure else ['0000000014'])
+    assert (recovered/'samples/0000000013/model_input.npz').read_bytes() == committed

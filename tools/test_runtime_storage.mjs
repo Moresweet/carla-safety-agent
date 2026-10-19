@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {parseRuntimeStorage,formatRuntimeBytes} from './livery-designer/app/runtimeStorage.ts';
+for(const [value,expected] of [[0,'0 B'],[1,'1 B'],[4096,'4.00 KiB'],[1024**2,'1.00 MiB'],[1024**3,'1.00 GiB']])assert.equal(formatRuntimeBytes(value),expected);
+assert.throws(()=>formatRuntimeBytes(-1));
+const row={name:'generated-scenarios',allocated_bytes:4096,logical_bytes:1,files:1,links_skipped:0};
+const valid={ok:true,schema_version:'runtime-storage/1',complete:true,deletion_approved:false,allocated_bytes:4096,warnings:[],categories:[row]};
+assert.deepEqual(parseRuntimeStorage(valid),valid);
+for(const patch of [{ok:false},{schema_version:'other'},{deletion_approved:true},{allocated_bytes:0},{warnings:['excluded']},{categories:[row,row]},{categories:[{...row,files:-1}]},{allocated_bytes:NaN},{categories:[null]}])assert.throws(()=>parseRuntimeStorage({...valid,...patch}));
+assert.doesNotThrow(()=>parseRuntimeStorage({...valid,complete:false,warnings:['linked directory excluded']}));
+console.log('Runtime storage contract, totals, exclusions and no deletion approval passed');

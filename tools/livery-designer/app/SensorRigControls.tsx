@@ -1,11 +1,16 @@
 "use client";
 import {useEffect,useState} from 'react';
 import ManualDriving from './ManualDriving';
+import {serialPoll} from './serialPoll';
+import {readWithRetry} from './readWithRetry';
+import {captureBudgetDescription} from './captureBudgetDescription';
 const bridge='http://127.0.0.1:8765';
 type Session={state:string;kind?:string;run_id?:string;error?:string;configuration?:{request?:{mode?:string}}};
 export default function SensorRigControls({every}:{every:number}){
- const [mode,setMode]=useState('stationary'),[seconds,setSeconds]=useState(30),[session,setSession]=useState<Session|null>(null),[busy,setBusy]=useState(false),[message,setMessage]=useState('');
- useEffect(()=>{let live=true;const poll=async()=>{try{const r=await fetch(bridge+'/session/status');const v=await r.json() as {session?:Session};if(!r.ok||!v.session)throw new Error('会话状态不可用');if(live)setSession(v.session)}catch(e){if(live){setSession(null);setMessage(String(e))}}};void poll();const timer=setInterval(poll,1000);return()=>{live=false;clearInterval(timer)}},[]);
+ const [mode,setMode]=useState('stationary'),[seconds,setSeconds]=useState(30),[session,setSession]=useState<Session|null>(null),[busy,setBusy]=useState(false),[operationMessage,setMessage]=useState('');
+ const [connectionError,setConnectionError]=useState('');
+ const message=[connectionError||operationMessage,captureBudgetDescription(seconds,every)].filter(Boolean).join(' · ');
+ useEffect(()=>{const poll=serialPoll(async signal=>{try{const v=await readWithRetry<{session?:Session}>(bridge+'/session/status',{signal,attempts:1});if(!v.session)throw new Error('会话状态不可用');if(!signal.aborted){setSession(v.session);setConnectionError('')}}catch(e){if(!signal.aborted){setSession(null);setConnectionError(String(e))}}},1000);void poll.refresh();return()=>poll.stop()},[]);
  const active=!!session&&['preparing','running','stopping','recovering'].includes(session.state);
  async function act(stop=false){setBusy(true);try{const r=await fetch(bridge+'/collection/'+(stop?'stop':'start'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(stop?{run_id:session?.run_id}:{mode,frames:seconds*20,every,recording:true,max_frames:2000})});const result=await r.json() as {ok?:boolean;error?:string};if(!r.ok||!result.ok)throw new Error(result.error??'采集操作失败');setMessage(stop?'正在结束采集并恢复仿真':'独立采集已启动，等待传感器就绪')}catch(e){setMessage(String(e))}finally{setBusy(false)}}
  return <section className="project-panel"><h2>独立采集 · 无需端到端模型</h2><p>在当前地图空闲位置创建采集车辆，记录六视角、深度、点云和 BEV。结束后清理采集车辆，保留原场景对象。</p><label>采集驾驶方式<select aria-label="采集驾驶方式" value={mode} disabled={busy||active} onChange={e=>setMode(e.target.value)}><option value="stationary">静止采集</option><option value="autopilot">规则自动驾驶</option><option value="manual">人工驾驶</option></select></label><label>仿真时长（秒）<input aria-label="采集仿真时长" type="number" min={1} max={5000} step={1} value={seconds} disabled={busy||active} onChange={e=>setSeconds(Number(e.target.value))}/></label><button disabled={busy||active||!session||!Number.isInteger(seconds)||seconds<1||seconds>5000} onClick={()=>act()}>启动独立采集</button><button disabled={busy||!active||session?.kind!=='sensor-rig'} onClick={()=>act(true)}>结束独立采集</button><p role="status">{message} · 会话：{session?.state??'连接中'}{active&&session?.kind!=='sensor-rig'?'（其他任务占用）':''}</p>{session?.error&&<p role="alert">{session.error}</p>}{session?.state==='running'&&session.kind==='sensor-rig'&&session.run_id&&session.configuration?.request?.mode==='manual'&&<ManualDriving key={session.run_id} runId={session.run_id}/>}</section>

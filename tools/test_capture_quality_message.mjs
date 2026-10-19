@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {captureQualityMessage} from './livery-designer/app/captureQualityMessage.ts';
+assert.match(captureQualityMessage({state:'failed',detail:'Traceback\nValueError: No recorded samples'}),/不表示 CARLA 崩溃/);
+assert.equal(captureQualityMessage({state:'passed',detail:'ValueError: No recorded samples'}),null);
+assert.equal(captureQualityMessage({state:'failed',detail:'Missing raw input arrays'}),null);
+assert.equal(captureQualityMessage({state:'incomplete'}),null);
+console.log('Quality message checks passed');
+assert.match(captureQualityMessage({state:'failed',reason_code:'invalid_ego_pose',problem_frame:42}),/帧 42/);
+assert.equal(captureQualityMessage({state:'passed',reason_code:'invalid_ego_pose',problem_frame:42}),null);
+assert.match(captureQualityMessage({state:'failed',reason_code:'no_samples',detail:'localized log'}),/没有已录制样本/);
+assert.equal(captureQualityMessage({state:'failed',reason_code:'validation_failed',detail:'ValueError: No recorded samples'}),null);
+assert.match(captureQualityMessage({state:'incomplete',reason_code:'validation_timeout'}),/时间限制/);
+assert.match(captureQualityMessage({state:'incomplete',reason_code:'validator_unavailable'}),/无法启动/);

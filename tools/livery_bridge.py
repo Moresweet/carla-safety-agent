@@ -49,6 +49,7 @@ from carla_safety_agent.batch_capabilities import batch_capabilities
 from carla_safety_agent.batch_textures import texture_records, overlay_materials, require_texture_world
 from carla_safety_agent.world_readiness import require_idle_native_world
 from carla_safety_agent.world_health import observe_idle
+from carla_safety_agent.simulator_connection import require_simulator_connection
 from carla_safety_agent.experiment_report import summarize_queue, compare_variants
 from carla_safety_agent.scene_store import SceneStore, validate_scene
 from carla_safety_agent.material_library import MaterialLibrary, MaterialTransaction, exact_environment_target
@@ -127,6 +128,10 @@ BENCH2DRIVE_TCP_ZOO = Path(os.environ.get(
     "BENCH2DRIVE_TCP_ZOO", str(E2E_ROOT / "Bench2DriveZoo-tcp-admlp")))
 DATASET_ROOT = Path(os.environ.get(
     "CSA_DATASET_ROOT", str(PROJECT_ROOT / ".runtime" / "generated-scenarios")))
+from carla_safety_agent.capture_retention import CaptureRetention
+RETENTION = CaptureRetention(PROJECT_ROOT/'data', DATASET_ROOT)
+from carla_safety_agent.archive_service import ArchiveService
+ARCHIVES = ArchiveService(DATASET_ROOT, PROJECT_ROOT/'.runtime/dataset-archives', PROJECT_ROOT/'data')
 UNIAD_PYTHON = Path(os.environ.get(
     "UNIAD_PYTHON", str(E2E_ROOT / "miniconda3/envs/uniad-cu128/bin/python")))
 QUALITY = QualityService(DATASET_ROOT, PROJECT_ROOT / '.runtime/dataset-quality',
@@ -135,12 +140,22 @@ RECOVERY = RecoveryService(DATASET_ROOT, PROJECT_ROOT / '.runtime/dataset-recove
                            PROJECT_ROOT/'tools/validate_capture_dataset.py',UNIAD_PYTHON)
 EXCERPTS = ExcerptService(DATASET_ROOT, PROJECT_ROOT / '.runtime/dataset-excerpts', PROJECT_ROOT/'data',
                          PROJECT_ROOT/'tools/validate_capture_dataset.py', UNIAD_PYTHON)
+from carla_safety_agent.dataset_jobs import start_dataset_job
+DATASET_SERVICES={'archive':ARCHIVES,'recovery':RECOVERY,'excerpt':EXCERPTS,'quality':QUALITY}
 BLENDER = BlenderPipeline(PROJECT_ROOT)
 SESSION = SessionJournal(PROJECT_ROOT / 'data')
 BATCHES = BatchCatalog(PROJECT_ROOT / 'data/experiment-queues')
 SCENES = SceneStore(PROJECT_ROOT / 'data/scenes')
 HANDOFF = SceneHandoff(PROJECT_ROOT/'data/scene-handoffs')
 POSITION_HISTORY = TransformHistory(PROJECT_ROOT/'data/transform-history')
+from carla_safety_agent.deletion_history import DeletionHistory
+DELETION_HISTORY = DeletionHistory(PROJECT_ROOT/'data/deletion-history')
+from carla_safety_agent.copy_history import CopyHistory
+COPY_HISTORY = CopyHistory(PROJECT_ROOT/'data/copy-history')
+from carla_safety_agent.material_history import MaterialHistory
+MATERIAL_HISTORY = MaterialHistory(PROJECT_ROOT/'data/material-history')
+from carla_safety_agent.actor_material_history import ActorMaterialHistory
+ACTOR_MATERIAL_HISTORY = ActorMaterialHistory(PROJECT_ROOT/'data/actor-material-history')
 VISIBILITY = VisibilityStore(PROJECT_ROOT / 'data')
 MATERIALS = MaterialLibrary(PROJECT_ROOT / 'data')
 _thumbnail_dir = os.environ.get("THUMBNAIL_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), ".runtime", "thumbnails"))
@@ -247,18 +262,74 @@ def evaluation_command(action: str, payload: dict, timeout: float = 30.0) -> dic
     raise RuntimeError("The evaluator did not apply the edit within 30 seconds")
 
 
-def _benchmark_result_failed(results_path: Path) -> bool:
+def _benchmark_result_failed(results_path: Path, expected_execution=None, expected_scenario=None) -> bool:
     if not results_path.is_file():
         return True
     try:
         payload = json.loads(results_path.read_text())
-    except (OSError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return True
+    if not isinstance(payload, dict) or not payload:
+        return True
+    if expected_execution is not None and payload.get('execution_id') != expected_execution:
+        return True
+    if expected_scenario is not None and payload.get('scenario_sha256') != expected_scenario:
+        return True
+    if expected_scenario is not None:
+        import hashlib
+        try:
+            document = payload['scenario']
+            if not isinstance(document, dict):
+                return True
+            content = json.dumps(document, sort_keys=True, ensure_ascii=False,
+                                 allow_nan=False, separators=(',', ':')).encode('utf-8')
+        except (KeyError, TypeError, ValueError, UnicodeError):
+            return True
+        if hashlib.sha256(content).hexdigest() != expected_scenario:
+            return True
+    # Native executors use their own result schema without _checkpoint.
+    # A present benchmark checkpoint must not silently default to success
+    # when its structure is malformed or only partially written.
+    if '_checkpoint' not in payload:
+        import math
+        scenario = payload.get('scenario')
+        if not isinstance(scenario, dict) or not isinstance(scenario.get('scenario_id'), str):
+            return True
+        if 'schema_version' in payload:
+            if payload['schema_version'] != 'carla-safety-evaluation/0.1':
+                return True
+            result = payload.get('result')
+        else:
+            result = payload  # Native rule-run result stores metrics at top level.
+        if (not isinstance(result, dict) or result.get('scenario_id') != scenario['scenario_id']
+                or result.get('status') not in ('passed', 'failed')
+                or type(result.get('collision')) is not bool
+                or not isinstance(result.get('failure_reasons'), list)
+                or any(not isinstance(reason, str) for reason in result['failure_reasons'])):
+            return True
+        for key in ('min_ttc_s', 'min_distance_m', 'elapsed_s', 'risk_score'):
+            value = result.get(key)
+            if value is None and key in ('min_ttc_s', 'min_distance_m'):
+                continue
+            if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                return True
+        # A valid driving failure is still a completed execution. Reporting
+        # quality/risk separately is intentional; it is not a corrupt result.
+        return False
     checkpoint = payload.get("_checkpoint", {})
+    if not isinstance(checkpoint, dict):
+        return True
     records = checkpoint.get("records", [])
-    global_status = checkpoint.get("global_record", {}).get("status")
-    return global_status == "Failed" or any(
-        str(record.get("status", "")).lower().startswith("failed")
+    global_record = checkpoint.get('global_record')
+    if (not isinstance(records, list) or not records or
+            any(not isinstance(record, dict) or not isinstance(record.get('status'), str)
+                or not record['status'].strip() for record in records) or
+            not isinstance(global_record, dict) or not isinstance(global_record.get('status'), str)
+            or not global_record['status'].strip()):
+        return True
+    global_status = global_record['status']
+    return global_status.strip().lower().startswith('failed') or any(
+        record['status'].strip().lower().startswith("failed")
         for record in records
     )
 
@@ -285,18 +356,29 @@ def _finish_e2e(process):
     with _e2e_lock:
         if _e2e_process is process:
             results_path = Path(_e2e_job.get("results") or "")
-            benchmark_failed = bool(_e2e_job.get("results")) and returncode == 0 and _benchmark_result_failed(results_path)
-            state = ("failed" if _e2e_job.get('startup_error') else "stopped" if _e2e_job["state"] == "stopping" else
+            result_assessed = (bool(_e2e_job.get('results')) and returncode == 0
+                               and _e2e_job['state'] != 'stopping'
+                               and not _e2e_job.get('startup_error'))
+            benchmark_failed = result_assessed and _benchmark_result_failed(
+                results_path, _e2e_job.get('expected_execution_id'), _e2e_job.get('expected_scenario_sha256'))
+            state = ("failed" if _e2e_job.get('startup_error') else
+                     "stopped" if _e2e_job["state"] == "stopping" and returncode in (0, 130) else
                      "succeeded" if returncode == 0 and not benchmark_failed else "failed")
+            capture_detail = None
+            if returncode != 0 and _e2e_job.get('kind')=='sensor-rig' and _e2e_job.get('worker_execution_id'):
+                from carla_safety_agent.capture_failure import capture_failure
+                capture_detail=capture_failure(_evaluation_control_dir/'sensor-rig-status.json',_e2e_job['worker_execution_id'])
             _e2e_job.update(state="failed" if cleanup_error else state, cleanup_error=cleanup_error,
                             ended_at=time.time(), returncode=returncode)
             SESSION.transition('recovering' if cleanup_error else 'failed' if state == 'failed' else
                                'stopped' if state == 'stopped' else 'completed',
-                               returncode=returncode, error=cleanup_error or _e2e_job.get('startup_error'),
-                               outcome={'execution': 'failed' if cleanup_error else state, 'benchmark_failed': benchmark_failed,
+                               returncode=returncode, error=cleanup_error or _e2e_job.get('startup_error') or (capture_detail['error'] if capture_detail else None),
+                               outcome={'execution': 'failed' if cleanup_error else state,
+                                        'result_assessed': result_assessed, 'benchmark_failed': benchmark_failed,
                                         'failure_category': 'world_recovery' if cleanup_error else
                                             'startup' if _e2e_job.get('startup_error') else
-                                            'process_exit' if returncode not in (0, 130) and state != 'stopped' else
+                                            capture_detail['category'] if capture_detail else
+                                            'process_exit' if returncode != 0 and state != 'stopped' else
                                             'benchmark_result' if benchmark_failed and state != 'stopped' else None})
 
 
@@ -337,17 +419,40 @@ def import_blender_asset(data):
 
 
 def collection_request(data):
+    if not isinstance(data, dict) or set(data)-{'recording','every','max_frames'} or type(data.get('recording')) is not bool:
+        raise ValueError('Recording request requires a boolean recording and supported fields only')
+    every, max_frames = data.get('every', 5), data.get('max_frames', 2000)
+    if type(every) is not int or not 1 <= every <= 100:
+        raise ValueError('every must be an integer in 1..100')
+    if type(max_frames) is not int or not 1 <= max_frames <= 10000:
+        raise ValueError('max_frames must be an integer in 1..10000')
     if data.get('recording') and not evaluation_active():
         raise RuntimeError('请先启动独立采集或闭环测试')
-    payload = {'id': uuid.uuid4().hex, 'recording': bool(data.get('recording')),
-               'every': max(1, min(100, int(data.get('every', 5)))),
-               'max_frames': max(1, min(10000, int(data.get('max_frames', 2000))))}
+    if data['recording']:
+        from carla_safety_agent.capture_quota import capture_quota_policy
+        if not capture_quota_policy()['valid']:
+            raise ValueError('Invalid CSA_CAPTURE_QUOTA_GIB; recording request not written')
+    payload = {'id': uuid.uuid4().hex, 'recording': data['recording'],
+               'execution_id': SESSION.snapshot().get('run_id'),
+               'every': every, 'max_frames': max_frames}
     target = _evaluation_control_dir/'collection-request.json'
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = target.with_suffix('.tmp')
     temp.write_text(json.dumps(payload))
     temp.replace(target)
     return {'ok': True, 'request': payload}
+
+
+def recording_control(data):
+    if not isinstance(data, dict) or not isinstance(data.get('run_id'), str) or not data['run_id']:
+        raise ValueError('Recording control requires execution run_id')
+    with _e2e_lock:
+        current = SESSION.snapshot()
+        if (current.get('run_id') != data['run_id'] or current.get('state') != 'running'
+                or current.get('kind') not in ('run','preset-run','sensor-rig','rule-run')
+                or not SESSION.owned_pid()):
+            raise ValueError('No matching live recording session; refresh before controlling recording')
+        return collection_request({key:value for key,value in data.items() if key != 'run_id'})
 
 
 def e2e_status() -> dict:
@@ -376,6 +481,13 @@ def e2e_status() -> dict:
             "routes": e2e_routes(), "log": log, "results": results}
 
 
+def set_capture_retention(data):
+    if not isinstance(data, dict) or set(data) != {'run_id','keep','reason','expected_revision'}:
+        raise ValueError('Expected only run_id, keep, reason and expected_revision')
+    return {'ok':True, **RETENTION.set_keep(data['run_id'], data['keep'], data['reason'],
+                                          expected_revision=data['expected_revision'])}
+
+
 @simulation_operation
 def start_e2e(data: dict) -> dict:
     global _e2e_process
@@ -390,6 +502,16 @@ def start_e2e(data: dict) -> dict:
     model_capture = data.get('unified_capture', True)
     if not isinstance(model_capture, bool):
         raise ValueError('unified_capture must be boolean')
+    if action == 'sensor-rig':
+        recording = data.get('recording', True)
+        if type(recording) is not bool:
+            raise ValueError('recording must be boolean')
+    else:
+        recording = action in ('run', 'rule-run') and data.get('unified_capture', False)
+    if recording:
+        from carla_safety_agent.capture_quota import capture_quota_policy
+        if not capture_quota_policy()['valid']:
+            raise ValueError('Invalid CSA_CAPTURE_QUOTA_GIB; capture rejected before simulator access')
     if action not in ('sensor-rig','rule-run') and not UNIAD_PYTHON.is_file():
         raise RuntimeError(f"UniAD environment is missing: {UNIAD_PYTHON}")
     if evaluation_active():
@@ -405,8 +527,11 @@ def start_e2e(data: dict) -> dict:
         algorithm = str(data.get('algorithm', 'uniad-tiny'))
         available = {item['id'] for item in algorithm_catalog(BENCH2DRIVE_ZOO, BENCH2DRIVE_TCP_ZOO)
                      if item['status'] == 'available'}
-        if algorithm not in available:
+        from carla_safety_agent.experimental_models import experimental_model_enabled, require_experimental_files
+        if algorithm not in available and not experimental_model_enabled(algorithm):
             raise RuntimeError('Selected generated-scenario model is not installed')
+        if experimental_model_enabled(algorithm):
+            require_experimental_files(PROJECT_ROOT, algorithm)
     with _e2e_lock:
         if _e2e_process is not None and _e2e_process.poll() is None:
             raise ValueError("A UniAD task is already running")
@@ -437,6 +562,8 @@ def start_e2e(data: dict) -> dict:
                        if action == 'rule-run' else [str(PROJECT_ROOT / "scripts/run_uniad_target.sh")])
             if action == 'run' and algorithm != 'uniad-tiny':
                 command = [str(PROJECT_ROOT/'scripts/run_benchmark_preset.sh')]
+            if action == 'run' and experimental_model_enabled(algorithm):
+                command = [str(UNIAD_PYTHON), str(PROJECT_ROOT/'tools/run_opendrive_native.py')]
         elif action == 'sensor-rig':
             mode, frames = str(data.get('mode','stationary')), data.get('frames',200)
             if mode not in ('stationary','autopilot','manual') or isinstance(frames,bool) or not isinstance(frames,int) or not 10 <= frames <= 100000:
@@ -525,6 +652,9 @@ def start_e2e(data: dict) -> dict:
             env['CSA_RESOURCE_DATA_ROOT'] = str(PROJECT_ROOT/'data')
         _e2e_job.clear()
         _e2e_job.update(state="running", kind=action, started_at=time.time(),
+                        expected_execution_id=execution_id if action in ('run', 'rule-run') else None,
+                        worker_execution_id=execution_id,
+                        expected_scenario_sha256=scenario_digest if action in ('run', 'rule-run') else None,
                         ended_at=None, returncode=None, command=command,
                         algorithm=algorithm if action in ('run', 'preset-run') else None if action in ('sensor-rig','rule-run') else "uniad-tiny",
                         route=str(route) if action in ('run','rule-run') else None,
@@ -850,7 +980,8 @@ def execute_reviewed_scenario(data: dict) -> dict:
     if not isinstance(route, str) or not route:
         raise ValueError('Select the reviewed scenario archive')
     algorithm = data.get('algorithm', 'uniad-tiny')
-    if algorithm not in ('uniad-tiny', 'uniad-base', 'vad', 'tcp', 'admlp'):
+    from carla_safety_agent.experimental_models import experimental_model_enabled
+    if algorithm not in ('uniad-tiny', 'uniad-base', 'vad', 'tcp', 'admlp') and not experimental_model_enabled(algorithm):
         raise ValueError('Select a supported generated-scenario model')
     capture = data.get('unified_capture', False)
     if not isinstance(capture, bool):
@@ -886,6 +1017,7 @@ def connect_world():
         HANDOFF.require_idle()
         if evaluation_active():
             raise RuntimeError("Closed-loop evaluation owns CARLA; wait for it to stop")
+        require_simulator_connection(HOST, CARLA_PORT)
         if _carla_client is None:
             _carla_client = carla.Client(HOST, CARLA_PORT)
             _carla_client.set_timeout(5.0)
@@ -934,6 +1066,7 @@ def scene_preview():
 def restore_editor_world():
     """The evaluator has exited: also recover an interrupt during its setup."""
     global _carla_client
+    require_simulator_connection(HOST, CARLA_PORT)
     if _carla_client is None:
         _carla_client = carla.Client(HOST, CARLA_PORT)
         _carla_client.set_timeout(5.0)
@@ -1215,7 +1348,8 @@ def _spawn_editor_object(blueprint_id: str, transform_data: dict) -> dict:
             and not hero_actor(world)):
         blueprint.set_attribute("role_name", "hero")
     before = set(world.get_names_of_all_objects())
-    actor = world.spawn_actor(blueprint, transform)
+    from carla_safety_agent.spawn_errors import spawn_native
+    actor = spawn_native(world, blueprint, transform)
     _editor_actors.add(actor.id)
     try:
         _provenance.mark(world.id, [actor], 'user')
@@ -1230,6 +1364,8 @@ def _spawn_editor_object(blueprint_id: str, transform_data: dict) -> dict:
         created_names = sorted(after-before)
         metadata = {'blueprint_id':blueprint_id,
                     'spawn_options':{k: transform_data[k] for k in ('mass','scale') if k in transform_data}}
+        if generated:
+            metadata['spawn_options'] = {'mass':float(transform_data.get('mass',0)), 'scale':float(scale)}
         if len(created_names) == 1:
             metadata['runtime_object_name'] = created_names[0]
             _actor_object_names[actor.id] = created_names[0]
@@ -1311,6 +1447,55 @@ def capture_scene_document():
 def restore_scene(data):
     saved = SCENES.read(str(data['scene_id']), data.get('version'))
     return restore_scene_document(saved)
+
+
+@simulation_operation
+def inspect_deletion(operation_id):
+    """Read current identity without rewriting historical outcomes or restoring."""
+    from carla_safety_agent.world_readiness import require_idle_native_world, map_matches
+    row = DELETION_HISTORY.read(operation_id)
+    if evaluation_active():
+        raise ValueError('Stop evaluation before inspecting deletion against the world')
+    require_asset_import_idle()
+    world = connect_world()
+    require_idle_native_world(world)
+    saved = SCENES.read(row['backup']['scene_id'], row['backup']['version'])
+    same_map = map_matches(saved['document']['map'], world.get_map().name)
+    live = live_scene_bindings(world, _provenance.records(world.id)) if same_map else {}
+    actor = live.get(row['backup']['stable_id'])
+    if actor is not None and actor.type_id != row['type_id']:
+        raise ValueError('Stable object type differs from deletion record; inspect manually')
+    if connect_world().id != world.id:
+        raise ValueError('World changed during deletion inspection; inspect again')
+    return {'ok': True, 'operation_id': operation_id, 'recorded_state': row['state'],
+            'backup': row['backup'], 'current_episode': world.id,
+            'same_episode': world.id == row['episode'], 'same_map': same_map,
+            'observation': ('different_map' if not same_map else 'present' if actor else 'missing'),
+            'actor_id': actor.id if actor else None,
+            'note': 'Point-in-time identity check only; no history rewrite or restore authorization'}
+
+
+@simulation_operation
+def restore_missing_object(data):
+    from carla_safety_agent.object_restore import object_restore_document
+    from carla_safety_agent.scene_store import identifier
+    from carla_safety_agent.world_readiness import require_idle_native_world
+    if not isinstance(data, dict) or set(data) != {'scene_id', 'version', 'stable_id', 'confirmed'} or data['confirmed'] is not True:
+        raise ValueError('Confirm an exact scene version and missing stable object ID')
+    for key in ('scene_id', 'version', 'stable_id'):
+        identifier(data[key])
+    if evaluation_active():
+        raise ValueError('Stop evaluation before restoring a deleted object')
+    require_asset_import_idle()
+    world = connect_world()
+    require_idle_native_world(world)
+    saved = SCENES.read(data['scene_id'], data['version'])
+    document = object_restore_document(saved['document'], data['stable_id'])
+    if data['stable_id'] in live_scene_bindings(world, _provenance.records(world.id)):
+        raise ValueError('Object already exists; refusing to overwrite or duplicate it')
+    result = restore_scene_document({**saved, 'document': document})
+    return {**result, 'mode': 'restore_missing_object',
+            'note': 'Only the selected missing object and its recorded supported actor materials restored; no scene-wide undo or redo'}
 
 
 def handoff_preflight(selection):
@@ -1547,7 +1732,8 @@ def restore_scene_document(saved):
                 _provenance.bind(world.id, actor, obj['stable_id'], blueprint_id=obj['blueprint_id'],
                                  spawn_options=obj.get('spawn_options', {}))
                 live[obj['stable_id']] = actor
-        world.set_weather(weather)
+        if 'weather' in document:
+            world.set_weather(weather)
         if actor_material_transaction:
             actor_material_transaction.apply()
         if material_transaction:
@@ -1653,6 +1839,66 @@ def prepare_scene_actor_materials(world, document, live, provenance, native_text
     return transaction
 
 
+@simulation_operation
+def inspect_actor_material_history(operation_id):
+    if evaluation_active():raise ValueError('Stop evaluation before inspecting actor materials')
+    world=connect_world()
+    def observe(identity):
+        if str(world.id)!=identity['episode']:raise ValueError('Actor material episode changed')
+        actor=world.get_actor(identity['actor_id'])
+        record=_provenance.records(world.id).get(str(identity['actor_id']),{})
+        if (actor is None or actor.type_id!=identity['blueprint_id'] or record.get('origin')!='user'
+                or record.get('stable_id')!=identity['stable_id'] or record.get('type_id')!=actor.type_id):
+            raise ValueError('Actor material identity changed')
+        return next((r['texture'] for r in record.get('actor_materials',[])
+                     if r['component']==identity['component'] and r['slot']==identity['slot']),None)
+    return {'ok':True,**ACTOR_MATERIAL_HISTORY.inspect(operation_id,observe),'actor_recovery_supported':True}
+
+
+def actor_material_history_callbacks(world):
+    prepared={}
+    def verify(identity,source,target):
+        if str(world.id)!=identity['episode']:raise ValueError('Actor material episode changed')
+        actor=world.get_actor(identity['actor_id'])
+        record=_provenance.records(world.id).get(str(identity['actor_id']),{})
+        if (actor is None or actor.type_id!=identity['blueprint_id'] or record.get('origin')!='user'
+                or record.get('stable_id')!=identity['stable_id'] or record.get('type_id')!=actor.type_id):
+            raise ValueError('Actor material identity changed')
+        current=next((r['texture'] for r in record.get('actor_materials',[])
+                      if r['component']==identity['component'] and r['slot']==identity['slot']),None)
+        if current!=source:raise ValueError('Registered actor texture changed')
+        stable=identity['stable_id']
+        desired=[] if target is None else [dict(stable_id=stable,blueprint_id=actor.type_id,
+            component=identity['component'],slot=identity['slot'],texture=target)]
+        prepared['transaction']=prepare_scene_actor_materials(world,
+            dict(objects=[dict(stable_id=stable,blueprint_id=actor.type_id)],actor_materials=desired),
+            {stable:actor},{str(actor.id):record})
+    return verify,lambda identity,target:prepared['transaction'].apply()
+
+
+@simulation_operation
+def actor_material_history_action(data):
+    if not isinstance(data,dict) or set(data)!={'operation_id','direction','revision','confirmed'} or data['confirmed'] is not True:
+        raise ValueError('Explicit actor material history confirmation required')
+    if evaluation_active():raise ValueError('Stop evaluation before editing actor materials')
+    verify,apply=actor_material_history_callbacks(connect_world())
+    row=ACTOR_MATERIAL_HISTORY.transition(data['operation_id'],data['direction'],data['revision'],verify,apply)
+    return {'ok':True,'operation_id':row['operation_id'],'revision':row['revision'],
+            'applied':row['applied'],'operation':row}
+
+
+@simulation_operation
+def recover_actor_material_history(data):
+    from carla_safety_agent.world_readiness import require_idle_native_world
+    if (not isinstance(data,dict) or set(data)!={'operation_id','inspection_token','choice','registered_texture','confirmed'}
+            or data['confirmed'] is not True):raise ValueError('Explicit actor recovery and fresh inspection required')
+    if evaluation_active():raise ValueError('Stop evaluation before actor material recovery')
+    world=connect_world();require_idle_native_world(world)
+    verify,apply=actor_material_history_callbacks(world)
+    row=ACTOR_MATERIAL_HISTORY.recover(data['operation_id'],data['inspection_token'],data['choice'],data['registered_texture'],verify,apply)
+    return {'ok':True,'operation_id':data['operation_id'],'recovery':row['recovery'],'original_state':row['state']}
+
+
 def apply_versioned_livery(world,actor,image,texture):
     from carla_safety_agent.actor_materials import SUPPORTED
     record=_provenance.records(world.id).get(str(actor.id),{})
@@ -1664,14 +1910,15 @@ def apply_versioned_livery(world,actor,image,texture):
     document={'objects':[{'stable_id':stable,'blueprint_id':actor.type_id}],
         'actor_materials':[{'stable_id':stable,'blueprint_id':actor.type_id,'component':component,'slot':slot,'texture':digest}]}
     transaction=prepare_scene_actor_materials(world,document,{stable:actor},{str(actor.id):record},{(digest,SUPPORTED[actor.type_id][2]):texture})
-    try:transaction.apply()
-    except Exception as original:
-        try:transaction.rollback()
-        except Exception as recovery:
-            raise RuntimeError(f'Actor texture failed: {original}; recovery incomplete for actor {actor.id}: {recovery}') from original
-        raise
+    from carla_safety_agent.actor_material_history import apply_with_history
+    previous=next((row['texture'] for row in record.get('actor_materials',[])
+                   if row['component']==component and row['slot']==slot),None)
+    operation=apply_with_history(PROJECT_ROOT/'data/actor-material-history',
+        dict(episode=str(world.id),actor_id=actor.id,stable_id=stable,blueprint_id=actor.type_id,
+             component=component,slot=slot),previous,digest,transaction)
     return {'ok':True,'actor_id':actor.id,'type_id':actor.type_id,'object_name':runtime_name_for_actor(world,actor),
-            'texture':digest,'versionable':True,'component':component,'material_slot':slot,'resolution':list(image.size)}
+            'texture':digest,'versionable':True,'component':component,'material_slot':slot,'resolution':list(image.size),
+            'history_operation_id':operation}
 
 
 def prepare_scene_materials(world, document, previous=None):
@@ -1826,27 +2073,161 @@ def position_history_action(data):
 
 
 @simulation_operation
+def undo_copy(data):
+    from carla_safety_agent.transform_review import verify_review, validate_review
+    if (not isinstance(data, dict) or set(data) != {'operation_id','review','confirmed'}
+            or data['confirmed'] is not True):
+        raise ValueError('Explicit copy undo confirmation and current target review required')
+    validate_review(data['review'])
+    if evaluation_active():
+        raise ValueError('Stop evaluation before undoing an editor copy')
+    world = connect_world()
+    def verify(target):
+        if target['episode'] != str(world.id):
+            raise ValueError('Copy belongs to another world episode')
+        actor = world.get_actor(target['actor_id'])
+        if actor is None or position_history_identity(world, actor) != target:
+            raise ValueError('Copy target is missing or its managed identity changed')
+        verify_review(data['review'], world.id, actor, actor.get_transform())
+    return COPY_HISTORY.undo(data['operation_id'], verify,
+                             lambda target:delete_actor(target['actor_id']))
+
+
+@simulation_operation
+def redo_copy(data):
+    if (not isinstance(data,dict) or set(data)!={'operation_id','deletion_id','confirmed'}
+            or data['confirmed'] is not True):
+        raise ValueError('Confirm the exact copy and undo operation before redo')
+    if evaluation_active():
+        raise ValueError('Stop evaluation before redoing a copy')
+    world=connect_world()
+    def verify(target, selection):
+        if target['episode']!=str(world.id):
+            raise ValueError('Copy belongs to another world episode; use explicit snapshot restoration')
+        if selection['stable_id'] in live_scene_bindings(world,_provenance.records(world.id)):
+            raise ValueError('Copy already exists; refusing duplicate restore')
+    def identify(result, selection):
+        actor_id=result.get('bindings',{}).get(selection['stable_id'])
+        actor=world.get_actor(actor_id) if type(actor_id) is int else None
+        if actor is None:
+            raise ValueError('Restored copy identity unavailable; inspect the scene')
+        return position_history_identity(world,actor)
+    return COPY_HISTORY.redo(data['operation_id'],data['deletion_id'],verify,
+        lambda selection:restore_missing_object({**selection,'confirmed':True}),identify)
+
+
+def journal_duplicate(function):
+    from functools import wraps
+    @wraps(function)
+    def wrapped(actor_id):
+        if evaluation_active():
+            return function(actor_id)  # Evaluation-owned edits have their own command path.
+        world = connect_world()
+        actor = world.get_actor(actor_id)
+        if actor is None:
+            raise ValueError('Copy source is no longer present')
+        record = _provenance.records(world.id).get(str(actor_id), {})
+        source = dict(episode=str(world.id), actor_id=actor_id, type_id=actor.type_id,
+                      stable_id=record.get('stable_id') if record.get('type_id') == actor.type_id else None)
+        def identify(result):
+            target = world.get_actor(result['object']['id'])
+            if target is None:
+                raise ValueError('Copy target is no longer present')
+            identity = position_history_identity(world, target)
+            if identity is None:
+                raise ValueError('Copy target is not managed')
+            return identity
+        return COPY_HISTORY.execute(source, lambda:function(actor_id), identify)
+    return wrapped
+
+
+@simulation_operation
+@journal_duplicate
 def duplicate_actor(actor_id: int) -> dict:
+    from carla_safety_agent.spawn_errors import SpawnCollision
     if evaluation_active():
         return evaluation_command("duplicate", {"actor_id": actor_id})
     world = connect_world()
     actor = world.get_actor(actor_id)
     if not actor:
         raise RuntimeError(f"Actor {actor_id} is not running")
+    blueprint_id, spawn_options = duplicate_spawn_spec(world, actor)
+    preflight_duplicate_materials(world, actor)
     transform = actor.get_transform()
     side, forward = transform.get_right_vector(), transform.get_forward_vector()
     width, length = actor.bounding_box.extent.y * 2 + 2, actor.bounding_box.extent.x * 2 + 2
     # A nearby wall or guardrail can obstruct one side. Try bounded alternatives.
     for offset in (side * width, side * -width, forward * length, forward * -length):
         try:
-            return spawn_object(_generated_actor_assets.get(actor_id, actor.type_id), {
+            result = spawn_object(blueprint_id, {**spawn_options,
                 "location": vector(transform.location + offset),
                 "rotation": {"pitch": transform.rotation.pitch,
                              "yaw": transform.rotation.yaw, "roll": transform.rotation.roll}})
-        except RuntimeError as exc:
-            if "collision" not in str(exc).lower():
-                raise
+        except SpawnCollision:
+            continue
+        # Once spawning succeeded, a material failure must never retry spawning.
+        try:
+            copy_duplicate_materials(world, actor, result['object']['id'])
+        except Exception as error:
+            try:
+                delete_actor(result['object']['id'])
+            except Exception as cleanup_error:
+                raise RuntimeError(f'Duplicate material copy failed ({error}); actor {result["object"]["id"]} requires cleanup: {cleanup_error}') from error
+            raise RuntimeError(f'Duplicate material copy failed ({error}); temporary duplicate removed') from error
+        return result
     raise RuntimeError("No collision-free position near this object; move it to an open area before duplicating")
+
+
+def preflight_duplicate_materials(world, source):
+    from carla_safety_agent.actor_materials import actor_material_edits
+    from PIL import Image
+    import io
+    record = _provenance.records(world.id).get(str(source.id), {})
+    materials = record.get('actor_materials', [])
+    edits = actor_material_edits(materials, [{'stable_id':record.get('stable_id'),'blueprint_id':source.type_id}])
+    for digest in set(edits.values()):
+        payload = MATERIALS.texture(digest)
+        with Image.open(io.BytesIO(payload)) as image:
+            image.verify()
+
+
+def copy_duplicate_materials(world, source, target_id):
+    from carla_safety_agent.actor_materials import actor_material_edits
+    records = _provenance.records(world.id)
+    original = records.get(str(source.id), {})
+    materials = original.get('actor_materials', [])
+    if not materials:
+        return
+    actor_material_edits(materials, [{'stable_id':original.get('stable_id'),'blueprint_id':source.type_id}])
+    target = world.get_actor(target_id)
+    destination = records.get(str(target_id), {})
+    stable = destination.get('stable_id')
+    if (target is None or target.type_id != source.type_id or destination.get('origin') != 'user'
+            or not stable or stable == original.get('stable_id')):
+        raise ValueError('Duplicate material target identity is invalid')
+    document = {'objects':[{'stable_id':stable,'blueprint_id':target.type_id}],
+                'actor_materials':[{**row,'stable_id':stable} for row in materials]}
+    transaction = prepare_scene_actor_materials(world,document,{stable:target},records)
+    transaction.apply()
+
+
+def duplicate_spawn_spec(world, actor):
+    from carla_safety_agent.scene_store import finite_number
+    record = _provenance.records(world.id).get(str(actor.id), {})
+    if record and record.get('type_id') != actor.type_id:
+        raise ValueError('Object provenance type changed; refusing duplicate')
+    blueprint = record.get('blueprint_id') or _generated_actor_assets.get(actor.id, actor.type_id)
+    if not isinstance(blueprint, str) or not blueprint:
+        raise ValueError('Missing duplicate blueprint')
+    options = record.get('spawn_options', {})
+    if not isinstance(options, dict) or set(options) - {'mass','scale'}:
+        raise ValueError('Unsupported duplicate spawn options')
+    for key,value in options.items():
+        if not finite_number(value) or value < 0 or (key == 'scale' and value == 0):
+            raise ValueError('Invalid duplicate mass or scale')
+    if actor.type_id == 'static.prop.mesh' and blueprint == actor.type_id:
+        raise ValueError('Generated mesh blueprint identity missing; cannot safely duplicate')
+    return blueprint, dict(options)
 
 
 @simulation_operation
@@ -1858,17 +2239,58 @@ def delete_actor(actor_id: int) -> dict:
     if not actor:
         raise RuntimeError(f"Actor {actor_id} is not running")
     type_id = actor.type_id
+    backup = backup_managed_deletion(world, actor)
+    operation_id = DELETION_HISTORY.begin(world.id, actor_id, type_id, backup) if backup else None
+    try:
+        return confirm_actor_deletion(world, actor, actor_id, type_id, backup, operation_id)
+    except Exception as error:
+        if operation_id:
+            try:
+                DELETION_HISTORY.finish(operation_id, error)
+            except Exception as journal_error:
+                raise RuntimeError(f'Deletion {operation_id} requires inspection; journal update failed: {journal_error}') from error
+            raise RuntimeError(f'Deletion {operation_id} requires inspection: {error}') from error
+        raise
+
+
+def confirm_actor_deletion(world, actor, actor_id, type_id, backup, operation_id):
     if actor.destroy() is False:
         raise RuntimeError(f'Actor {actor_id} destruction was rejected')
     # Actor lookup uses the client's last world snapshot. Do not acknowledge a
     # deletion while an immediate scene restore can still reuse that old actor.
     snapshot = world.wait_for_tick(5.0)
+    if snapshot is None:
+        raise RuntimeError(f'Actor {actor_id} deletion result is uncertain: no world snapshot; inspect before retrying')
+    if connect_world().id != world.id:
+        raise RuntimeError(f'Actor {actor_id} deletion result is uncertain: world changed; inspect before retrying')
     if snapshot.find(actor_id) is not None:
         raise RuntimeError(f'Actor {actor_id} deletion not confirmed in the world snapshot')
     _actor_object_names.pop(actor_id, None)
     _generated_actor_assets.pop(actor_id, None)
     _editor_actors.discard(actor_id)
-    return {"ok": True, "actor_id": actor_id, "type_id": type_id}
+    if operation_id:
+        DELETION_HISTORY.finish(operation_id)
+    return {"ok": True, "actor_id": actor_id, "type_id": type_id, 'backup':backup,
+            'operation_id':operation_id}
+
+
+def backup_managed_deletion(world, actor):
+    """Persist managed scene state before destruction; not a single-object undo."""
+    identity = position_history_identity(world, actor)
+    if identity is None:
+        return None
+    document = capture_scene_document()
+    if connect_world().id != world.id:
+        raise ValueError('World changed before deletion backup')
+    matches = [item for item in document['objects'] if item['stable_id'] == identity['stable_id']]
+    if len(matches) != 1:
+        raise ValueError('Deletion target missing or ambiguous in managed snapshot')
+    from carla_safety_agent.actor_materials import actor_texture_digests
+    from carla_safety_agent.material_library import material_edits
+    for digest in actor_texture_digests(document) | set(material_edits(document.get('environment_materials', [])).values()):
+        MATERIALS.texture(digest)
+    saved = SCENES.save(document, '删除对象前自动快照：'+identity['stable_id'])
+    return {**saved['head'], 'stable_id': identity['stable_id']}
 
 
 @simulation_operation
@@ -2250,11 +2672,78 @@ def apply_material_slot(data, payload=None):
         output = io.BytesIO(); image.save(output,format='PNG')
         digest = MATERIALS.put_texture(output.getvalue())
         operation = 'apply'
-    world.apply_color_texture_to_object(f"{info['target']}|csa|{component}|{slot}|{operation}",
-                                       carla.MaterialParameter.Diffuse, texture)
-    MATERIALS.record(world.id,info['target'],component,slot,digest)
+    before = next((edit['texture'] for edit in info.get('overrides', [])
+                   if edit['component']==component and edit['slot']==slot), None)
+    def apply():
+        world.apply_color_texture_to_object(f"{info['target']}|csa|{component}|{slot}|{operation}",
+                                           carla.MaterialParameter.Diffuse, texture)
+        MATERIALS.record(world.id,info['target'],component,slot,digest)
+    history_id = MATERIAL_HISTORY.execute(dict(episode=str(world.id),object_id=str(data['object_id']),
+        target=info['target'],component=component,slot=slot),before,digest,apply)
     return {'ok':True,'target':info['target'],'component':component,'slot':slot,'texture':digest,
-            'operation':operation,'scope':'one component material slot','projection':'UV0'}
+            'operation':operation,'scope':'one component material slot','projection':'UV0',
+            'material_operation_id':history_id}
+
+
+@simulation_operation
+def material_history_action(data):
+    from carla_safety_agent.world_readiness import require_idle_native_world
+    if (not isinstance(data,dict) or set(data)!={'operation_id','direction','revision','confirmed'}
+            or data['confirmed'] is not True):
+        raise ValueError('Confirm an exact material history operation and revision')
+    if evaluation_active():raise ValueError('Stop evaluation before changing material history')
+    world=connect_world();require_idle_native_world(world)
+    verify,apply=material_history_callbacks(world)
+    row=MATERIAL_HISTORY.transition(data['operation_id'],data['direction'],data['revision'],verify,apply)
+    return {'ok':True,'operation_id':data['operation_id'],'revision':row['revision'],'applied':row['applied']}
+
+
+def material_history_callbacks(world):
+    """Caller holds simulation lock and has checked idle ownership."""
+    textures={}
+    def verify(identity,source,target):
+        if identity['episode']!=str(world.id):raise ValueError('Material belongs to another world episode')
+        info=material_catalog(identity['object_id'])
+        if info['target']!=identity['target']:raise ValueError('Material target identity changed')
+        slots=[slot for component in info['components'] if component['component']==identity['component'] for slot in component['slots']]
+        if not any(slot['slot']==identity['slot'] and slot.get('status')=='uv0_ready' for slot in slots):
+            raise ValueError('Material slot no longer has verified UV0')
+        current=next((edit['texture'] for edit in info['overrides'] if edit['component']==identity['component'] and edit['slot']==identity['slot']),None)
+        if current!=source:raise ValueError('Material changed outside this history; refusing overwrite')
+        textures[target]=carla.TextureColor(1,1) if target is None else decode_texture(MATERIALS.texture(target),(1024,1024))[1]
+    def apply(identity,target):
+        operation='restore' if target is None else 'apply'
+        world.apply_color_texture_to_object(f"{identity['target']}|csa|{identity['component']}|{identity['slot']}|{operation}",carla.MaterialParameter.Diffuse,textures[target])
+        MATERIALS.record(world.id,identity['target'],identity['component'],identity['slot'],target)
+    return verify,apply
+
+
+@simulation_operation
+def recover_material_history(data):
+    from carla_safety_agent.world_readiness import require_idle_native_world
+    if (not isinstance(data,dict) or set(data)!={'operation_id','inspection_token','choice','registered_texture','confirmed'}
+            or data['confirmed'] is not True):
+        raise ValueError('Explicit material recovery choice and current inspection required')
+    if evaluation_active():raise ValueError('Stop evaluation before material recovery')
+    world=connect_world();require_idle_native_world(world)
+    verify,apply=material_history_callbacks(world)
+    row=MATERIAL_HISTORY.recover(data['operation_id'],data['inspection_token'],data['choice'],
+        data['registered_texture'],verify,apply)
+    return {'ok':True,'operation_id':data['operation_id'],'recovery':row['recovery'],
+            'original_state':row['state'],'note':'Explicit recovery write confirmed; original failure retained, visual verification still required'}
+
+
+@simulation_operation
+def inspect_material_history(operation_id):
+    if evaluation_active():raise ValueError('Stop evaluation before inspecting editor materials')
+    world=connect_world()
+    def observe(identity):
+        if identity['episode']!=str(world.id):raise ValueError('Material belongs to another world episode')
+        info=material_catalog(identity['object_id'])
+        if info['target']!=identity['target']:raise ValueError('Material target identity changed')
+        return next((edit['texture'] for edit in info['overrides']
+            if edit['component']==identity['component'] and edit['slot']==identity['slot']),None)
+    return {'ok':True,**MATERIAL_HISTORY.inspect(operation_id,observe)}
 
 
 @simulation_operation
@@ -2295,6 +2784,45 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         request = urlparse(self.path)
         params = parse_qs(request.query)
+        if request.path == '/system/runtime-storage':
+            from carla_safety_agent.runtime_storage import review_runtime, RuntimeStorageBusy
+            try:
+                if request.query:
+                    raise ValueError('Runtime storage accepts no path or query parameters')
+                result = review_runtime(PROJECT_ROOT/'.runtime')
+                self._headers()
+                self.wfile.write(json.dumps({'ok': True, **result}).encode())
+            except RuntimeStorageBusy as exc:
+                self._headers(409)
+                self.wfile.write(json.dumps({'ok': False, 'error': str(exc), 'code': 'runtime_storage_busy'}).encode())
+            except (ValueError, OSError) as exc:
+                self._headers(400)
+                self.wfile.write(json.dumps({'ok': False, 'error': str(exc)}).encode())
+            return
+        if request.path in ('/materials/history-inspection','/materials/actor-history-inspection'):
+            try:
+                inspect=inspect_actor_material_history if request.path=='/materials/actor-history-inspection' else inspect_material_history
+                result=inspect(params.get('operation_id',[''])[0])
+                self._headers();self.wfile.write(json.dumps(result).encode())
+            except (ValueError,OSError,RuntimeError) as error:
+                self._headers(400);self.wfile.write(json.dumps({'ok':False,'error':str(error)}).encode())
+            return
+        if request.path == '/datasets/jobs':
+            active={}
+            for name,service in [('recovery',RECOVERY),('excerpt',EXCERPTS),('quality',QUALITY),('archive',ARCHIVES)]:
+                with service.lock:active[name]=service.active
+            self._headers();self.wfile.write(json.dumps({'schema_version':'dataset-jobs/1','active':active}).encode())
+            return
+        if request.path == '/datasets/storage':
+            from carla_safety_agent.storage_review import storage_review, StorageReviewBusy
+            try:
+                result = storage_review(DATASET_ROOT, PROJECT_ROOT/'data')
+                self._headers(); self.wfile.write(json.dumps({'ok':True, **result}).encode())
+            except StorageReviewBusy as exc:
+                self._headers(409); self.wfile.write(json.dumps({'ok':False,'error':str(exc)}).encode())
+            except (ValueError,OSError) as exc:
+                self._headers(400); self.wfile.write(json.dumps({'ok':False,'error':str(exc)}).encode())
+            return
         if request.path=='/objects/transform-history':
             try:
                 result=position_history_status(int(params.get('actor_id',['0'])[0]))
@@ -2329,6 +2857,27 @@ class Handler(BaseHTTPRequestHandler):
                 self._headers(400)
                 self.wfile.write(json.dumps({'ok':False,'error':str(exc)}).encode())
             return
+        if request.path == '/blender/exported':
+            try:
+                params = parse_qs(request.query, keep_blank_values=True)
+                if set(params) != {'job_id'} or len(params['job_id']) != 1:
+                    raise ValueError('Expected one Blender job id')
+                result = BLENDER.exported_asset(params['job_id'][0])
+                self._headers()
+            except (ValueError, OSError, KeyError) as exc:
+                result = {'ok': False, 'error': str(exc)}
+                self._headers(400)
+            self.wfile.write(json.dumps(result).encode())
+            return
+        if request.path == '/blender/restart-status':
+            try:
+                result = {'ok': True, **BLENDER.restart_status()}
+                self._headers()
+            except (ValueError, OSError, KeyError) as exc:
+                result = {'ok': False, 'error': str(exc)}
+                self._headers(400)
+            self.wfile.write(json.dumps(result).encode())
+            return
         if request.path in ('/blender/imports', '/blender/generations'):
             try:
                 result = {'ok':True,'attempts':(BLENDER.generation_attempts() if request.path.endswith('/generations') else BLENDER.import_attempts())}
@@ -2351,7 +2900,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 result = (BATCHES.list(int(params.get('limit', ['30'])[0]), params.get('after', [None])[0])
                           if request.path == '/batches' else
-                          {'report': summarize_queue(BATCHES.read(params.get('batch_id', [''])[0]),
+                          {'batch_id': params.get('batch_id', [''])[0],
+                           'report': summarize_queue(BATCHES.read(params.get('batch_id', [''])[0]),
                               {'rule-run': PROJECT_ROOT/'runs/rule', 'run': PROJECT_ROOT/'runs/uniad'})})
                 if request.path == '/batches/compare':
                     result = {'comparison': compare_variants(result['report'],
@@ -2380,6 +2930,38 @@ class Handler(BaseHTTPRequestHandler):
                 self._headers(409)
                 self.wfile.write(json.dumps({'ok': False, 'error': str(exc)}).encode())
             return
+        if request.path == '/objects/deletion-inspection':
+            try:
+                result = inspect_deletion(params.get('operation_id', [''])[0])
+                self._headers()
+                self.wfile.write(json.dumps(result).encode())
+            except (ValueError, OSError) as exc:
+                self._headers(400)
+                self.wfile.write(json.dumps({'ok': False, 'error': str(exc)}).encode())
+            except RuntimeError as exc:
+                self._headers(409)
+                self.wfile.write(json.dumps({'ok': False, 'error': str(exc)}).encode())
+            return
+        if request.path == '/objects/edit-history':
+            try:
+                from carla_safety_agent.editor_history import editor_history
+                result = editor_history(POSITION_HISTORY, DELETION_HISTORY,
+                                        int(params.get('limit', ['50'])[0]), copies=COPY_HISTORY, materials=MATERIAL_HISTORY, actor_materials=ACTOR_MATERIAL_HISTORY)
+                self._headers()
+                self.wfile.write(json.dumps({'ok': True, **result}).encode())
+            except (ValueError, OSError) as exc:
+                self._headers(400)
+                self.wfile.write(json.dumps({'ok': False, 'error': str(exc)}).encode())
+            return
+        if request.path == '/objects/deletion-history':
+            try:
+                result = DELETION_HISTORY.list(int(params.get('limit', ['50'])[0]))
+                self._headers()
+                self.wfile.write(json.dumps({'ok': True, **result}).encode())
+            except (ValueError, OSError) as exc:
+                self._headers(400)
+                self.wfile.write(json.dumps({'ok': False, 'error': str(exc)}).encode())
+            return
         if request.path in ('/scenes', '/scenes/document'):
             try:
                 result = {'scenes': SCENES.list()} if request.path == '/scenes' else SCENES.read(params.get('scene_id',[''])[0], params.get('version',[None])[0])
@@ -2388,6 +2970,15 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, OSError) as exc:
                 self._headers(400)
                 self.wfile.write(json.dumps({'ok': False, 'error': str(exc)}).encode())
+            return
+        if request.path == '/datasets/retention':
+            try:
+                result = RETENTION.snapshot()
+                self._headers()
+                self.wfile.write(json.dumps({'ok':True, **result}).encode())
+            except (ValueError, OSError) as exc:
+                self._headers(400)
+                self.wfile.write(json.dumps({'ok':False, 'error':str(exc)}).encode())
             return
         if request.path in ('/experiments', '/experiments/document'):
             try:
@@ -2415,10 +3006,13 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError,OSError) as exc:
                 self._headers(400);self.wfile.write(json.dumps({'ok':False,'error':str(exc)}).encode())
             return
-        if request.path == '/datasets/excerpt/download':
+        if request.path in ('/datasets/excerpt/download','/datasets/archive/download'):
             try:
-                path=EXCERPTS.download(params.get('request_id',[''])[0])
-                stream=path.open('rb')
+                if request.path=='/datasets/archive/download':
+                    stream=ARCHIVES.open_download(params.get('request_id',[''])[0])
+                else:
+                    path=EXCERPTS.download(params.get('request_id',[''])[0])
+                    stream=path.open('rb')
             except (ValueError,OSError) as exc:
                 self._headers(400);self.wfile.write(json.dumps({'ok':False,'error':str(exc)}).encode())
                 return
@@ -2427,16 +3021,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header('Content-Type','application/zip')
                 self.send_header('Content-Length',str(os.fstat(stream.fileno()).st_size))
                 self.send_header('Access-Control-Allow-Origin',FRONTEND_ORIGIN)
-                self.send_header('Content-Disposition','attachment; filename="diagnostic-excerpt.zip"')
+                self.send_header('Content-Disposition','attachment; filename="'+('capture-archive.zip' if request.path=='/datasets/archive/download' else 'diagnostic-excerpt.zip')+'"')
                 self.end_headers()
                 try:
                     for chunk in iter(lambda:stream.read(1024*1024),b''):self.wfile.write(chunk)
                 except (BrokenPipeError,ConnectionResetError):pass
             return
-        if request.path in ('/datasets/quality','/datasets/recovery','/datasets/excerpt'):
+        if request.path in ('/datasets/quality','/datasets/recovery','/datasets/excerpt','/datasets/archive'):
             try:
                 result = (QUALITY.status(params.get('run_id', [''])[0]) if request.path=='/datasets/quality'
-                          else (EXCERPTS if request.path=='/datasets/excerpt' else RECOVERY).status(params.get('request_id',[''])[0]))
+                          else DATASET_SERVICES[request.path.rsplit('/',1)[-1]].status(params.get('request_id',[''])[0]))
                 self._headers()
                 self.wfile.write(json.dumps({'ok': True, **result}).encode())
             except (ValueError, OSError) as exc:
@@ -2487,6 +3081,7 @@ class Handler(BaseHTTPRequestHandler):
                     name = params.get('id', [''])[0]
                     allowed = {'CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT', 'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT', 'BEV_RGB', 'BEV_POINTS'}
                     allowed |= {'DEPTH_'+n for n in allowed if n.startswith('CAM_')}
+                    allowed |= {'rgb_front', 'rgb_left', 'rgb_right', 'rgb_back'}
                     if name not in allowed or not evaluation_active():
                         raise ValueError('Live sensor is unavailable')
                     frame = int(params.get('frame', ['-1'])[0])
@@ -2579,10 +3174,34 @@ class Handler(BaseHTTPRequestHandler):
                 self._headers(400)
             self.wfile.write(json.dumps(result).encode())
             return
+        if request.path == '/scene/state':
+            # Resolve the guarded world read before committing a success status.
+            try:
+                payload = scene_state()
+                status = 200
+            except ValueError as exc:
+                payload = {'ok': False, 'error': str(exc), 'retryable': True,
+                           'code': 'scene_temporarily_unavailable'}
+                status = 503
+            except RuntimeError as exc:
+                payload = {'ok': False, 'error': str(exc), 'retryable': True,
+                           'code': 'simulator_unavailable'}
+                status = 503
+            self._headers(status)
+            try:
+                self.wfile.write(json.dumps(payload).encode())
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # The requesting page disconnected; never repeat the RPC.
+            return
+        if request.path not in ('/', '/e2e/status', '/e2e/telemetry',
+                '/e2e/benchmark/catalog', '/e2e/benchmark/report', '/datasets',
+                '/assets/uv-audit', '/blender/status', '/blender/registry', '/targets'):
+            self._headers(404)
+            self.wfile.write(json.dumps({'ok': False, 'error': 'Unknown endpoint',
+                                        'code': 'unknown_endpoint'}).encode())
+            return
         self._headers()
-        if request.path == "/scene/state":
-            self.wfile.write(json.dumps(scene_state()).encode())
-        elif request.path == "/e2e/status":
+        if request.path == "/e2e/status":
             self.wfile.write(json.dumps(e2e_status()).encode())
         elif request.path == "/e2e/telemetry":
             path = _evaluation_control_dir / "telemetry" / "latest.json"
@@ -2606,7 +3225,7 @@ class Handler(BaseHTTPRequestHandler):
                 "report": benchmark_report(BENCH2DRIVE_ZOO)}).encode())
         elif request.path == "/datasets":
             self.wfile.write(json.dumps({"ok": True, "root": str(DATASET_ROOT),
-                                         "datasets": list_datasets(DATASET_ROOT)}).encode())
+                                         "datasets": list_datasets(DATASET_ROOT, experiments_root=PROJECT_ROOT/'data/experiments')}).encode())
         elif request.path == "/assets/uv-audit":
             self.wfile.write(json.dumps({"ok": True, **_uv_audit}).encode())
         elif request.path == "/blender/status":
@@ -2626,27 +3245,31 @@ class Handler(BaseHTTPRequestHandler):
                                 '/scenes/handoff/preview','/scenes/handoff/confirm','/scenes/handoff/acknowledge',
                                 '/projects/bundle/export','/projects/bundle/upload','/projects/bundle/import','/projects/bundle/doctor',
                                 '/projects/bundle/restore-preview','/projects/bundle/restore-confirm','/projects/bundle/registration',
-                                '/batches/create', '/datasets/quality', '/datasets/recovery', '/datasets/excerpt',
-                                '/batches/control',
+                                '/batches/create', '/datasets/quality', '/datasets/recovery', '/datasets/excerpt', '/datasets/retention', '/datasets/archive',
+                                '/batches/control', '/datasets/splits/register',
                                 '/batches/scheduler',
                                 "/apply/environment",
                                 "/apply/pedestrian", "/focus/actor",
                                 "/focus/static", "/focus/bev",
                                 "/focus/environment", "/camera/hero-lock",
                                 "/objects/environment/visibility",
-                                "/objects/spawn", "/objects/update", "/objects/update-reviewed", "/objects/transform-history",
-                                "/objects/duplicate", "/objects/delete",
+                                "/objects/spawn", "/objects/update", "/objects/update-reviewed", "/objects/transform-history", "/objects/restore-missing",
+                                "/objects/duplicate", "/objects/copy-undo", "/objects/copy-redo", "/objects/delete",
                                 "/scenario/compile", "/scenario/revise", "/scenario/run", "/scenario/evaluate", '/scenario/execute-plan',
                                 "/blender/create", "/blender/retexture",
                                 "/blender/import", "/blender/spawn",
-                                "/e2e/start", "/e2e/stop", "/scenario/stop", "/collection/control", '/session/recover', '/session/restore-weather',
+                                "/e2e/start", "/e2e/stop", "/scenario/stop", "/collection/recording", '/session/recover', '/session/restore-weather',
                                 '/scenes/save', '/scenes/restore', '/scenes/restore-bundle', '/scenes/history', '/scenes/from-experiment',
-                                '/materials/apply', '/materials/restore', '/collection/start', '/collection/stop', '/collection/control'):
+                                '/materials/apply', '/materials/restore', '/materials/history', '/materials/actor-history', '/materials/actor-history-recover', '/materials/history-recover', '/collection/start', '/collection/stop', '/collection/control'):
             self._headers(404)
             self.wfile.write(b'{"ok":false,"error":"not found"}')
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
+            if request.path == '/datasets/splits/register' and length > 8 * 1024 * 1024:
+                self._headers(413)
+                self.wfile.write(b'{"ok":false,"error":"Split upload exceeds 8 MiB limit"}')
+                return
             if length < 0 or length > 16 * 1024 * 1024:
                 self._headers(413)
                 self.wfile.write(b'{"ok":false,"error":"Request body exceeds 16 MiB limit"}')
@@ -2670,15 +3293,27 @@ class Handler(BaseHTTPRequestHandler):
                 result=preview_bundle_restore(json.loads(payload or b'{}'))
             elif request.path == '/projects/bundle/restore-confirm':
                 result=confirm_bundle_restore(json.loads(payload or b'{}'))
+            elif request.path == '/datasets/splits/register':
+                from carla_safety_agent.split_registry import register_split_payload, SplitRegistryBusy
+                try:
+                    result = register_split_payload(payload, PROJECT_ROOT/'data/dataset-splits', DATASET_ROOT)
+                except SplitRegistryBusy as exc:
+                    self._headers(409)
+                    self.wfile.write(json.dumps({'ok':False,'error':str(exc)}).encode())
+                    return
             elif request.path == '/datasets/recovery':
-                result={'ok':True,**RECOVERY.start(json.loads(payload or b'{}'))}
+                result={'ok':True,**start_dataset_job(DATASET_SERVICES,'recovery',json.loads(payload or b'{}'))}
+            elif request.path == '/datasets/archive':
+                result={'ok':True,**start_dataset_job(DATASET_SERVICES,'archive',json.loads(payload or b'{}'))}
+            elif request.path == '/datasets/retention':
+                result = set_capture_retention(json.loads(payload or b'{}'))
             elif request.path == '/datasets/excerpt':
-                result={'ok':True,**EXCERPTS.start(json.loads(payload or b'{}'))}
+                result={'ok':True,**start_dataset_job(DATASET_SERVICES,'excerpt',json.loads(payload or b'{}'))}
             elif request.path == '/datasets/quality':
                 data = json.loads(payload or b'{}')
                 if not isinstance(data, dict) or set(data) != {'run_id'}:
                     raise ValueError('Expected only dataset run_id')
-                result = {'ok': True, **QUALITY.start(data['run_id'])}
+                result = {'ok': True, **start_dataset_job(DATASET_SERVICES,'quality',data['run_id'])}
             elif request.path == '/batches/create':
                 result = {'ok': True, **BATCHES.create(json.loads(payload or b'{}'))}
             elif request.path == '/batches/control':
@@ -2697,6 +3332,14 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError('Texture image is required')
                 result = apply_material_slot({key: params.get(key, [''])[0]
                                               for key in ('object_id', 'component', 'slot')}, payload)
+            elif request.path == '/materials/history':
+                result=material_history_action(json.loads(payload or b'{}'))
+            elif request.path == '/materials/actor-history':
+                result=actor_material_history_action(json.loads(payload or b'{}'))
+            elif request.path == '/materials/actor-history-recover':
+                result=recover_actor_material_history(json.loads(payload or b'{}'))
+            elif request.path == '/materials/history-recover':
+                result=recover_material_history(json.loads(payload or b'{}'))
             elif request.path == '/materials/restore':
                 result = apply_material_slot(json.loads(payload or b'{}'))
             elif request.path == '/scenes/restore-bundle':
@@ -2707,8 +3350,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = operation(json.loads(payload or b'{}'))
             elif request.path == '/session/recover':
                 result = recover_session()
-            elif request.path == '/collection/control':
-                result = collection_request(json.loads(payload or b'{}'))
+            elif request.path == '/collection/recording':
+                result = recording_control(json.loads(payload or b'{}'))
             elif request.path == "/e2e/start":
                 result = start_e2e(json.loads(payload or b"{}"))
             elif request.path == '/scenario/stop':
@@ -2765,6 +3408,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = spawn_object(str(data["blueprint_id"]), data.get("transform", {}))
             elif request.path == '/objects/transform-history':
                 result=position_history_action(json.loads(payload or b'{}'))
+            elif request.path == '/objects/restore-missing':
+                result=restore_missing_object(json.loads(payload or b'{}'))
             elif request.path in ("/objects/update", "/objects/update-reviewed"):
                 data = json.loads(payload or b"{}")
                 if request.path.endswith('update-reviewed'):
@@ -2772,6 +3417,10 @@ class Handler(BaseHTTPRequestHandler):
                     result = update_actor(int(data['actor_id']),data.get('transform',{}),validate_review(data.get('expected')))
                 else:
                     result = update_actor(int(data["actor_id"]), data.get("transform", {}))
+            elif request.path == '/objects/copy-undo':
+                result = undo_copy(json.loads(payload or b'{}'))
+            elif request.path == '/objects/copy-redo':
+                result = redo_copy(json.loads(payload or b'{}'))
             elif request.path == "/objects/duplicate":
                 data = json.loads(payload or b"{}")
                 result = duplicate_actor(int(data["actor_id"]))

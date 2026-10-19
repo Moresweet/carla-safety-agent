@@ -71,16 +71,21 @@ def create_excerpt(source,output,frame,before_s,after_s,validator,python,require
     archive=manifest.get('input_archive')
     if archive not in ('sensor_input.npz','model_input.npz'):raise ValueError('Unknown raw input archive')
     references=manifest.get('files')
-    if not isinstance(references,dict) or set(references)-{'calibration','index','scenario','collisions','editor_events'}:
+    if not isinstance(references,dict) or set(references)-{'calibration','index','scenario','collisions','editor_events','map_projection'}:
         raise ValueError('Unsupported capture metadata references')
     if references.get('calibration')!='calibration.json' or references.get('index')!='index.json':
         raise ValueError('Capture metadata layout differs from unified format')
     for key,name in (('collisions','collisions.json'),('editor_events','editor-events.json')):
         if references.get(key) not in (None,name):raise ValueError('Unsupported event archive layout')
     metadata={'manifest.json','index.json','calibration.json'}
-    for name in references.values():
+    for kind,name in references.items():
         if name is None:continue
-        if not isinstance(name,str) or Path(name).name!=name or not name.endswith('.json'):
+        if kind=='map_projection':
+            from .map_projection_archive import read_map_projection
+            reference=manifest.get('map_projection')
+            read_map_projection(source,reference)
+            if name!=reference['path']:raise ValueError('Map projection file reference mismatch')
+        if not isinstance(name,str) or Path(name).name!=name or not name.endswith('.xodr' if kind=='map_projection' else '.json'):
             raise ValueError('Unsafe capture metadata reference')
         metadata.add(name)
     sensors=manifest.get('sensors')

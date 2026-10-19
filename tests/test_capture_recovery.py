@@ -23,8 +23,26 @@ def fixture(tmp_path):
     return source,destination
 
 
-def test_copy_reconstructs_index_retains_original_and_marks_recovery(tmp_path,monkeypatch):
-    source,destination=fixture(tmp_path);before=inventory(source);calls=[]
+def test_zero_sample_capture_has_clear_error_and_no_copy(tmp_path):
+    source=tmp_path/'zero';source.mkdir()
+    destination=tmp_path/'copies';destination.mkdir()
+    (source/'manifest.json').write_text(json.dumps({
+        'schema_version':'carla-safety-dataset/0.2','status':'saved_capture_error',
+        'input_archive':'sensor_input.npz','frame_count':0}))
+    before=inventory(source)
+    with pytest.raises(ValueError,match='没有已提交样本可恢复'):
+        recover_capture(source,destination,'validator','python',lambda:None)
+    assert inventory(source)==before
+    assert list(destination.iterdir())==[]
+
+
+@pytest.mark.parametrize('status', ['recording','saved_cleanup_error','saved_capture_error'])
+def test_copy_reconstructs_index_retains_original_and_marks_recovery(tmp_path,monkeypatch,status):
+    source,destination=fixture(tmp_path)
+    path=source/'manifest.json';doc=json.loads(path.read_text());doc['status']=status
+    if status=='saved_capture_error': doc.update(error='No space left on device',stop_reason='capture_io_error')
+    path.write_text(json.dumps(doc))
+    before=inventory(source);calls=[]
     monkeypatch.setattr('carla_safety_agent.capture_recovery.audit_capture',lambda *_:{'state':'passed'})
     output=recover_capture(source,destination,'validator','python',lambda:calls.append('inactive'))
     assert calls==['inactive','inactive'] and inventory(source)==before
@@ -34,6 +52,20 @@ def test_copy_reconstructs_index_retains_original_and_marks_recovery(tmp_path,mo
     assert manifest['recovery']['omitted_uncommitted_tail']==['0000000002']
     assert not (output/'samples/0000000002').exists()
     assert json.loads((output/'index.json').read_text())['frames'][0]['frame']==1
+
+
+def test_recovery_preserves_recording_projection_not_current_map(tmp_path,monkeypatch):
+    from carla_safety_agent.map_projection_archive import archive_map_projection,read_map_projection
+    source,destination=fixture(tmp_path)
+    xml='<OpenDRIVE><header><geoReference>+proj=tmerc</geoReference></header></OpenDRIVE>'
+    ref=archive_map_projection(source,NS(name='Town04',to_opendrive=lambda:xml))
+    path=source/'manifest.json';doc=json.loads(path.read_text())
+    doc['map_projection']=ref;doc['files']['map_projection']=ref['path'];path.write_text(json.dumps(doc))
+    monkeypatch.setattr('carla_safety_agent.capture_recovery.audit_capture',lambda *_:{'state':'passed'})
+    output=recover_capture(source,destination,'validator','python',lambda:None)
+    restored=json.loads((output/'manifest.json').read_text())
+    assert restored['map_projection']==ref
+    assert read_map_projection(output,ref)==read_map_projection(source,ref)==xml
 
 
 @pytest.mark.parametrize('damage',['symlink','interior','identity','saved','active'])

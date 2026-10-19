@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 from .experiment_matrix import canonical, compile_matrix
+from .scene_store import read_json
 
 
 def compare_variants(report, axis, baseline, candidate):
@@ -32,10 +33,13 @@ def compare_variants(report, axis, baseline, candidate):
                 'candidate_job_id': b['job_id'] if b else None, 'comparable': False}
         if a is None or b is None:
             pair['reason'] = 'Missing paired variant'
+            pair['reason_code'] = 'missing_variant'
         elif any(r['execution_state'] != 'completed' or not r.get('metrics') or r.get('metrics_error') for r in (a, b)):
             pair['reason'] = 'Both executions need verified completed metrics'
+            pair['reason_code'] = 'execution_or_metrics_unverified'
         elif a['metrics']['elapsed_s'] != b['metrics']['elapsed_s']:
             pair['reason'] = 'Different observed durations'
+            pair['reason_code'] = 'duration_mismatch'
         else:
             deltas = {}
             for metric in ('min_ttc_s', 'min_distance_m', 'risk_score'):
@@ -46,6 +50,10 @@ def compare_variants(report, axis, baseline, candidate):
         pairs.append(pair)
     return {'axis': axis, 'baseline': baseline, 'candidate': candidate,
             'pairs': pairs, 'comparable_count': sum(p['comparable'] for p in pairs),
+            'excluded_count': sum(not p['comparable'] for p in pairs),
+            'exclusion_counts': dict(Counter(p['reason_code'] for p in pairs if not p['comparable'])),
+            'execution_state_counts': {label:dict(Counter(group[label]['execution_state'] for group in groups.values() if label in group))
+                                      for label in (baseline,candidate)},
             'conclusion': 'Descriptive matched differences only; no statistical significance or causal claim'}
 
 
@@ -58,7 +66,9 @@ def verified_rule_metrics(execution, results_root):
     path = raw.resolve()
     if raw.is_symlink() or path.parent != root or path.stat().st_size > 8*1024*1024:
         raise ValueError('Invalid rule result path or size')
-    result = json.loads(path.read_text())
+    result = read_json(path, max_bytes=8*1024*1024)
+    if not isinstance(result, dict):
+        raise ValueError('Rule result must be a JSON object')
     if result.get('execution_id') != execution['run_id'] or result.get('scenario_sha256') != config['scenario_sha256']:
         raise ValueError('Rule result execution/scenario identity mismatch')
     if hashlib.sha256(canonical(result['scenario'])).hexdigest() != config['scenario_sha256']:
@@ -68,6 +78,8 @@ def verified_rule_metrics(execution, results_root):
             raise ValueError('Unsupported native evaluation result schema')
         scenario_id = result['scenario']['scenario_id']
         result = result['result']
+        if not isinstance(result, dict):
+            raise ValueError('Nested evaluation result must be a JSON object')
         if result.get('scenario_id') != scenario_id:
             raise ValueError('Nested result scenario identity mismatch')
     if result.get('status') not in ('passed', 'failed') or not isinstance(result.get('collision'), bool):

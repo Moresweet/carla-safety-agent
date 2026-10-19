@@ -4,6 +4,34 @@ import pytest
 from carla_safety_agent.replay import replay_trajectory
 
 
+@pytest.mark.parametrize('bad_frame', [0, 1, 2])
+@pytest.mark.parametrize('defect', ['scale', 'shear', 'reflection', 'projective', 'nan'])
+def test_trajectory_rejects_nonrigid_current_history_and_future(tmp_path, bad_frame, defect):
+    root = tmp_path / 'run'
+    root.mkdir()
+    (root / 'manifest.json').write_text('{}')
+    entries = []
+    for frame in range(3):
+        folder = root / str(frame)
+        folder.mkdir()
+        pose = np.eye(4)
+        pose[0, 3] = frame
+        if frame == bad_frame:
+            if defect == 'scale': pose[0, 0] = 2
+            elif defect == 'shear': pose[0, 1] = .2
+            elif defect == 'reflection': pose[0, 0] = -1
+            elif defect == 'projective': pose[3, 0] = .2
+            else: pose[0, 0] = float('nan')
+        (folder / 'frame.json').write_text(json.dumps({'frame': frame,
+            'timestamp': float(frame), 'ego': {'matrix': pose.tolist()}}))
+        entries.append({'frame': frame, 'timestamp': float(frame), 'path': str(frame)})
+    (root / 'index.json').write_text(json.dumps({'frames': entries}))
+    before = {p: p.read_bytes() for p in root.rglob('*.json')}
+    with pytest.raises(ValueError, match='rigid ego poses'):
+        replay_trajectory(tmp_path, 'run', 1)
+    assert all(p.read_bytes() == value for p, value in before.items())
+
+
 def test_recorded_trajectory_is_relative_and_separates_future(tmp_path,monkeypatch):
     root=tmp_path/'run'; root.mkdir()
     (root/'manifest.json').write_text('{}')

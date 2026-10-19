@@ -115,7 +115,7 @@ class DatasetRecorder:
         return manifest
 
 
-def list_datasets(root: Path) -> list[dict[str, Any]]:
+def list_datasets(root: Path, *, experiments_root: Path | None = None) -> list[dict[str, Any]]:
     datasets: list[dict[str, Any]] = []
     if not root.is_dir():
         return datasets
@@ -123,6 +123,9 @@ def list_datasets(root: Path) -> list[dict[str, Any]]:
         try:
             item = json.loads(manifest.read_text(encoding="utf-8"))
             item["manifest_path"] = str(manifest)
+            if experiments_root is not None:
+                from .dataset_execution import execution_summary
+                item['execution_summary'] = execution_summary(experiments_root, item.get('execution_id'))
             datasets.append(item)
         except (OSError, json.JSONDecodeError):
             continue

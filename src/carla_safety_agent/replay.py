@@ -263,6 +263,7 @@ def replay_projection(root, run_id, frame, camera, depth_check=False):
 def replay_trajectory(root, run_id, frame, horizon_s=5.0):
     """Recorded ego positions, not predictions or interpolated future ground truth."""
     import numpy as np
+    from .data_quality import validate_ego_pose as rigid_pose
     if isinstance(horizon_s,bool) or not isinstance(horizon_s,(int,float)) or not 0<horizon_s<=30:
         raise ValueError('Trajectory horizon must be 0..30 seconds')
     path=dataset_path(root,run_id)
@@ -273,8 +274,7 @@ def replay_trajectory(root, run_id, frame, horizon_s=5.0):
     current=next((e for e in entries if e['frame']==int(frame)),None)
     if current is None: raise ValueError('Unknown frame')
     metadata=json.loads(_indexed_file(path,current,'frame.json').read_text())
-    pose=np.asarray(metadata['ego']['matrix'],dtype=float)
-    if pose.shape!=(4,4) or not np.isfinite(pose).all(): raise ValueError('Invalid ego pose')
+    pose=rigid_pose(metadata['ego']['matrix'])
     try: inverse=np.linalg.inv(pose)
     except np.linalg.LinAlgError as exc: raise ValueError('Invalid ego pose') from exc
     timestamp=float(metadata['timestamp'])
@@ -285,14 +285,17 @@ def replay_trajectory(root, run_id, frame, horizon_s=5.0):
     if len(selected)>2000: raise ValueError('Trajectory window exceeds 2000 samples')
     from .prediction_trajectory import replay_prediction
     prediction=replay_prediction(metadata,pose)
+    if prediction.get('state')=='available' and (prediction.get('contract') or {}).get('model')=='driveadapter':
+        from .offline_projection import archived_prediction
+        manifest=json.loads((path/'manifest.json').read_text())
+        prediction['map_projected']=archived_prediction(path,manifest,metadata,pose)
     reference=(prediction.get('contract') or {}).get('reference_offset_body_m',[0.,0.,0.])
     history,future,reference_history,reference_future=[],[],[],[]
     for entry in selected:
         record=json.loads(_indexed_file(path,entry,'frame.json').read_text())
         if record['frame']!=entry['frame'] or float(record['timestamp'])!=float(entry['timestamp']):
             raise ValueError('Index/sample identity mismatch')
-        matrix=np.asarray(record['ego']['matrix'],dtype=float)
-        if matrix.shape!=(4,4) or not np.isfinite(matrix).all(): raise ValueError('Invalid recorded ego pose')
+        matrix=rigid_pose(record['ego']['matrix'])
         dt=float(record['timestamp'])-timestamp
         if not np.isfinite(dt) or abs(dt)>horizon_s: raise ValueError('Index timestamp mismatch')
         xyz=(inverse @ matrix[:,3])[:3].tolist()

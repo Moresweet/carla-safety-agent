@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 from .collision_events import CollisionEvents
+from .capture_quota import check_capture_quota, capture_quota_policy, capture_write_lock
 
 CAMERAS = ('CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT', 'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT')
 POSES = ((.8, 0, 1.6, 0, 70), (.27, -.55, 1.6, -55, 70), (.27, .55, 1.6, 55, 70),
@@ -122,7 +123,8 @@ class SensorCapture:
         self.scenario = json.loads(json.dumps(scenario, allow_nan=False)) if scenario is not None else None
         self.dataset_root = Path(dataset_root) if dataset_root is not None else None
         self.world, self.ego = world, ego
-        self.map_name = world.get_map().name
+        self.road_map = world.get_map()
+        self.map_name = self.road_map.name
         self.root = Path(runtime)
         self.live = self.root/'capture'
         self.live.mkdir(parents=True, exist_ok=True)
@@ -190,11 +192,21 @@ class SensorCapture:
 
     def request(self):
         try:
-            return json.loads((self.root/'collection-request.json').read_text())
+            command = json.loads((self.root/'collection-request.json').read_text())
+            if not isinstance(command, dict):
+                return {'recording': False}
+            execution = os.environ.get('CSA_EXECUTION_ID')
+            if execution and command.get('execution_id') != execution:
+                # Shared runtime paths may contain commands from an older worker.
+                # Such a command must neither start nor stop this execution.
+                return dict(getattr(self, '_accepted_recording_request', {'recording': False}))
+            self._accepted_recording_request = dict(command)
+            return command
         except (OSError, ValueError):
             return {'recording': False}
 
     def begin(self, request):
+        self.quota_policy = capture_quota_policy()
         base = getattr(self,'dataset_root',None) or Path(os.environ.get('CSA_DATASET_ROOT', str(self.root.parent.parent/'runs/datasets')))
         self.run_id = 'capture-'+time.strftime('%Y%m%dT%H%M%S')+'-'+uuid.uuid4().hex[:8]
         self.run = base/self.run_id
@@ -209,6 +221,8 @@ class SensorCapture:
         self.execution_id = os.environ.get('CSA_EXECUTION_ID') or None
         self.recording_start_frame = self.world.get_snapshot().frame
         atomic_json(self.run/'calibration.json', self.specs)
+        from .map_projection_archive import archive_map_projection
+        self.map_projection = archive_map_projection(self.run,getattr(self,'road_map',None))
         self.scenario_reference = None
         if getattr(self, 'scenario', None) is not None:
             from .scenario_archive import archive_scenario
@@ -228,10 +242,12 @@ class SensorCapture:
                       if self.source == 'model-input' else 'standalone sensor rig')),
             scenario=getattr(self,'scenario_reference',None),
             map=self.map_name, family=self.source, status=status, started_at=self.started,
+            map_projection=getattr(self,'map_projection',None),
             completed_at=time.strftime('%Y-%m-%dT%H:%M:%S'), frame_count=self.count, skipped_frames=self.skipped,
             bytes=self.bytes, replay=True, model=os.environ.get('CSA_ALGORITHM_LABEL') if self.source == 'model-input' else None,
             sensors={name: {'samples': self.count, 'format': 'png/npy/npz', 'path': 'samples'} for name in self.specs},
             files={'calibration': 'calibration.json', 'index': 'index.json',
+                   **({'map_projection':self.map_projection['path']} if getattr(self,'map_projection',{}).get('state')=='available' else {}),
                    **({'scenario':self.scenario_reference['path']} if getattr(self,'scenario_reference',None) else {}),
                    **({'collisions':'collisions.json'} if hasattr(self,'collisions') else {})}, error=self.error,
             input_archive='model_input.npz' if self.source == 'model-input' else 'sensor_input.npz',
@@ -239,6 +255,7 @@ class SensorCapture:
             execution_id=self.execution_id,
             cleanup_errors=getattr(self,'cleanup_errors',[]),
             stop_reason=getattr(self,'stop_reason',None),
+            capture_quota_policy=getattr(self,'quota_policy',None),
             notes=[('model_input.npz contains exact pre-model arrays; RGB PNG is lossless RGB conversion'
                     if self.source == 'model-input' else
                     'sensor_input.npz contains raw rig RGB BGRA arrays; no model was invoked'),
@@ -254,6 +271,26 @@ class SensorCapture:
         return self.process({}, None, control, frame_id=frame)
 
     def process(self, input_data, agent, control, frame_id=None, *, planning=None):
+        try:
+            with capture_write_lock(self.live):
+                result = self._process(input_data, agent, control, frame_id=frame_id, planning=planning)
+                # Sweep old sessions periodically; normal six-frame rollover
+                # below still bounds this session without a full scan per tick.
+                if time.monotonic() >= getattr(self, '_next_preview_sweep', 0) and (self.live/'latest.json').exists():
+                    self._next_preview_sweep = time.monotonic() + 60
+                    try:
+                        from .live_preview_cache import prune_previews
+                        self.preview_cleanup = prune_previews(self.live)
+                        self.preview_cleanup_error = None
+                    except (OSError, ValueError) as exc:
+                        self.preview_cleanup_error = str(exc)
+                return result
+        except OSError as exc:
+            self.error = str(exc)
+            self.stop_reason = 'capture_io_error'
+            raise  # Owners retain their existing stop/cleanup policy.
+
+    def _process(self, input_data, agent, control, frame_id=None, *, planning=None):
         if self.closed:
             return
         req = self.request()
@@ -263,7 +300,8 @@ class SensorCapture:
         if req.get('recording') and req.get('id') != self.last_request:
             self.begin(req)
         self.sequence += 1
-        camera_frames = [int(input_data[n][0]) for n in CAMERAS if n in input_data]
+        camera_frames = [int(sample[0]) for name, sample in input_data.items()
+                         if self.specs.get(name, {}).get('type') == 'sensor.camera.rgb']
         if frame_id is not None:
             if self.source != 'sensor-rig' or input_data:
                 raise ValueError('Explicit frame is only valid for standalone sensor rig')
@@ -279,6 +317,10 @@ class SensorCapture:
         arrays = {n: np.asarray(v[1]).copy() for n, v in input_data.items() if not isinstance(v[1], dict)}
         arrays = {n: a for n, a in arrays.items() if a.dtype != object}
         rgb = {n: (arrays[n] if n in arrays else aux.get(n)) for n in CAMERAS}
+        # Keep declared model RGB previews separate from auxiliary six-view
+        # cameras, preserving exact names and lossless BGRA->RGB conversion.
+        rgb.update({name: arrays[name] for name in input_data
+                    if name in arrays and self.specs.get(name, {}).get('type') == 'sensor.camera.rgb'})
         if self.source == 'sensor-rig':
             arrays = {n: value for n, value in rgb.items() if value is not None}
         outputs = getattr(agent, 'pid_metadata', {})
@@ -329,6 +371,7 @@ class SensorCapture:
         metadata['run_id'] = self.run_id if self.run else None
         metadata['recorded_frames'] = self.count
         metadata['error'] = self.error
+        metadata['preview_cleanup_error'] = getattr(self, 'preview_cleanup_error', None)
         metadata['updated_at'] = time.time()
         metadata['generation'] = str(generation.relative_to(self.live))
         atomic_json(self.live/'latest.json', metadata)
@@ -347,16 +390,43 @@ class SensorCapture:
         if self.count >= int(req.get('max_frames', 2000)) or self.bytes+reserve > 20*1024**3 or shutil.disk_usage(self.run).free-reserve < 1024**3:
             self.stop_reason = ('frame_limit' if self.count >= int(req.get('max_frames',2000)) else
                                 'storage_limit' if self.bytes+reserve > 20*1024**3 else 'disk_reserve')
-            self.error = 'Recording stopped at frame/storage limit; existing samples preserved'
+            self.error = {
+                'frame_limit':'Recording stopped at configured frame limit; existing samples preserved',
+                'storage_limit':'Recording stopped at 20 GiB recording limit; existing samples preserved',
+                'disk_reserve':'Recording stopped to preserve 1 GiB free disk reserve before the next sample; existing samples preserved',
+            }[self.stop_reason]
             self.manifest('saved_limit')
             self.run = None
             return
+        metadata['input_scalars'] = safe({n: v[1] for n, v in input_data.items() if isinstance(v[1], dict)})
+        with capture_write_lock(self.run.parent):
+            self._write_sample(frame,metadata,arrays,rgb,aux,reserve)
+
+    def _write_sample(self,frame,metadata,arrays,rgb,aux,reserve):
+        # Caller holds the root admission lock until sample and index commit.
         folder = self.run/'samples'/f'{frame:010d}'
+        policy = self.quota_policy
+        quota = (check_capture_quota(self.run.parent, reserve, limit_bytes=policy['limit_bytes'])
+                 if policy['valid'] else ('quota_unknown', 'Invalid capture quota configuration; recording stopped'))
+        if quota is not None:
+            self.stop_reason, self.error = quota
+            self.manifest('saved_limit')
+            self.run = None
+            return
+        # The earlier observation predates lock acquisition and quota scanning.
+        # Recheck immediately before allocating a sample; external writers can
+        # still race this advisory admission, so ENOSPC handling remains needed.
+        if shutil.disk_usage(self.run).free - reserve < 1024**3:
+            self.stop_reason = 'disk_reserve'
+            self.error = ('Recording stopped to preserve 1 GiB free disk reserve '
+                          'before the next sample; existing samples preserved')
+            self.manifest('saved_limit')
+            self.run = None
+            return
         folder.mkdir(parents=True, exist_ok=False)
         archive = 'model_input.npz' if self.source == 'model-input' else 'sensor_input.npz'
         metadata['input_archive'] = archive
         np.savez(folder/archive, **arrays)
-        metadata['input_scalars'] = safe({n: v[1] for n, v in input_data.items() if isinstance(v[1], dict)})
         for name, data in rgb.items():
             Image.fromarray(data[:, :, :3][:, :, ::-1]).save(folder/(name+'.png'))
         for name, data in aux.items():
@@ -400,7 +470,8 @@ class SensorCapture:
         self.sensors=remaining
         self.cleanup_errors=errors
         try:
-            self.manifest('saved_cleanup_error' if errors else 'saved')
+            self.manifest('saved_cleanup_error' if errors else
+                          'saved_capture_error' if getattr(self, 'error', None) else 'saved')
         except OSError as exc:
             print(f'Unable to finalize capture manifest; committed samples retained: {exc}', flush=True)
             errors.append(f'Manifest finalization: {exc}')
@@ -418,6 +489,7 @@ def capture_agent(base):
     class CapturedAgent(base):
         _capture = None
         _capture_failed = False
+        _planning_observation = None
 
         def run_step(self, input_data, timestamp):
             if os.environ.get('CSA_SENSOR_CAPTURE') == '1' and not self._capture_failed:
@@ -435,10 +507,31 @@ def capture_agent(base):
                         pass  # Reporting a full disk must not abort model inference.
                     print(f'Sensor capture unavailable: {exc}', flush=True)
             exact_input = {k: (v[0], v[1].copy() if hasattr(v[1], 'copy') else v[1]) for k, v in input_data.items()} if self._capture else None
-            control = super().run_step(input_data, timestamp)
+            context = None
             if self._capture:
                 try:
-                    self._capture.process(exact_input, self, control)
+                    from .planning_observation import PlanningObservation
+                    snapshot = self._capture.world.get_snapshot()
+                    # Only associate predictions with the frame actually supplied
+                    # to the model. Do not infer a fresh origin for stale input.
+                    frames = {sample[0] for sample in input_data.values()}
+                    if frames != {snapshot.frame}:
+                        raise ValueError('Model inputs do not match planning snapshot')
+                    context = dict(frame=snapshot.frame,
+                                   timestamp=snapshot.timestamp.elapsed_seconds,
+                                   ego_matrix=self._capture.ego.get_transform().get_matrix())
+                    if self._planning_observation is None:
+                        self._planning_observation = PlanningObservation(self)
+                except Exception as exc:
+                    print(f'Planning origin unavailable: {exc}', flush=True)
+                    context = None
+            runner = super().run_step
+            control = (self._planning_observation.run_step(input_data, timestamp,
+                       **context, runner=runner) if context else runner(input_data, timestamp))
+            if self._capture:
+                try:
+                    self._capture.process(exact_input, self, control,
+                        planning=self._planning_observation.snapshot() if context else None)
                 except Exception as exc:
                     self._capture.error = str(exc)
                     self._capture.close()

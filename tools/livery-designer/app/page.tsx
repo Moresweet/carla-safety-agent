@@ -17,6 +17,7 @@ import Surface3DPreview from "./Surface3DPreview";
 import ProjectPanel from "./ProjectPanel";
 import MaterialSlotEditor from "./MaterialSlotEditor";
 import {textureRoute} from './textureTarget';
+import {readWithRetry} from './readWithRetry';
 
 type Studio="vehicle"|"pedestrian"|"buildings"|"bridges"|"walls"|"fences"|"roads"|"road_lines"|"sidewalks"|"ground"|"terrain"|"vegetation"|"water"|"poles"|"guard_rails"|"traffic_signs"|"traffic_lights"|"parked_cars"|"dynamic_props"|"static_props"|"spawned_props";
 type Page="edit"|"create"|"blender"|"generate"|"data"|"e2e";
@@ -27,9 +28,22 @@ type VehicleMeshCatalog=Record<string,{url:string;slot:number;slotName:string;ba
 
 export default function Home(){
  const output=useRef<HTMLCanvasElement>(null);
+ const [sceneError,setSceneError]=useState('');
  const [page,setPage]=useState<Page>("edit"),[studio,setStudio]=useState<Studio>("vehicle"),[image,setImage]=useState<HTMLImageElement|null>(null),[base,setBase]=useState<HTMLImageElement|null>(null),[meshes,setMeshes]=useState<Record<string,MeshData>>({}),[meshCatalog,setMeshCatalog]=useState<VehicleMeshCatalog>({}),[fileName,setFileName]=useState("No image selected"),[revision,setRevision]=useState(0),[applyState,setApplyState]=useState("Bridge ready"),[applying,setApplying]=useState(false),[scene,setScene]=useState<SceneState|null>(null),[selected,setSelected]=useState(""),[refresh,setRefresh]=useState(0),[catalogTarget,setCatalogTarget]=useState<CatalogItem|null>(null);
  useEffect(()=>{const n=new Image();n.onload=()=>setBase(n);n.src="/tesla-model3-bodywork.png";Promise.all([fetch("/tesla-model3-uv0.json").then(r=>r.json() as Promise<MeshData>),fetch("/european-hgv-uv0.json").then(r=>r.json() as Promise<MeshData>),fetch("/vehicle-mesh-catalog.json").then(r=>r.json() as Promise<VehicleMeshCatalog>),fetch('/pedestrian-mesh-catalog.json').then(r=>r.json() as Promise<VehicleMeshCatalog>)]).then(([tesla,hgv,catalog,pedestrians])=>{setMeshes({"vehicle.tesla.model3":tesla,"vehicle.carlamotors.european_hgv":hgv});setMeshCatalog({...catalog,...pedestrians})}).catch(e=>setApplyState(`预览目录不可用：${String(e)}`))},[]);
- useEffect(()=>{if(page==="e2e")return;let live=true;const poll=()=>fetch(`${bridge}/scene/state`).then(r=>r.json() as Promise<SceneState>).then(v=>{if(live)setScene(v)}).catch(()=>{});poll();const timer=setInterval(poll,700);return()=>{live=false;clearInterval(timer)}},[page,refresh]);
+ useEffect(()=>{
+  if(page==='e2e')return;
+  const controller=new AbortController();let timer:ReturnType<typeof setTimeout>;
+  const poll=async()=>{
+   try{
+    const value=await readWithRetry<SceneState>(bridge+'/scene/state',{signal:controller.signal,attempts:1,timeoutMs:2500});
+    if(typeof value.map!=='string'||!Array.isArray(value.objects)||!Array.isArray(value.static_targets))throw Error('场景响应不完整');
+    if(!controller.signal.aborted){setScene(value);setSceneError('')}
+   }catch(error){if(!controller.signal.aborted)setSceneError('场景连接暂不可用，保留上次视图：'+String(error))}
+   finally{if(!controller.signal.aborted)timer=setTimeout(poll,700)}
+  };
+  void poll();return()=>{controller.abort();clearTimeout(timer)};
+ },[page,refresh]);
  const rendered=useCallback(()=>setRevision(v=>v+1),[]);
  const objects=useMemo(()=>{if(!scene)return[];const all=[...scene.static_targets,...scene.objects];if(studio==="vehicle")return all.filter(o=>o.kind==="vehicle");if(studio==="pedestrian")return all.filter(o=>o.kind==="walker");if(roadStudios.has(studio))return all.filter(o=>o.kind==="road");return all.filter(o=>o.kind==="building"||o.kind==="prop")},[scene,studio]);
  // Keep the controlled target aligned with the asynchronously refreshed CARLA catalog.
@@ -52,6 +66,7 @@ async function apply(){if(!output.current)return;setApplying(true);setApplyState
  if(page==="edit"&&catalogTarget?.source==="environment")return <main><button onClick={()=>setCatalogTarget(null)}>← 返回场景工作台</button><MaterialSlotEditor key={catalogTarget.key} objectId={catalogTarget.id} name={catalogTarget.name}/><ObjectManager onChanged={()=>setRefresh(v=>v+1)} onTextureTarget={editCatalogTexture}/></main>;
  return <main>
   <ProjectPanel/>
+  {sceneError&&<p role="status" aria-label="场景连接状态">{sceneError}</p>}
   <header><div><span className="eyebrow">CARLA SAFETY AGENT</span><h1>Scene Control Studio</h1></div><nav className="page-nav"><button className={page==="edit"?"active":""} onClick={()=>setPage("edit")}>Edit World</button><button className={page==="create"?"active":""} onClick={()=>setPage("create")}>Create Objects</button><button className={page==="blender"?"active":""} onClick={()=>setPage("blender")}>Asset Workshop</button><button className={page==="generate"?"active":""} onClick={()=>setPage("generate")}>Generate Scene</button><button className={page==="data"?"active":""} onClick={()=>setPage("data")}>Collect Data</button><button className={page==="e2e"?"active":""} onClick={()=>setPage("e2e")}>End-to-End Test</button></nav><div className="status"><i/>{scene?`${scene.runtime_mode==="docker"?"DOCKER":"NATIVE"} · ${scene.map.split("/").pop()} · ${scene.objects.length} dynamic objects`:"Connecting to CARLA…"}</div></header>
   {page==="e2e"?<EndToEndPage/>:page==="data"?<DataCollectionPage/>:page==="blender"?<BlenderAssetPage/>:page==="generate"?<ScenarioGeneratorPage onEvaluationStarted={()=>setPage("e2e")}/>:page==="create"?<CreateObjectPage scene={scene} onChanged={()=>setRefresh(v=>v+1)} onPick={focus}/>:<><div className="viewtabs">{(Object.keys(labels) as Studio[]).map(v=><button key={v} className={studio===v?"active":""} onClick={()=>changeStudio(v)}>{labels[v]}</button>)}</div><section className="workspace">
    <aside className="controls"><div className="section"><label htmlFor="target">Texture target</label>{catalogTarget?<div className="note"><strong>{catalogTarget.name}</strong><p>{catalogTarget.category.replaceAll("_"," ")} · selected from World Objects</p></div>:<><select id="target" value={selected} onChange={e=>{const o=objects.find(v=>v.key===e.target.value);if(o)focus(o)}}>{objects.length?objects.map(o=><option value={o.key} key={o.key}>{o.label}</option>):<option value="">No matching objects</option>}</select><button disabled={!target} onClick={()=>target&&focus(target)}>Focus & highlight</button></>}</div><div className="section"><button className={scene?.hero_lock?"primary":""} onClick={toggleHero}>{scene?.hero_lock?"Release hero camera":"Lock hero camera"}</button><small>Follow the only role_name=hero vehicle.</small></div><div className="section"><label className="upload">Upload image<input type="file" accept="image/png,image/jpeg,image/webp" onChange={upload}/></label><small>{fileName}</small></div><div className="note"><strong>Category highlights</strong><p>Vehicles blue · pedestrians yellow · buildings purple · roads red · props green.</p></div></aside>

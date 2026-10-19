@@ -29,6 +29,7 @@ class NativeSensorRig:
         self.client = client
         self.sensors: list[Any] = OwnedActors(journal)
         self.has_speedometer = False
+        self.speedometer_tags = []
 
     def setup(self, specs: list[dict[str, Any]]) -> None:
         import numpy as np
@@ -38,8 +39,15 @@ class NativeSensorRig:
             if sensor_type == "sensor.speedometer":
                 self.interface.register_sensor(tag, sensor_type, self.ego)
                 self.has_speedometer = True
+                self.speedometer_tags.append(tag)
                 continue
             blueprint = self.world.get_blueprint_library().find(sensor_type)
+            # Explicit model contracts must fail closed, not silently fall back
+            # to CARLA defaults when a required attribute is unsupported.
+            for name, value in spec.get('blueprint_attributes', {}).items():
+                if not blueprint.has_attribute(name):
+                    raise ValueError(f'{tag}: required blueprint attribute unavailable: {name}')
+                blueprint.set_attribute(name, str(value))
             for source, target in (("width", "image_size_x"), ("height", "image_size_y"),
                                    ("fov", "fov"), ("sensor_tick", "sensor_tick")):
                 if source in spec and blueprint.has_attribute(target):
@@ -58,6 +66,8 @@ class NativeSensorRig:
                 if type_id.startswith("sensor.camera"):
                     value = np.frombuffer(data.raw_data, dtype=np.uint8).copy().reshape(
                         (data.height, data.width, 4))
+                elif type_id == 'sensor.lidar.ray_cast':
+                    value = np.frombuffer(data.raw_data, dtype=np.float32).copy().reshape(-1, 4)
                 elif type_id == "sensor.other.gnss":
                     value = np.array([data.latitude, data.longitude, data.altitude], dtype=np.float64)
                 elif type_id == "sensor.other.imu":
@@ -78,7 +88,8 @@ class NativeSensorRig:
         forward = transform.get_forward_vector()
         speed = velocity.x*forward.x + velocity.y*forward.y + velocity.z*forward.z
         import numpy as np
-        self.interface.update_sensor("SPEED", {"speed": np.float64(speed)}, frame)
+        for tag in self.speedometer_tags:
+            self.interface.update_sensor(tag, {"speed": np.float64(speed)}, frame)
 
     def warmup(self, count: int = 10) -> None:
         for _ in range(count):
@@ -186,8 +197,13 @@ class NativeScenarioExecutor:
                 CarlaDataProvider.set_client(client)
                 CarlaDataProvider.set_world(world)
             agent = agent_class(self.host, self.port, False)
+            if callable(getattr(agent, 'set_native_ego', None)):
+                agent.set_native_ego(ego)
             gps_plan, world_plan = self._global_plan(world, ego)
-            agent.set_global_plan(gps_plan, world_plan)
+            if callable(getattr(agent, 'set_native_global_plan', None)):
+                agent.set_native_global_plan(world, gps_plan, world_plan)
+            else:
+                agent.set_global_plan(gps_plan, world_plan)
             agent.setup(agent_config)
             stage('warming_sensors')
             from .sensor_schedule import synchronous_specs
@@ -211,6 +227,8 @@ class NativeScenarioExecutor:
                 frame = world.tick(self.timeout)
                 rig.add_speed(frame)
                 sensor_data = agent.sensor_interface.get_data(frame)
+                from .model_frame_context import deliver_frame_context
+                deliver_frame_context(agent, world, frame, sensor_data)
                 elapsed = (step + 1) * settings.fixed_delta_seconds
                 exact_input = {k: (v[0], v[1].copy() if hasattr(v[1], 'copy') else v[1]) for k, v in sensor_data.items()} if capture else None
                 control = (planning_observation.run_step(sensor_data,elapsed,frame=frame,

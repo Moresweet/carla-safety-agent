@@ -13,13 +13,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--stop',action='store_true')
     parser.add_argument('--protect-delete',action='store_true')
+    parser.add_argument('--no-capture', action='store_true', help='Validate execution only without recording datasets')
     args = parser.parse_args()
+    if args.no_capture and args.protect_delete:
+        parser.error('--protect-delete requires capture evidence')
     if args.protect_delete and not args.stop:
         parser.error('--protect-delete requires --stop')
     assert request('system/preflight')['ready']
     plan = request('scenario/compile', {'description':'Town04 前车急刹，自车5 m/s','max_duration_s':20 if args.stop else 1})
     options = {'action':'rule-run','route':plan['scenario_path'],
-               'scenario_sha256':plan['scenario_sha256'],'unified_capture':True}
+               'scenario_sha256':plan['scenario_sha256'],'unified_capture':not args.no_capture}
     response = request('e2e/start', options)
     assert response['job']['algorithm'] is None
     execution = request('session/status')['session']['run_id']
@@ -31,11 +34,25 @@ def main():
         raise AssertionError('Duplicate task accepted')
     deadline = time.monotonic()+180
     stop_sent = False
+    observed_frames = []
+    if args.no_capture and args.stop:
+        import carla
+        observer = carla.Client('127.0.0.1', 2000)
+        observer.set_timeout(10)
     while time.monotonic() < deadline:
         session = request('session/status')['session']
         assert session['run_id'] == execution
         if session['state'] not in ('preparing','running','stopping','recovering'):
             break
+        if args.stop and args.no_capture and not stop_sent:
+            world = observer.get_world()
+            if world.get_settings().synchronous_mode:
+                observed_frames.append(world.get_snapshot().frame)
+                if observed_frames[-1] - observed_frames[0] >= 5:
+                    request('scenario/stop', {'run_id': execution})
+                    stop_sent = True
+            time.sleep(.05)
+            continue
         if args.stop and not stop_sent:
             for path in (ROOT/'.runtime/generated-scenarios').glob('capture-*/manifest.json'):
                 manifest = json.loads(path.read_text())
@@ -79,6 +96,9 @@ def main():
     assert result['scenario'] == plan['scenario']
     if args.stop:
         assert stop_sent and result['status'] == 'stopped' and result['elapsed_s'] < 20
+        assert session['outcome']['result_assessed'] is False
+        assert session['outcome']['benchmark_failed'] is False
+    if args.stop and not args.no_capture:
         records = [json.loads(path.read_text()) for path in Path(result['editor_commands']).glob('*.json')]
         catalogs = [item for item in records if (item.get('command') or {}).get('action') == 'catalog_environment']
         assert catalogs and any(item['response']['ok'] for item in catalogs)
@@ -92,14 +112,17 @@ def main():
         manifest = json.loads(path.read_text())
         if manifest.get('execution_id') == execution:
             datasets.append(path.parent)
-    assert len(datasets) == 1, datasets
-    subprocess.run([sys.executable,str(ROOT/'tools/validate_capture_dataset.py'),str(datasets[0])],check=True)
+    assert len(datasets) == (0 if args.no_capture else 1), datasets
+    if not args.no_capture:
+        subprocess.run([sys.executable,str(ROOT/'tools/validate_capture_dataset.py'),str(datasets[0])],check=True)
     import carla
     client = carla.Client('127.0.0.1',2000); client.set_timeout(10)
     world = client.get_world()
     assert not world.get_settings().synchronous_mode
     assert not list(world.get_actors().filter('sensor.*'))
-    report = {'execution_id':execution,'dataset':str(datasets[0]),'duplicate_rejected':True,
+    report = {'execution_id':execution,'dataset':str(datasets[0]) if datasets else None,
+              'observed_world_frames': observed_frames, 'outcome':session.get('outcome'),
+              'capture_verified':not args.no_capture,'duplicate_rejected':True,
               'scenario_sha256':plan['scenario_sha256'],'state':session['state']}
     destination = ROOT/'runs/validation'/f'rule-session-{execution}.json'
     destination.parent.mkdir(parents=True,exist_ok=True)

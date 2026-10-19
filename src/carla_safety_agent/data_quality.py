@@ -2,6 +2,21 @@
 import math
 
 
+def validate_ego_pose(value):
+    """Return a rigid CARLA body-to-world transform; never repair saved data."""
+    import numpy as np
+    try:
+        matrix = np.asarray(value, dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError('Recorded trajectory requires rigid ego poses') from exc
+    if (matrix.shape != (4, 4) or not np.isfinite(matrix).all()
+            or not np.allclose(matrix[3], [0, 0, 0, 1], rtol=0, atol=1e-6)
+            or not np.allclose(matrix[:3, :3].T @ matrix[:3, :3], np.eye(3), rtol=0, atol=1e-5)
+            or not np.isclose(np.linalg.det(matrix[:3, :3]), 1, rtol=0, atol=1e-5)):
+        raise ValueError('Recorded trajectory requires rigid ego poses')
+    return matrix
+
+
 def validate_capture_frame(metadata, entry, required_sensors):
     """Verify source frame IDs instead of trusting the synchronized summary flag."""
     frame=entry['frame']

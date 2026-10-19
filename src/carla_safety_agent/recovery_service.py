@@ -7,6 +7,7 @@ import threading
 
 from .capture_recovery import recover_capture,require_inactive_execution
 from .scene_store import atomic
+from .capture_quota import publish_capture
 
 
 class RecoveryService:
@@ -26,6 +27,21 @@ class RecoveryService:
             if row.get('request_id')!=request_id:raise ValueError('Recovery report identity mismatch')
             if row['state']=='running' and self.active!=request_id:
                 row={**row,'state':'needs_attention','error':'Recovery worker interrupted; inspect retained copies. No automatic retry.'}
+            candidate=row.get('candidate_run_id')
+            if candidate is not None:
+                if not isinstance(candidate,str) or not re.fullmatch('recovered-[a-f0-9]{32}',candidate):
+                    raise ValueError('Invalid recovery candidate identity')
+                staged=self.reports/'copies'/request_id/candidate
+                destination=self.datasets/candidate
+                def present(path,root):
+                    if root.is_symlink() or any(part.is_symlink() for part in (path,*path.parents) if part==root or root in part.parents):
+                        raise ValueError('Linked recovery inspection path')
+                    return path.is_dir()
+                row={**row,'candidate_presence':{
+                    'staged':present(staged,self.reports),
+                    'published':present(destination,self.datasets),
+                    'raw_data_verified':False,
+                    'note':'Directory presence only; not a new audit or recovery approval'}}
             return row
 
     def start(self,data):
@@ -45,7 +61,7 @@ class RecoveryService:
                 raise ValueError('Invalid source manifest path or size')
             payload=(source/'manifest.json').read_bytes();manifest=json.loads(payload)
             if manifest.get('run_id')!=run_id:raise ValueError('Source capture identity mismatch')
-            if manifest.get('status') not in ('recording','saved_cleanup_error'):raise ValueError('Source is not interrupted')
+            if manifest.get('status') not in ('recording','saved_cleanup_error','saved_capture_error'):raise ValueError('Source is not interrupted or failed')
             require_inactive_execution(self.data_root,manifest['execution_id'])
             self.reports.mkdir(parents=True,exist_ok=True)
             row={'request_id':request_id,'source_run_id':run_id,'state':'running',
@@ -62,13 +78,19 @@ class RecoveryService:
             def inactive():require_inactive_execution(self.data_root,execution_id)
             if hashlib.sha256((source/'manifest.json').read_bytes()).hexdigest()!=row['source_manifest_sha256']:
                 raise ValueError('Source changed after confirmation')
-            staging=self.reports/'copies';staging.mkdir(exist_ok=True)
+            # Durable ownership before copying, so interrupted work is locatable.
+            staging=self.reports/'copies'/request_id
+            row={**row,'phase':'copying','staging_directory':str(staging)}
+            atomic(self._path(request_id),row)
+            staging.mkdir(parents=True,exist_ok=False)
             output=recover_capture(source,staging,self.validator,self.python,inactive)
             inactive()
             destination=self.datasets/output.name
             if destination.exists():raise ValueError('Recovery destination exists; refusing overwrite')
-            output.rename(destination)
-            row={**row,'state':'recovered','recovered_run_id':destination.name,
+            row={**row,'phase':'publishing','candidate_run_id':output.name}
+            atomic(self._path(request_id),row)
+            publish_capture(output,self.datasets)
+            row={**row,'state':'recovered','phase':'published','recovered_run_id':destination.name,
                  'note':'Recovered subset, not a successful full recording; original preserved'}
         except Exception as exc:row={**row,'state':'failed','error':str(exc)}
         finally:

@@ -37,7 +37,9 @@ def main():
             assert re.fullmatch('[a-zA-Z0-9]{1,64}',args.job_id)
             generation=next(a for a in request('/blender/generations')['attempts'] if a['job_id']==args.job_id)
             assert generation['state']=='exported'
-            asset={'job_id':args.job_id}
+            asset=request('/blender/exported?job_id='+args.job_id)
+            assert asset['job_id']==args.job_id and asset['reopened'] is True
+            report['reopened_export']=True
             report['generation']=generation
         else:
             asset=request('/blender/create',{'name':name,'shape':'cube','dimensions':[2,.4,.8],
@@ -49,6 +51,9 @@ def main():
         assert result['import_returncode']==0 and result['blueprint_id']=='generated.prop.'+name.lower()
         attempts=request('/blender/imports')['attempts']
         assert next(a for a in attempts if a['attempt_id']==result['import_attempt_id'])['state']=='registered'
+        registration=next(a for a in attempts if a['attempt_id']==result['import_attempt_id'])['registration_observation']
+        assert registration['state']=='matching' and registration['native_verified'] is False
+        report['registration_observation']=registration
         if args.require_inherited_lock:
             assert next(a for a in attempts if a['attempt_id']==result['import_attempt_id'])['import_lock_inherited_by_child'] is True
             report['inherited_lock_launch_verified']=True

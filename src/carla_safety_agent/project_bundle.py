@@ -219,7 +219,7 @@ def _write_bundle(files, output, *, generated_assets=None, runtime_reference=Non
     return manifest
 
 
-def read_bundle(path):
+def _read_bundle_payloads(path):
     with zipfile.ZipFile(path) as archive:
         entries = archive.infolist()
         names = [entry.filename for entry in entries]
@@ -238,8 +238,47 @@ def read_bundle(path):
             if expected != {'size': len(payload), 'sha256': hashlib.sha256(payload).hexdigest()}:
                 raise ValueError('Bundle checksum mismatch')
             files[name] = payload
+    return manifest, files
+
+
+def read_bundle(path):
+    manifest, files = _read_bundle_payloads(path)
     if manifest['dependencies'] != _validate(files): raise ValueError('Dependency manifest mismatch')
     return manifest, files
+
+
+def inspect_legacy_asset_flags(source):
+    """Read-only diagnosis of the exact supported historical metadata mismatch."""
+    source = Path(source)
+    if source.is_symlink() or not source.is_file():
+        raise ValueError('Source must be a regular archive')
+    manifest, files = _read_bundle_payloads(source)
+    current = _validate(files)  # Includes nested asset integrity validation.
+    legacy = dict(current)
+    if not current.get('generated_asset_sources'):
+        raise ValueError('Not a legacy generated-asset bundle')
+    legacy['external_assets_included'] = False
+    legacy.pop('unreal_asset_binaries_included', None)
+    if manifest.get('dependencies') != legacy:
+        raise ValueError('Not the exact supported legacy asset flags')
+    return manifest, files, current
+
+
+def migrate_legacy_asset_flags(source, output):
+    """Explicit copy migration for the exact historical asset flag mismatch."""
+    source, output = Path(source), Path(output)
+    if output.exists() or output.is_symlink():
+        raise ValueError('Migration destination already exists')
+    manifest, files, current = inspect_legacy_asset_flags(source)
+    corrected = {**manifest, 'dependencies':current}
+    with output.open('xb') as stream, zipfile.ZipFile(stream, 'w', zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr('manifest.json', canonical(corrected))
+        for name, payload in sorted(files.items()):
+            archive.writestr(name, payload)
+    read_bundle(output)
+    return {'source':str(source.absolute()), 'output':str(output.absolute()),
+            'migration':'legacy-generated-asset-flags/1', 'payloads_unchanged':True,
+            'dependencies_before':manifest['dependencies'], 'dependencies_after':current}
 
 
 def import_bundle(path, destination_parent):

@@ -4,10 +4,28 @@ import AssetImportHistory from './AssetImportHistory';
 import NaturalAssetPlan from './NaturalAssetPlan';
 const bridge="http://127.0.0.1:8765";
 type Result={error?:string;job_id?:string;name?:string;operation?:string;objects?:number;vertices?:number;materials?:number;outputs?:Record<string,string|null>;blueprint_id?:string;mesh_path?:string};
-export default function BlenderAssetPage(){return <><AssetWorkshopBody/><AssetImportHistory generation/><AssetImportHistory/></>}
-function AssetWorkshopBody(){
+export default function BlenderAssetPage(){
+ const [selected,setSelected]=useState<{job:string;sequence:number}|null>(null);
+ const [busy,setBusy]=useState(false);
+ return <><AssetWorkshopBody selected={selected} onBusy={setBusy}/><AssetImportHistory generation disabled={busy} onReopen={job=>setSelected(v=>({job,sequence:(v?.sequence??0)+1}))}/><AssetImportHistory/></>
+}
+function AssetWorkshopBody({selected,onBusy}:{selected:{job:string;sequence:number}|null;onBusy:(value:boolean)=>void}){
  const active=useRef(false);
  const [available,setAvailable]=useState(false),[version,setVersion]=useState("Checking Blender…"),[name,setName]=useState("SafetyBarrier"),[shape,setShape]=useState("cube"),[dimensions,setDimensions]=useState([2,0.4,0.8]),[color,setColor]=useState("#278fcc"),[roughness,setRoughness]=useState(.45),[texture,setTexture]=useState(""),[source,setSource]=useState(""),[busy,setBusy]=useState(false),[result,setResult]=useState<Result|null>(null),[status,setStatus]=useState("Create a new mesh or retexture an existing asset.");
+ useEffect(()=>{onBusy(busy)},[busy,onBusy]);
+ useEffect(()=>{
+  if(!selected||active.current)return;
+  const controller=new AbortController();let disposed=false;
+  active.current=true;setBusy(true);setResult(null);setStatus('正在读取已导出资产，不启动 Blender 或 Unreal…');
+  const timer=setTimeout(()=>controller.abort(),15000);
+  void (async()=>{try{
+   const response=await fetch(`${bridge}/blender/exported?job_id=${encodeURIComponent(selected.job)}`,{signal:controller.signal});
+   const data=await response.json() as Result & {ok?:boolean;reopened?:boolean};
+   if(!response.ok||data.ok!==true||data.reopened!==true||data.job_id!==selected.job)throw Error(data.error??'导出结果身份不符');
+   if(!disposed){setResult(data);if(data.name)setName(data.name);setStatus('已重新打开导出结果。导入仍需点击第 2 步；表单参数不会修改此历史产物。')}
+  }catch(error){if(!disposed)setStatus(String(error))}finally{clearTimeout(timer);if(!disposed){active.current=false;setBusy(false)}}})();
+  return()=>{disposed=true;controller.abort();clearTimeout(timer);active.current=false};
+ },[selected]);
  useEffect(()=>{fetch(`${bridge}/blender/status`).then(r=>r.json() as Promise<{available:boolean;version:string;error?:string}>).then(v=>{setAvailable(Boolean(v.available));setVersion(v.available?v.version:v.error??"Blender unavailable")}).catch(()=>setVersion("Bridge unavailable"))},[]);
  function upload(event:ChangeEvent<HTMLInputElement>){const file=event.target.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>setTexture(String(reader.result));reader.readAsDataURL(file)}
  function hex(){return [parseInt(color.slice(1,3),16)/255,parseInt(color.slice(3,5),16)/255,parseInt(color.slice(5,7),16)/255,1]}

@@ -8,15 +8,393 @@ import pytest
 
 
 def functions(*names, **environment):
+    if 'actor_material_history_action' in names or 'recover_actor_material_history' in names:
+        names=(*names,'actor_material_history_callbacks')
+    if 'delete_actor' in names:
+        names = (*names, 'confirm_actor_deletion')
     if 'restore_scene' in names:
         names = (*names, 'restore_scene_document')
     source = Path(__file__).resolve().parents[1] / 'tools/livery_bridge.py'
     tree = ast.parse(source.read_text())
     selected = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
     environment.setdefault('simulation_operation', lambda function: function)
+    environment.setdefault('journal_duplicate', lambda function: function)
+    environment.setdefault('MATERIAL_HISTORY', SimpleNamespace(execute=lambda identity,before,after,apply: (apply(),'test-operation')[1]))
     environment.setdefault('HANDOFF',SimpleNamespace(require_idle=lambda:None))
+    environment.setdefault('require_simulator_connection', lambda host, port: None)
+    environment.setdefault('HOST', '127.0.0.1')
+    environment.setdefault('CARLA_PORT', 2000)
+    environment.setdefault('backup_managed_deletion', lambda *_:None)
+    environment.setdefault('copy_duplicate_materials', lambda *_:None)
+    environment.setdefault('preflight_duplicate_materials', lambda *_:None)
     exec(compile(ast.Module(body=selected, type_ignores=[]), str(source), 'exec'), environment)
     return environment
+
+
+def test_actor_recovery_requires_confirmation_and_idle_world(monkeypatch):
+    calls=[]
+    monkeypatch.setattr('carla_safety_agent.world_readiness.require_idle_native_world',lambda world:(_ for _ in ()).throw(ValueError('Native world busy')))
+    env=functions('recover_actor_material_history',evaluation_active=lambda:False,connect_world=lambda:object(),
+        ACTOR_MATERIAL_HISTORY=SimpleNamespace(recover=lambda *args:calls.append(args)))
+    payload=dict(operation_id='op',inspection_token='a'*64,choice='source',registered_texture=None,confirmed=True)
+    with pytest.raises(ValueError,match='Explicit'):env['recover_actor_material_history']({**payload,'confirmed':False})
+    with pytest.raises(ValueError,match='Native world busy'):env['recover_actor_material_history'](payload)
+    assert calls==[]
+
+
+@pytest.mark.parametrize('inspection',[False,True])
+@pytest.mark.parametrize('changed',['none','episode','missing','blueprint','stable','origin','texture','active'])
+def test_actor_material_transition_checks_live_identity(tmp_path,changed,inspection):
+    from carla_safety_agent.actor_material_history import ActorMaterialHistory,apply_with_history
+    identity=dict(episode='1',actor_id=2,stable_id='stable-a',blueprint_id='vehicle.audi.a2',component='VehicleMesh',slot=4)
+    history=ActorMaterialHistory(tmp_path/'history')
+    operation=apply_with_history(history.root,identity,None,'a'*64,SimpleNamespace(apply=lambda:None))
+    actor=SimpleNamespace(id=2,type_id='other' if changed=='blueprint' else 'vehicle.audi.a2')
+    record=dict(origin='scene' if changed=='origin' else 'user',stable_id='other' if changed=='stable' else 'stable-a',type_id='vehicle.audi.a2',
+        actor_materials=[dict(component='VehicleMesh',slot=4,texture=('b' if changed=='texture' else 'a')*64)])
+    world=SimpleNamespace(id=9 if changed=='episode' else 1,get_actor=lambda _:None if changed=='missing' else actor)
+    calls=[]
+    def prepare(world,document,live,provenance):
+        assert document['actor_materials']==[]
+        return SimpleNamespace(apply=lambda:calls.append('apply'))
+    env=functions('actor_material_history_action','inspect_actor_material_history',ACTOR_MATERIAL_HISTORY=history,
+        evaluation_active=lambda:changed=='active',connect_world=lambda:world,
+        _provenance=SimpleNamespace(records=lambda _:{'2':record}),prepare_scene_actor_materials=prepare)
+    request=dict(operation_id=operation,direction='undo',revision=operation,confirmed=True)
+    if inspection:
+        before=history.path(operation).read_bytes()
+        if changed in ('none','texture'):
+            result=env['inspect_actor_material_history'](operation)
+            assert result['registry_matches']==('target' if changed=='none' else 'neither')
+            assert result['native_verified'] is False
+        else:
+            with pytest.raises(ValueError):env['inspect_actor_material_history'](operation)
+        assert calls==[] and history.path(operation).read_bytes()==before
+        return
+    if changed=='none':
+        result=env['actor_material_history_action'](request)
+        assert result['applied'] is False and result['revision']!=operation and calls==['apply']
+    else:
+        with pytest.raises(ValueError):env['actor_material_history_action'](request)
+        assert calls==[] and 'pending' not in history.read(operation)
+
+
+def test_duplicate_journal_decorator_records_exact_source_and_target(tmp_path):
+    from carla_safety_agent.copy_history import CopyHistory
+    from carla_safety_agent.editor_history import editor_history
+    from carla_safety_agent.transform_history import TransformHistory
+    from carla_safety_agent.deletion_history import DeletionHistory
+    store=CopyHistory(tmp_path/'copies')
+    world=SimpleNamespace(id=1,get_actor=lambda actor_id:SimpleNamespace(id=actor_id,type_id='prop.test'))
+    target=dict(episode='1',actor_id=8,type_id='prop.test',stable_id='new-object')
+    env=functions('journal_duplicate',evaluation_active=lambda:False,connect_world=lambda:world,
+        _provenance=SimpleNamespace(records=lambda _:{}),COPY_HISTORY=store,
+        position_history_identity=lambda *_:target)
+    calls=[]
+    wrapped=env['journal_duplicate'](lambda actor_id:calls.append(actor_id) or {'object':{'id':8}})
+    result=wrapped(7)
+    row=store.read(result['copy_operation_id'])
+    assert calls==[7] and row['identity']['actor_id']==7 and row['target']==target
+    combined=editor_history(TransformHistory(tmp_path/'moves'),DeletionHistory(tmp_path/'deletes'),copies=store)
+    assert combined['entries']==[row] and combined['complete']
+
+
+def test_copy_undo_bridge_checks_review_and_only_deletes_target(tmp_path):
+    from carla_safety_agent.copy_history import CopyHistory
+    store=CopyHistory(tmp_path/'copies')
+    source=dict(episode='1',actor_id=7,type_id='prop.test',stable_id='source')
+    target={**source,'actor_id':8,'stable_id':'target'}
+    operation=store.execute(source,lambda:{'object':{'id':8}},lambda _:target)['copy_operation_id']
+    pose=SimpleNamespace(location=SimpleNamespace(x=1,y=2,z=3),rotation=SimpleNamespace(yaw=0))
+    actor=SimpleNamespace(id=8,type_id='prop.test',get_transform=lambda:pose)
+    calls=[]
+    env=functions('undo_copy',COPY_HISTORY=store,evaluation_active=lambda:False,
+        connect_world=lambda:SimpleNamespace(id=1,get_actor=lambda actor_id:actor if actor_id==8 else None),
+        position_history_identity=lambda *_:target,
+        delete_actor=lambda actor_id:calls.append(actor_id) or {'ok':True,'actor_id':actor_id,'backup':{'stable_id':'target'},'operation_id':'deletion'})
+    review=dict(episode='1',actor_id=8,type_id='prop.test',location=dict(x=1,y=2,z=3),yaw=0)
+    request=dict(operation_id=operation,review=review,confirmed=True)
+    with pytest.raises(ValueError,match='moved'):
+        env['undo_copy']({**request,'review':{**review,'location':dict(x=9,y=2,z=3)}})
+    assert calls==[]
+    assert env['undo_copy'](request)['ok'] and calls==[8]
+
+
+@pytest.mark.parametrize('data', [None, {}, {'recording':'false'}, {'recording':1},
+    {'recording':True,'every':True}, {'recording':True,'every':1.5},
+    {'recording':True,'every':0}, {'recording':True,'every':101},
+    {'recording':True,'max_frames':'3'}, {'recording':True,'max_frames':0},
+    {'recording':True,'max_frames':10001}, {'recording':False,'control':{}}])
+def test_recording_request_rejects_invalid_input_without_writing(tmp_path, data):
+    env=functions('collection_request', _evaluation_control_dir=tmp_path)
+    with pytest.raises(ValueError):
+        env['collection_request'](data)
+    assert not list(tmp_path.iterdir())
+
+
+def test_recording_request_preserves_exact_limits(tmp_path):
+    import uuid
+    env=functions('collection_request', _evaluation_control_dir=tmp_path,
+                  evaluation_active=lambda:True, uuid=uuid, json=json,
+                  SESSION=SimpleNamespace(snapshot=lambda:{'run_id':'execution-a'}))
+    result=env['collection_request']({'recording':True,'every':1,'max_frames':3})
+    saved=json.loads((tmp_path/'collection-request.json').read_text())
+    assert saved==result['request']
+    assert saved['recording'] is True and saved['every']==1 and saved['max_frames']==3
+    assert saved['execution_id']=='execution-a'
+
+
+@pytest.mark.parametrize('run_id,state,owned', [('old','running',True),('current','stopped',True),('current','running',False)])
+def test_recording_control_refuses_wrong_or_dead_execution(run_id,state,owned):
+    import threading
+    env=functions('recording_control', _e2e_lock=threading.RLock(),
+        SESSION=SimpleNamespace(snapshot=lambda:{'run_id':'current','state':state,'kind':'preset-run'},owned_pid=lambda:owned),
+        collection_request=lambda _:pytest.fail('Unexpected write'))
+    with pytest.raises(ValueError,match='matching live'):
+        env['recording_control']({'run_id':run_id,'recording':True})
+
+
+def test_recording_control_writes_under_session_lock():
+    import threading
+    lock=threading.RLock()
+    def write(data):
+        assert lock._is_owned()
+        assert data=={'recording':False}
+        return {'ok':True}
+    env=functions('recording_control', _e2e_lock=lock,
+        SESSION=SimpleNamespace(snapshot=lambda:{'run_id':'current','state':'running','kind':'preset-run'},owned_pid=lambda:123),
+        collection_request=write)
+    assert env['recording_control']({'run_id':'current','recording':False})=={'ok':True}
+
+
+@pytest.mark.parametrize('data', [None, {}, {'confirmed': False},
+    {'scene_id':'s','version':'v','stable_id':'a','confirmed':True,'extra':1}])
+def test_single_object_restore_requires_exact_confirmation(data):
+    env=functions('restore_missing_object')
+    with pytest.raises(ValueError,match='Confirm an exact'):
+        env['restore_missing_object'](data)
+
+
+def test_single_object_restore_rejects_running_evaluation_before_world_access():
+    env=functions('restore_missing_object',evaluation_active=lambda:True)
+    with pytest.raises(ValueError,match='Stop evaluation'):
+        env['restore_missing_object']({'scene_id':'s','version':'v','stable_id':'a','confirmed':True})
+
+
+def test_single_object_restore_never_overwrites_existing_stable_identity(monkeypatch):
+    import carla_safety_agent.world_readiness as readiness
+    monkeypatch.setattr(readiness, 'require_idle_native_world', lambda _: None)
+    pose={'location':dict(x=0,y=0,z=1),'rotation':dict(pitch=0,yaw=0,roll=0)}
+    document={'map':'Town04','objects':[{'stable_id':'a','blueprint_id':'static.prop.advertisement','transform':pose}]}
+    def forbidden(*_):
+        pytest.fail('Existing object must not enter restore mutation')
+    env=functions('restore_missing_object', evaluation_active=lambda:False,
+        require_asset_import_idle=lambda:None, connect_world=lambda:SimpleNamespace(id=1),
+        SCENES=SimpleNamespace(read=lambda *_:{'document':document}),
+        _provenance=SimpleNamespace(records=lambda _:{}),
+        live_scene_bindings=lambda *_:{'a':object()}, restore_scene_document=forbidden)
+    with pytest.raises(ValueError,match='already exists'):
+        env['restore_missing_object']({'scene_id':'s','version':'v','stable_id':'a','confirmed':True})
+
+
+def test_deletion_intent_write_failure_prevents_native_destroy():
+    actor=SimpleNamespace(type_id='static.prop.test',destroy=lambda:pytest.fail('must not destroy'))
+    world=SimpleNamespace(id=1,get_actor=lambda _:actor)
+    def fail(*_):raise OSError('disk full')
+    env=functions('delete_actor',evaluation_active=lambda:False,connect_world=lambda:world,
+                  backup_managed_deletion=lambda *_:{'scene_id':'s'},
+                  DELETION_HISTORY=SimpleNamespace(begin=fail))
+    with pytest.raises(OSError,match='disk full'):env['delete_actor'](7)
+
+
+def test_deletion_uncertainty_persists_backup_link(tmp_path):
+    from carla_safety_agent.deletion_history import DeletionHistory
+    history=DeletionHistory(tmp_path/'history')
+    actor=SimpleNamespace(type_id='static.prop.test',destroy=lambda:True)
+    world=SimpleNamespace(id=1,get_actor=lambda _:actor,wait_for_tick=lambda _:None)
+    backup=dict(scene_id='scene',version='version',stable_id='stable')
+    env=functions('delete_actor',evaluation_active=lambda:False,connect_world=lambda:world,
+                  backup_managed_deletion=lambda *_:backup,DELETION_HISTORY=history)
+    with pytest.raises(RuntimeError,match='requires inspection'):env['delete_actor'](7)
+    rows=list(history.root.glob('*.json'))
+    assert len(rows)==1
+    row=json.loads(rows[0].read_text())
+    assert row['state']=='needs_attention' and row['backup']==backup
+
+
+@pytest.mark.parametrize('after_replace',[False,True])
+def test_delete_completion_storage_failure_never_returns_success(tmp_path,monkeypatch,after_replace):
+    import carla_safety_agent.deletion_history as module
+    history=module.DeletionHistory(tmp_path/'history')
+    original=module.atomic
+    def fail_confirmation(path,row):
+        if row['state']=='confirmed':
+            if after_replace:original(path,row)
+            raise OSError('confirmation persistence failure')
+        original(path,row)
+    monkeypatch.setattr(module,'atomic',fail_confirmation)
+    destroyed=[]
+    actor=SimpleNamespace(type_id='static.prop.test',destroy=lambda:destroyed.append(7) or True)
+    world=SimpleNamespace(id=1,get_actor=lambda _:actor,
+                          wait_for_tick=lambda _:SimpleNamespace(find=lambda _:None))
+    backup=dict(scene_id='scene',version='version',stable_id='stable')
+    env=functions('delete_actor',evaluation_active=lambda:False,connect_world=lambda:world,
+                  backup_managed_deletion=lambda *_:backup,DELETION_HISTORY=history,
+                  _actor_object_names={},_generated_actor_assets={},_editor_actors={7})
+    with pytest.raises(RuntimeError,match='requires inspection'):env['delete_actor'](7)
+    assert destroyed==[7]
+    row=history.list()['entries'][0]
+    assert row['state']==('confirmed' if after_replace else 'needs_attention')
+    assert row['backup']==backup
+
+
+@pytest.mark.parametrize('present,same_map',[(True,True),(False,True),(False,False)])
+def test_deletion_inspection_is_read_only(monkeypatch,present,same_map):
+    import carla_safety_agent.world_readiness as readiness
+    monkeypatch.setattr(readiness,'require_idle_native_world',lambda _:None)
+    actor=SimpleNamespace(id=22,type_id='static.prop.test')
+    world=SimpleNamespace(id=2,get_map=lambda:SimpleNamespace(name='Town04'))
+    row={'state':'attempting','episode':1,'type_id':'static.prop.test',
+         'backup':dict(scene_id='s',version='v',stable_id='stable')}
+    env=functions('inspect_deletion',DELETION_HISTORY=SimpleNamespace(read=lambda _:row),
+        evaluation_active=lambda:False,require_asset_import_idle=lambda:None,connect_world=lambda:world,
+        SCENES=SimpleNamespace(read=lambda *_:{'document':{'map':'Town04' if same_map else 'Town05'}}),
+        _provenance=SimpleNamespace(records=lambda _:{}),
+        live_scene_bindings=lambda *_:{'stable':actor} if present else {})
+    result=env['inspect_deletion']('op')
+    assert result['observation']==('different_map' if not same_map else 'present' if present else 'missing')
+    assert result['actor_id']==(22 if present else None)
+    assert result['same_episode'] is False and row['state']=='attempting'
+
+
+def test_deletion_inspection_rejects_running_evaluation():
+    env=functions('inspect_deletion',DELETION_HISTORY=SimpleNamespace(read=lambda _:{}),evaluation_active=lambda:True)
+    with pytest.raises(ValueError,match='Stop evaluation'):env['inspect_deletion']('op')
+
+
+def test_duplicate_uses_durable_generated_blueprint_and_options():
+    record={'type_id':'static.prop.mesh','blueprint_id':'generated.test','spawn_options':{'scale':42,'mass':3}}
+    env=functions('duplicate_spawn_spec',_provenance=SimpleNamespace(records=lambda _:{'7':record}),_generated_actor_assets={})
+    blueprint,options=env['duplicate_spawn_spec'](SimpleNamespace(id=1),SimpleNamespace(id=7,type_id='static.prop.mesh'))
+    assert blueprint=='generated.test' and options=={'scale':42,'mass':3}
+    options['scale']=10
+    assert record['spawn_options']['scale']==42
+
+
+@pytest.mark.parametrize('options',[{'scale':0},{'scale':True},{'mass':-1},{'mass':float('nan')},{'unknown':1}])
+def test_duplicate_rejects_invalid_recorded_options(options):
+    record={'type_id':'static.prop.mesh','blueprint_id':'generated.test','spawn_options':options}
+    env=functions('duplicate_spawn_spec',_provenance=SimpleNamespace(records=lambda _:{'7':record}),_generated_actor_assets={})
+    with pytest.raises(ValueError):env['duplicate_spawn_spec'](SimpleNamespace(id=1),SimpleNamespace(id=7,type_id='static.prop.mesh'))
+
+
+def test_duplicate_refuses_mesh_without_asset_identity():
+    env=functions('duplicate_spawn_spec',_provenance=SimpleNamespace(records=lambda _:{}),_generated_actor_assets={})
+    with pytest.raises(ValueError,match='identity missing'):
+        env['duplicate_spawn_spec'](SimpleNamespace(id=1),SimpleNamespace(id=7,type_id='static.prop.mesh'))
+
+
+def test_duplicate_forwards_options_without_source_stable_id():
+    pose=SimpleNamespace(location=10,rotation=SimpleNamespace(pitch=0,yaw=20,roll=0),
+                         get_right_vector=lambda:1,get_forward_vector=lambda:1)
+    actor=SimpleNamespace(type_id='static.prop.mesh',get_transform=lambda:pose,
+                          bounding_box=SimpleNamespace(extent=SimpleNamespace(x=1,y=1)))
+    calls=[]
+    env=functions('duplicate_actor',evaluation_active=lambda:False,
+        connect_world=lambda:SimpleNamespace(get_actor=lambda _:actor),
+        duplicate_spawn_spec=lambda *_:('generated.test',{'mass':3,'scale':42}),
+        vector=lambda n:{'x':n,'y':0,'z':1},
+        spawn_object=lambda blueprint,data:calls.append((blueprint,data)) or {'ok':True,'object':{'id':8}})
+    assert env['duplicate_actor'](7)['ok']
+    assert len(calls)==1 and calls[0][0]=='generated.test'
+    assert calls[0][1]['mass']==3 and calls[0][1]['scale']==42
+    assert 'stable_id' not in calls[0][1]
+
+
+def test_duplicate_materials_rebind_only_destination():
+    source=SimpleNamespace(id=7,type_id='vehicle.audi.a2')
+    target=SimpleNamespace(id=8,type_id=source.type_id)
+    material=dict(stable_id='original',blueprint_id=source.type_id,component='VehicleMesh',slot=4,texture='a'*64)
+    records={'7':{'stable_id':'original','actor_materials':[material]},
+             '8':{'stable_id':'copy','origin':'user'}}
+    captured=[];applied=[]
+    def prepare(world,document,live,provenance):
+        captured.append(document)
+        assert live=={'copy':target} and provenance==records
+        return SimpleNamespace(apply=lambda:applied.append(True))
+    env=functions('copy_duplicate_materials',_provenance=SimpleNamespace(records=lambda _:records),
+                  prepare_scene_actor_materials=prepare)
+    env['copy_duplicate_materials'](SimpleNamespace(id=1,get_actor=lambda _:target),source,8)
+    assert captured[0]['actor_materials']==[{**material,'stable_id':'copy'}]
+    assert material['stable_id']=='original' and applied==[True]
+
+
+@pytest.mark.parametrize('cleanup_failed',[False,True])
+def test_material_collision_error_never_retries_successful_spawn(cleanup_failed):
+    pose=SimpleNamespace(location=10,rotation=SimpleNamespace(pitch=0,yaw=0,roll=0),
+                         get_right_vector=lambda:1,get_forward_vector=lambda:1)
+    actor=SimpleNamespace(get_transform=lambda:pose,bounding_box=SimpleNamespace(extent=SimpleNamespace(x=1,y=1)))
+    spawned=[];deleted=[]
+    def fail(*_):raise RuntimeError('material collision diagnostic')
+    def cleanup(actor_id):
+        deleted.append(actor_id)
+        if cleanup_failed:raise RuntimeError('snapshot timeout')
+    env=functions('duplicate_actor',evaluation_active=lambda:False,
+        connect_world=lambda:SimpleNamespace(get_actor=lambda _:actor),
+        duplicate_spawn_spec=lambda *_:('vehicle.audi.a2',{}),vector=lambda _:dict(x=0,y=0,z=1),
+        spawn_object=lambda *_:spawned.append(8) or {'ok':True,'object':{'id':8}},
+        copy_duplicate_materials=fail,delete_actor=cleanup)
+    with pytest.raises(RuntimeError) as caught:env['duplicate_actor'](7)
+    assert 'material collision diagnostic' in str(caught.value)
+    if cleanup_failed:
+        assert 'actor 8 requires cleanup: snapshot timeout' in str(caught.value)
+        assert 'temporary duplicate removed' not in str(caught.value)
+    else:assert 'temporary duplicate removed' in str(caught.value)
+    assert spawned==[8] and deleted==[8]
+
+
+@pytest.mark.parametrize('native_collision',[False,True])
+def test_duplicate_retries_only_typed_native_collision(native_collision):
+    from carla_safety_agent.spawn_errors import SpawnCollision
+    pose=SimpleNamespace(location=10,rotation=SimpleNamespace(pitch=0,yaw=0,roll=0),get_right_vector=lambda:1,get_forward_vector=lambda:1)
+    actor=SimpleNamespace(get_transform=lambda:pose,bounding_box=SimpleNamespace(extent=SimpleNamespace(x=1,y=1)))
+    attempts=[]
+    def spawn(*_):
+        attempts.append(True)
+        if len(attempts)==1:
+            if native_collision:raise SpawnCollision('occupied')
+            raise RuntimeError('collision during registration; cleanup unconfirmed for actor 8')
+        return {'ok':True,'object':{'id':9}}
+    env=functions('duplicate_actor',evaluation_active=lambda:False,
+        connect_world=lambda:SimpleNamespace(get_actor=lambda _:actor),
+        duplicate_spawn_spec=lambda *_:('vehicle.audi.a2',{}),vector=lambda _:dict(x=0,y=0,z=1),spawn_object=spawn)
+    if native_collision:
+        assert env['duplicate_actor'](7)['object']['id']==9 and len(attempts)==2
+    else:
+        with pytest.raises(RuntimeError,match='cleanup unconfirmed'):env['duplicate_actor'](7)
+        assert len(attempts)==1
+
+
+def test_duplicate_material_preflight_failure_prevents_creation():
+    def fail(*_):raise ValueError('texture checksum mismatch')
+    env=functions('duplicate_actor',evaluation_active=lambda:False,
+        connect_world=lambda:SimpleNamespace(get_actor=lambda _:object()),
+        duplicate_spawn_spec=lambda *_:('vehicle.audi.a2',{}),preflight_duplicate_materials=fail,
+        spawn_object=lambda *_:pytest.fail('must not create before material preflight'))
+    with pytest.raises(ValueError,match='checksum'):env['duplicate_actor'](7)
+
+
+@pytest.mark.parametrize('failure',['missing','invalid_image'])
+def test_duplicate_source_texture_must_be_readable_image(failure):
+    material=dict(stable_id='source',blueprint_id='vehicle.audi.a2',component='VehicleMesh',slot=4,texture='a'*64)
+    def texture(_):
+        if failure=='missing':raise FileNotFoundError('missing source texture')
+        return b'not an image'
+    env=functions('preflight_duplicate_materials',
+        _provenance=SimpleNamespace(records=lambda _:{'7':{'stable_id':'source','actor_materials':[material]}}),
+        MATERIALS=SimpleNamespace(texture=texture))
+    with pytest.raises(OSError):
+        env['preflight_duplicate_materials'](SimpleNamespace(id=1),SimpleNamespace(id=7,type_id='vehicle.audi.a2'))
 
 
 def test_focus_never_draws_native_debug_shapes_into_sensor_images():
@@ -48,6 +426,54 @@ def test_native_asset_registration_blocks_model_start_before_other_access():
     def busy():raise ValueError('native import active')
     env=functions('start_e2e',SESSION=SimpleNamespace(existing_batch_request=lambda _:None),require_asset_import_idle=busy)
     with pytest.raises(ValueError,match='native import active'):env['start_e2e']({'action':'run'})
+
+
+@pytest.mark.parametrize('payload', [None, [], {}, {'run_id':'capture-a'},
+    {'run_id':'capture-a','keep':True,'reason':'keep','expected_revision':0,'path':'/outside'}])
+def test_retention_endpoint_rejects_unknown_or_missing_fields(payload):
+    def forbidden(*args, **kwargs): pytest.fail('Invalid request changed retention')
+    env = functions('set_capture_retention', RETENTION=SimpleNamespace(set_keep=forbidden))
+    with pytest.raises(ValueError): env['set_capture_retention'](payload)
+
+
+def test_retention_endpoint_preserves_explicit_revision_and_flag():
+    calls = []
+    def record(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {'revision':3,'records':{}}
+    env = functions('set_capture_retention', RETENTION=SimpleNamespace(set_keep=record))
+    result = env['set_capture_retention']({'run_id':'capture-a','keep':False,'reason':'release','expected_revision':2})
+    assert result['ok'] and result['revision'] == 3
+    assert calls == [(('capture-a',False,'release'), {'expected_revision':2})]
+
+
+@pytest.mark.parametrize('model,directory', [('thinktwice','ThinkTwice'), ('driveadapter','DriveAdapter')])
+@pytest.mark.parametrize('empty', [False, True])
+def test_original_dependency_failure_precedes_execution_and_material_mutation(tmp_path, monkeypatch, model, directory, empty):
+    monkeypatch.setenv('CSA_EXPERIMENTAL_' + model.upper(), '1')
+    for relative in ('tools/run_opendrive_native.py', f'integration/opendrive/{model}_agent.py'):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('fixture')
+    checkpoint = tmp_path / '.runtime/external-models' / directory / f'{model}-189k.pth'
+    if empty:
+        checkpoint.parent.mkdir(parents=True)
+        checkpoint.write_bytes(b'')
+    def forbidden(*args, **kwargs):
+        pytest.fail('Missing dependency reached an execution or scene mutation')
+    class ForbiddenLock:
+        def __enter__(self): forbidden()
+        def __exit__(self, *args): pass
+    env = functions('start_e2e',
+        SESSION=SimpleNamespace(existing_batch_request=lambda _:None, begin=forbidden),
+        require_asset_import_idle=lambda:None, UNIAD_PYTHON=SimpleNamespace(is_file=lambda:True),
+        evaluation_active=lambda:False, shutil=SimpleNamespace(disk_usage=lambda _:SimpleNamespace(free=8*1024**3)),
+        PROJECT_ROOT=tmp_path, connect_world=lambda:object(), require_idle_native_world=lambda _:None,
+        algorithm_catalog=lambda *args:[], BENCH2DRIVE_ZOO=tmp_path, BENCH2DRIVE_TCP_ZOO=tmp_path,
+        _e2e_lock=ForbiddenLock(), prepare_scene_materials=forbidden,
+        subprocess=SimpleNamespace(Popen=forbidden))
+    with pytest.raises(RuntimeError, match='Missing or empty experimental checkpoint'):
+        env['start_e2e']({'action':'run', 'algorithm':model, 'unified_capture':True})
 
 
 def test_corrupt_origin_store_refuses_editor_spawn_before_native_mutation():
@@ -147,6 +573,161 @@ def test_repeated_batch_start_returns_before_native_access():
                     evaluation_active=forbidden, connect_world=forbidden)
     result = env['start_e2e']({'action': 'rule-run', 'batch_attempt_id': 'a', 'batch_job_id': 'j'})
     assert result['replayed'] is True and result['execution_id'] == 'original'
+
+
+@pytest.mark.parametrize('value', ['0','bad','nan','1.5'])
+def test_sensor_capture_invalid_quota_rejected_before_native_access(monkeypatch,value):
+    monkeypatch.setenv('CSA_CAPTURE_QUOTA_GIB',value)
+    def forbidden(*args,**kwargs):
+        pytest.fail('Invalid recording configuration must not access simulator or execution state')
+    env=functions('start_e2e',SESSION=SimpleNamespace(existing_batch_request=lambda _:None),
+        require_asset_import_idle=lambda:None,evaluation_active=forbidden,connect_world=forbidden)
+    with pytest.raises(ValueError,match='CSA_CAPTURE_QUOTA_GIB'):
+        env['start_e2e']({'action':'sensor-rig','recording':True})
+
+
+def test_nonrecording_sensor_session_does_not_require_valid_quota(monkeypatch):
+    monkeypatch.setenv('CSA_CAPTURE_QUOTA_GIB','bad')
+    def reached():
+        raise RuntimeError('passed recording precheck')
+    env=functions('start_e2e',SESSION=SimpleNamespace(existing_batch_request=lambda _:None),
+        require_asset_import_idle=lambda:None,evaluation_active=reached)
+    with pytest.raises(RuntimeError,match='passed recording precheck'):
+        env['start_e2e']({'action':'sensor-rig','recording':False})
+
+
+@pytest.mark.parametrize('action',['run','rule-run'])
+@pytest.mark.parametrize('recording',[True,False])
+def test_model_and_rule_recording_quota_gate_precedes_launch(monkeypatch,action,recording):
+    monkeypatch.setenv('CSA_CAPTURE_QUOTA_GIB','invalid')
+    def reached():
+        raise RuntimeError('passed quota gate')
+    env=functions('start_e2e',SESSION=SimpleNamespace(existing_batch_request=lambda _:None),
+        require_asset_import_idle=lambda:None,UNIAD_PYTHON=SimpleNamespace(is_file=lambda:True),
+        evaluation_active=reached)
+    if recording:
+        with pytest.raises(ValueError,match='CSA_CAPTURE_QUOTA_GIB'):
+            env['start_e2e']({'action':action,'unified_capture':True})
+    else:
+        with pytest.raises(RuntimeError,match='passed quota gate'):
+            env['start_e2e']({'action':action,'unified_capture':False})
+
+
+@pytest.mark.parametrize('state', ['empty', 'generating', 'needs_attention', 'exported', 'corrupt'])
+@pytest.mark.parametrize('kind', ['generation', 'import'])
+def test_asset_restart_status_real_http_read_only(tmp_path, state, kind):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import urlparse, parse_qs
+    from urllib.request import urlopen
+    from urllib.error import HTTPError
+    from carla_safety_agent.blender_pipeline import BlenderPipeline
+    from carla_safety_agent.restart_guard import verify_asset_jobs_idle
+    pipeline = BlenderPipeline(tmp_path)
+    if kind == 'import':
+        state = {'generating': 'importing', 'exported': 'registered'}.get(state, state)
+    attempt_id = 'a' * 32 if kind == 'import' else 'abc123'
+    journal = pipeline.runtime / 'abc123' / (
+        f'import-attempt-{attempt_id}.json' if kind == 'import' else 'generation.json')
+    if state != 'empty':
+        journal.parent.mkdir(parents=True)
+        journal.write_text('{}' if state == 'corrupt' else json.dumps({
+            'schema_version': f'carla-asset-{kind}/1', 'job_id': 'abc123',
+            'attempt_id': attempt_id, 'started_at': 1, 'state': state,
+            'report_path': str(journal)}))
+    before = journal.read_bytes() if journal.exists() else None
+    source = Path(__file__).resolve().parents[1] / 'tools/livery_bridge.py'
+    node = next(n for n in ast.parse(source.read_text()).body
+                if isinstance(n, ast.ClassDef) and n.name == 'Handler')
+    env = dict(BaseHTTPRequestHandler=BaseHTTPRequestHandler, urlparse=urlparse,
+               parse_qs=parse_qs, json=json, BLENDER=pipeline,
+               FRONTEND_ORIGIN='http://localhost:3000')
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), env)
+    server = ThreadingHTTPServer(('127.0.0.1', 0), env['Handler'])
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f'http://127.0.0.1:{server.server_port}/blender/restart-status'
+        if state == 'corrupt':
+            with pytest.raises(HTTPError) as caught:
+                urlopen(url, timeout=5)
+            with caught.value as response:
+                assert response.code == 400
+                payload = json.load(response)
+            assert payload['ok'] is False
+            with pytest.raises(ValueError, match='unknown'):
+                verify_asset_jobs_idle(payload)
+        else:
+            with urlopen(url, timeout=5) as response:
+                assert response.status == 200
+                payload = json.load(response)
+            assert payload['ok'] is True
+            if state in ('generating', 'importing', 'needs_attention'):
+                assert payload['unresolved'][0]['state'] == state
+                with pytest.raises(ValueError, match='unresolved'):
+                    verify_asset_jobs_idle(payload)
+            else:
+                verify_asset_jobs_idle(payload)
+        assert (journal.read_bytes() if journal.exists() else None) == before
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_invalid_quota_over_real_http_never_touches_simulator(monkeypatch):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import urlparse, parse_qs
+    from urllib.request import Request, urlopen
+    from urllib.error import HTTPError
+    monkeypatch.setenv('CSA_CAPTURE_QUOTA_GIB','invalid')
+    calls=[]
+    def forbidden():
+        calls.append('native')
+        raise RuntimeError('Unexpected simulator access')
+    env=functions('start_e2e',SESSION=SimpleNamespace(existing_batch_request=lambda _:None),
+        require_asset_import_idle=lambda:None,evaluation_active=forbidden,connect_world=forbidden)
+    env.update(BaseHTTPRequestHandler=BaseHTTPRequestHandler,urlparse=urlparse,parse_qs=parse_qs,
+               json=json,FRONTEND_ORIGIN='http://localhost:3000')
+    source=Path(__file__).resolve().parents[1]/'tools/livery_bridge.py'
+    node=next(n for n in ast.parse(source.read_text()).body if isinstance(n,ast.ClassDef) and n.name=='Handler')
+    exec(compile(ast.Module(body=[node],type_ignores=[]),str(source),'exec'),env)
+    server=ThreadingHTTPServer(('127.0.0.1',0),env['Handler'])
+    thread=threading.Thread(target=server.serve_forever,daemon=True)
+    thread.start()
+    try:
+        request=Request(f'http://127.0.0.1:{server.server_port}/collection/start',
+            data=json.dumps({'recording':True,'mode':'stationary','frames':10}).encode(),
+            headers={'Content-Type':'application/json'},method='POST')
+        with pytest.raises(HTTPError) as caught:
+            urlopen(request,timeout=5)
+        error=caught.value
+        assert error.code==400
+        payload=json.load(error)
+        assert payload['ok'] is False and 'CSA_CAPTURE_QUOTA_GIB' in payload['error']
+        assert calls==[]
+    finally:
+        server.shutdown();server.server_close();thread.join(timeout=5)
+
+
+@pytest.mark.parametrize('recording',[True,False])
+def test_recording_toggle_invalid_quota_preserves_stop_access(tmp_path,monkeypatch,recording):
+    import uuid
+    monkeypatch.setenv('CSA_CAPTURE_QUOTA_GIB','bad')
+    target=tmp_path/'collection-request.json'
+    target.write_text('{"id":"previous"}')
+    env=functions('collection_request',_evaluation_control_dir=tmp_path,
+        evaluation_active=lambda:True,SESSION=SimpleNamespace(snapshot=lambda:{'run_id':'current'}),
+        uuid=uuid,json=json)
+    if recording:
+        with pytest.raises(ValueError,match='request not written'):
+            env['collection_request']({'recording':True})
+        assert target.read_text()=='{"id":"previous"}'
+    else:
+        result=env['collection_request']({'recording':False})
+        assert result['request']['recording'] is False
+        assert json.loads(target.read_text())['execution_id']=='current'
 
 
 @pytest.mark.parametrize('payload',[{}, {'run_id':None}, {'run_id':''}, {'run_id':'old'}, {'run_id':'current','extra':True}])
@@ -308,6 +889,72 @@ def test_material_restore_targets_only_verified_component_slot():
     assert len(calls) == 2
 
 
+def test_material_restore_journals_previous_texture_before_native_call(tmp_path):
+    from carla_safety_agent.material_history import MaterialHistory
+    store=MaterialHistory(tmp_path/'history');calls=[]
+    def native(*args):
+        pending=store.read(next(store.root.glob('*.json')).stem)
+        assert pending['before']=='a'*64 and pending['after'] is None and pending['state']=='attempting'
+        calls.append(args)
+    env=functions('apply_material_slot',MATERIAL_HISTORY=store,
+        material_catalog=lambda _:dict(target='house',components=[dict(component='mesh',slots=[dict(slot=2,status='uv0_ready')])],overrides=[dict(component='mesh',slot=2,texture='a'*64)]),
+        connect_world=lambda:SimpleNamespace(id=7,apply_color_texture_to_object=native),
+        carla=SimpleNamespace(TextureColor=lambda *_:'empty',MaterialParameter=SimpleNamespace(Diffuse='diffuse')),
+        MATERIALS=SimpleNamespace(record=lambda *args:calls.append(args)))
+    result=env['apply_material_slot'](dict(object_id=123,component='mesh',slot=2))
+    assert store.read(result['material_operation_id'])['state']=='confirmed' and len(calls)==2
+
+
+def test_material_recovery_bridge_preserves_failure_and_applies_exact_slot(tmp_path):
+    from carla_safety_agent.material_history import MaterialHistory
+    store=MaterialHistory(tmp_path/'history')
+    identity=dict(episode='7',object_id='123',target='house',component='mesh',slot=2)
+    def fail():raise RuntimeError('original native uncertainty')
+    with pytest.raises(RuntimeError):store.execute(identity,None,'a'*64,fail)
+    op=next(store.root.glob('*.json')).stem
+    inspection=store.inspect(op,lambda _:None);calls=[]
+    world=SimpleNamespace(id=7,get_settings=lambda:SimpleNamespace(synchronous_mode=False),
+        get_actors=lambda:SimpleNamespace(filter=lambda _:[]),
+        apply_color_texture_to_object=lambda *args:calls.append(args))
+    env=functions('recover_material_history','material_history_callbacks',
+        MATERIAL_HISTORY=store,evaluation_active=lambda:False,connect_world=lambda:world,
+        material_catalog=lambda _:dict(target='house',components=[dict(component='mesh',slots=[dict(slot=2,status='uv0_ready')])],overrides=[]),
+        carla=SimpleNamespace(TextureColor=lambda *_:'empty',MaterialParameter=SimpleNamespace(Diffuse='diffuse')),
+        MATERIALS=SimpleNamespace(record=lambda *args:calls.append(args),texture=lambda _:b'valid-texture'),
+        decode_texture=lambda *_:('image','decoded'))
+    payload=dict(operation_id=op,inspection_token=inspection['inspection_token'],choice='target',registered_texture=None,confirmed=True)
+    with pytest.raises(ValueError):env['recover_material_history']({**payload,'registered_texture':'b'*64})
+    assert calls==[]
+    result=env['recover_material_history'](payload)
+    assert result['recovery']['state']=='confirmed' and result['original_state']=='needs_attention'
+    assert calls==[('house|csa|mesh|2|apply','diffuse','decoded'),(7,'house','mesh',2,'a'*64)]
+    with pytest.raises(ValueError):env['recover_material_history'](payload)
+    assert len(calls)==2
+
+
+@pytest.mark.parametrize('path,expected', [('/', 200), ('/?probe=1', 200),
+    ('/nonexistent', 404), ('/blender/restart-status-typo', 404), ('/datasets/typo', 404)])
+def test_get_unknown_endpoint_is_not_service_health(path, expected):
+    import io
+    from urllib.parse import urlparse, parse_qs
+    source = Path(__file__).resolve().parents[1] / 'tools/livery_bridge.py'
+    node = next(n for n in ast.parse(source.read_text()).body
+                if isinstance(n, ast.ClassDef) and n.name == 'Handler')
+    env = dict(BaseHTTPRequestHandler=object, urlparse=urlparse, parse_qs=parse_qs, json=json)
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), env)
+    handler = env['Handler']()
+    statuses = []
+    handler._headers = lambda status=200: statuses.append(status)
+    handler.path, handler.wfile = path, io.BytesIO()
+    handler.do_GET()
+    assert statuses == [expected]
+    payload = json.loads(handler.wfile.getvalue())
+    assert payload['ok'] is (expected == 200)
+    if expected == 404:
+        assert payload['code'] == 'unknown_endpoint'
+        assert 'service' not in payload
+
+
 def test_material_http_routes_and_body_limit():
     import io
     from urllib.parse import urlparse, parse_qs
@@ -333,6 +980,39 @@ def test_material_http_routes_and_body_limit():
     handler.do_POST()
     assert statuses[-1] == 413 and handler.rfile.tell() == 0
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize('query,expected', [('job_id=abc',200), ('',400),
+    ('job_id=',400), ('job_id=abc&job_id=other',400), ('job_id=abc&job_id=',400),
+    ('job_id=abc&extra=',400), ('job_id=missing',400), ('job_id=..%2Foutside',400)])
+def test_reopen_export_http_route(query, expected):
+    import io
+    from urllib.parse import urlparse, parse_qs
+    source = Path(__file__).resolve().parents[1] / 'tools/livery_bridge.py'
+    node = next(n for n in ast.parse(source.read_text()).body
+                if isinstance(n, ast.ClassDef) and n.name == 'Handler')
+    calls=[]
+    def exported(job):
+        calls.append(job)
+        if job != 'abc':
+            raise ValueError('No confirmed export')
+        return {'ok':True,'job_id':job,'reopened':True}
+    env={'BaseHTTPRequestHandler':object,'urlparse':urlparse,'parse_qs':parse_qs,
+         'json':json,'BLENDER':SimpleNamespace(exported_asset=exported)}
+    exec(compile(ast.Module(body=[node],type_ignores=[]),str(source),'exec'),env)
+    handler=env['Handler']()
+    statuses=[]
+    handler._headers=lambda status=200:statuses.append(status)
+    handler.path='/blender/exported?'+query
+    handler.wfile=io.BytesIO()
+    handler.do_GET()
+    assert statuses==[expected]
+    payload=json.loads(handler.wfile.getvalue())
+    assert payload['ok'] is (expected==200)
+    if expected==200:
+        assert payload['reopened'] and payload['job_id']=='abc'
+    if query in ('','job_id=abc&job_id=other','job_id=abc&job_id=','job_id=abc&extra='):
+        assert calls==[]
 
 
 def test_registered_texture_identity_is_exact():
@@ -389,6 +1069,22 @@ def test_client_is_reused():
     assert len(clients) == 1
 
 
+@pytest.mark.parametrize('name', ['connect_world', 'restore_editor_world'])
+def test_missing_simulator_never_enters_native_client(name):
+    import threading
+    def unavailable(host, port):
+        raise RuntimeError('transport unavailable')
+    def forbidden(*args):
+        pytest.fail('Native CARLA call would block offline HTTP requests')
+    env = functions(name, evaluation_active=lambda: False,
+        _simulation_lock=threading.RLock(), _world_episode=None,
+        require_simulator_connection=unavailable,
+        _carla_client=SimpleNamespace(get_world=forbidden),
+        carla=SimpleNamespace(Client=forbidden))
+    with pytest.raises(RuntimeError, match='transport unavailable'):
+        env[name]()
+
+
 def test_first_connection_cannot_infer_dynamic_actor_history(tmp_path):
     import threading
     from carla_safety_agent.provenance import ActorProvenance
@@ -428,7 +1124,9 @@ def test_stop_does_not_interrupt_cleanup_twice():
 
 
 @pytest.mark.parametrize('state,code,expected', [('running', 0, 'succeeded'),
-                                              ('stopping', 1, 'stopped')])
+                                              ('stopping', 130, 'stopped'),
+                                              ('stopping', 0, 'stopped'),
+                                              ('stopping', 1, 'failed')])
 def test_non_route_completion_and_user_stop(tmp_path, state, code, expected):
     import threading
     import time
@@ -475,6 +1173,32 @@ def test_world_recovery_failure_never_reports_execution_success(tmp_path, state,
     assert result['outcome']['execution'] == 'failed'
     assert result['outcome']['failure_category'] == 'world_recovery'
     assert not pid.exists()
+
+
+def test_material_mutation_entrypoints_keep_simulation_guard():
+    path = Path(__file__).resolve().parents[1]/'tools/livery_bridge.py'
+    tree = ast.parse(path.read_text())
+    required = {'apply_material_slot', 'material_history_action', 'recover_material_history',
+                'actor_material_history_action', 'recover_actor_material_history'}
+    nodes = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    for name in required:
+        assert any(isinstance(d, ast.Name) and d.id == 'simulation_operation'
+                   for d in nodes[name].decorator_list), name
+
+
+def test_material_history_rejects_changed_registry_before_native_write():
+    from types import SimpleNamespace
+    calls = []
+    world = SimpleNamespace(id=1, apply_color_texture_to_object=lambda *args: calls.append(args))
+    info = {'target': 'house', 'components': [{'component': 'mesh', 'slots': [
+        {'slot': 0, 'status': 'uv0_ready'}]}],
+        'overrides': [{'component': 'mesh', 'slot': 0, 'texture': 'c'*64}]}
+    env = functions('material_history_callbacks', material_catalog=lambda _: info)
+    verify, _ = env['material_history_callbacks'](world)
+    identity = dict(episode='1', object_id='2', target='house', component='mesh', slot=0)
+    with pytest.raises(ValueError, match='changed outside this history'):
+        verify(identity, 'b'*64, 'a'*64)
+    assert calls == []
 
 
 def test_simulation_handoff_waits_for_editor_operation():
@@ -541,6 +1265,100 @@ def test_benchmark_failure_is_not_hidden_by_zero_exit(tmp_path):
         'records': [{'status': 'Completed'}],
     }}))
     assert not env['_benchmark_result_failed'](result)
+
+
+@pytest.mark.parametrize('payload', [None, [], {}, {'_checkpoint': None},
+    {'_checkpoint': {}}, {'_checkpoint': {'records': [None], 'global_record': {'status': 'Completed'}}},
+    {'_checkpoint': {'records': [{'status': 'Completed'}], 'global_record': None}}])
+def test_malformed_benchmark_result_is_failure_not_watcher_exception(tmp_path, payload):
+    result = tmp_path / 'result.json'
+    result.write_text(json.dumps(payload))
+    env = functions('_benchmark_result_failed', Path=Path, json=json)
+    assert env['_benchmark_result_failed'](result)
+
+
+def test_invalid_utf8_result_is_failure(tmp_path):
+    result = tmp_path / 'result.json'
+    result.write_bytes(b'\xff')
+    env = functions('_benchmark_result_failed', Path=Path, json=json)
+    assert env['_benchmark_result_failed'](result)
+
+
+@pytest.mark.parametrize('nested', [True, False])
+@pytest.mark.parametrize('driving_status', ['passed', 'failed'])
+def test_native_valid_driving_outcome_is_not_execution_failure(tmp_path, nested, driving_status):
+    metrics = dict(scenario_id='test', status=driving_status, collision=False,
+                   min_ttc_s=None, min_distance_m=10., elapsed_s=4., risk_score=0., failure_reasons=[])
+    payload = {'scenario': {'scenario_id': 'test'}}
+    if nested:
+        payload.update(schema_version='carla-safety-evaluation/0.1', result=metrics)
+    else:
+        payload.update(metrics)
+    path = tmp_path / 'result.json'
+    env = functions('_benchmark_result_failed', Path=Path, json=json)
+    path.write_text(json.dumps(payload))
+    assert not env['_benchmark_result_failed'](path)
+    for key, value in [('elapsed_s', float('nan')), ('collision', 'false'),
+                       ('scenario_id', 'other'), ('failure_reasons', None)]:
+        broken = json.loads(json.dumps(payload))
+        (broken['result'] if nested else broken)[key] = value
+        path.write_text(json.dumps(broken))
+        assert env['_benchmark_result_failed'](path)
+
+
+def test_unrelated_nonempty_json_is_not_native_result(tmp_path):
+    path = tmp_path / 'result.json'
+    path.write_text('{"hello": "world"}')
+    env = functions('_benchmark_result_failed', Path=Path, json=json)
+    assert env['_benchmark_result_failed'](path)
+
+
+@pytest.mark.parametrize('execution,scenario,expected', [
+    ('owned', 'hash', False), ('old-run', 'hash', True), ('owned', 'old-hash', True),
+    (None, 'hash', True), ('owned', None, True)])
+def test_native_result_must_match_requested_execution_and_scenario(tmp_path, execution, scenario, expected):
+    import hashlib
+    digest = hashlib.sha256(b'{"scenario_id":"s"}').hexdigest()
+    scenario = digest if scenario == 'hash' else scenario
+    path = tmp_path / 'result.json'
+    path.write_text(json.dumps(dict(execution_id=execution, scenario_sha256=scenario,
+        scenario={'scenario_id': 's'}, scenario_id='s', status='passed', collision=False,
+        failure_reasons=[], min_ttc_s=None, min_distance_m=1., elapsed_s=4., risk_score=0.)))
+    env = functions('_benchmark_result_failed', Path=Path, json=json)
+    assert env['_benchmark_result_failed'](path, 'owned', digest) is expected
+
+
+@pytest.mark.parametrize('changed', [{'scenario_id': 's', 'seed': 99},
+                                     {'scenario_id': 's', 'seed': float('nan')}, None])
+def test_correct_hash_label_cannot_hide_modified_scenario(tmp_path, changed):
+    import hashlib
+    digest = hashlib.sha256(b'{"scenario_id":"s"}').hexdigest()
+    path = tmp_path / 'result.json'
+    path.write_text(json.dumps(dict(execution_id='owned', scenario_sha256=digest,
+        scenario=changed, scenario_id='s', status='passed', collision=False,
+        failure_reasons=[], min_ttc_s=None, min_distance_m=1., elapsed_s=4., risk_score=0.)))
+    env = functions('_benchmark_result_failed', Path=Path, json=json)
+    assert env['_benchmark_result_failed'](path, 'owned', digest)
+
+
+@pytest.mark.parametrize('contents', ['{}', 'null', '{"_checkpoint": null}', '{'])
+def test_corrupt_result_finishes_session_as_benchmark_failure(tmp_path, contents):
+    import threading
+    import time
+    result = tmp_path / 'result.json'
+    result.write_text(contents)
+    calls = []
+    process = SimpleNamespace(pid=123, wait=lambda: 0)
+    job = {'kind': 'run', 'state': 'running', 'results': str(result)}
+    env = functions('_benchmark_result_failed', '_finish_e2e', Path=Path, json=json, time=time,
+        _e2e_process=process, _e2e_job=job, _e2e_pid=tmp_path/'pid',
+        _e2e_lock=threading.RLock(), restore_editor_world=lambda: None,
+        SESSION=SimpleNamespace(transition=lambda state, **kw: calls.append((state, kw))))
+    env['_finish_e2e'](process)
+    assert calls[-1][0] == 'failed'
+    assert calls[-1][1]['outcome']['failure_category'] == 'benchmark_result'
+    assert calls[-1][1]['outcome']['benchmark_failed'] is True
+    assert job['state'] == 'failed'
 
 
 def test_evaluation_texture_does_not_match_actor_id_in_lamppost_name():
@@ -729,6 +1547,45 @@ def test_failed_start_cannot_be_reported_completed(tmp_path):
     assert job['state']=='failed'
 
 
+@pytest.mark.parametrize('state,code', [('stopping', 1), ('stopping', -11), ('running', 130)])
+def test_stop_request_cannot_hide_worker_failure(tmp_path, state, code):
+    import threading
+    import time
+    calls = []
+    process = SimpleNamespace(pid=123, wait=lambda: code)
+    job = {'kind': 'run', 'state': state, 'results': None}
+    env = functions('_finish_e2e', _e2e_process=process, _e2e_job=job,
+        SESSION=SimpleNamespace(transition=lambda state, **kw: calls.append((state, kw))),
+        restore_editor_world=lambda: None, _e2e_pid=tmp_path/'pid',
+        _e2e_lock=threading.RLock(), Path=Path, time=time)
+    env['_finish_e2e'](process)
+    assert job['state'] == 'failed'
+    assert calls[-1][0] == 'failed'
+    assert calls[-1][1]['outcome']['failure_category'] == 'process_exit'
+    assert calls[-1][1]['returncode'] == code
+
+
+def test_cancelled_rule_partial_result_is_not_assessed_as_completed_benchmark(tmp_path):
+    import threading
+    import time
+    result = tmp_path / 'stopped.json'
+    result.write_text('{"status":"stopped","elapsed_s":0}')
+    calls = []
+    process = SimpleNamespace(pid=123, wait=lambda: 0)
+    job = {'kind': 'rule-run', 'state': 'stopping', 'results': str(result)}
+    def must_not_assess(*args):
+        raise AssertionError('Cancelled task is not a completed benchmark')
+    env = functions('_finish_e2e', _benchmark_result_failed=must_not_assess,
+        _e2e_process=process, _e2e_job=job, Path=Path, time=time,
+        _e2e_pid=tmp_path/'pid', _e2e_lock=threading.RLock(), restore_editor_world=lambda: None,
+        SESSION=SimpleNamespace(transition=lambda state, **kw: calls.append((state, kw))))
+    env['_finish_e2e'](process)
+    assert calls[-1][0] == 'stopped'
+    outcome = calls[-1][1]['outcome']
+    assert outcome['result_assessed'] is False
+    assert outcome['benchmark_failed'] is False and outcome['failure_category'] is None
+
+
 def test_failed_start_signal_error_still_installs_waiter():
     import signal
     calls = []
@@ -844,7 +1701,7 @@ def test_delete_requires_native_acceptance_and_fresh_snapshot(accepted, residual
     def fresh(_):
         calls.append('fresh')
         return SimpleNamespace(find=lambda _:actor if residual else None)
-    world = SimpleNamespace(get_actor=lookup, wait_for_tick=fresh)
+    world = SimpleNamespace(id=1,get_actor=lookup, wait_for_tick=fresh)
     names = {7:'test'}
     env = functions('delete_actor', evaluation_active=lambda:False, connect_world=lambda:world,
                     _actor_object_names=names, _generated_actor_assets={}, _editor_actors={7})
@@ -855,6 +1712,45 @@ def test_delete_requires_native_acceptance_and_fresh_snapshot(accepted, residual
         with pytest.raises(RuntimeError): env['delete_actor'](7)
         assert names == {7:'test'}
         assert calls == (['fresh'] if accepted else [])
+
+
+@pytest.mark.parametrize('fault',['missing_snapshot','changed_world'])
+def test_uncertain_delete_retains_local_identity(fault):
+    actor=SimpleNamespace(type_id='static.prop.test',destroy=lambda:True)
+    world=SimpleNamespace(id=1,get_actor=lambda _:actor,
+        wait_for_tick=lambda _:None if fault=='missing_snapshot' else SimpleNamespace(find=lambda _:None))
+    worlds=iter([world,SimpleNamespace(id=2)])
+    names={7:'test'}; assets={7:'generated.prop.test'}; owned={7}
+    env=functions('delete_actor',evaluation_active=lambda:False,connect_world=lambda:next(worlds),
+        _actor_object_names=names,_generated_actor_assets=assets,_editor_actors=owned)
+    with pytest.raises(RuntimeError,match='uncertain'):env['delete_actor'](7)
+    assert names=={7:'test'} and assets=={7:'generated.prop.test'} and owned=={7}
+
+
+def test_delete_backup_failure_prevents_native_destruction():
+    def forbidden():pytest.fail('Deletion reached native destroy before durable backup')
+    actor=SimpleNamespace(type_id='static.prop.test',destroy=forbidden)
+    world=SimpleNamespace(get_actor=lambda _:actor)
+    def fail(*_):raise ValueError('snapshot write failed')
+    env=functions('delete_actor',evaluation_active=lambda:False,connect_world=lambda:world,
+                  backup_managed_deletion=fail)
+    with pytest.raises(ValueError,match='snapshot write failed'):env['delete_actor'](7)
+
+
+@pytest.mark.parametrize('fault',[None,'world','missing'])
+def test_managed_deletion_backup_is_saved_before_return(fault):
+    calls=[]; world=SimpleNamespace(id=1); actor=SimpleNamespace()
+    document={'objects':[] if fault=='missing' else [{'stable_id':'stable-one'}]}
+    head={'scene_id':'backup-one','version':'version-one'}
+    env=functions('backup_managed_deletion',position_history_identity=lambda *_:{'stable_id':'stable-one'},
+        capture_scene_document=lambda:document,connect_world=lambda:SimpleNamespace(id=2 if fault=='world' else 1),
+        SCENES=SimpleNamespace(save=lambda doc,name:(calls.append((doc,name)) or {'head':head})))
+    if fault:
+        with pytest.raises(ValueError):env['backup_managed_deletion'](world,actor)
+        assert not calls
+    else:
+        assert env['backup_managed_deletion'](world,actor)=={**head,'stable_id':'stable-one'}
+        assert calls[0][0] is document
 
 
 def test_live_scene_bindings_ignore_dead_history_and_use_one_snapshot():
